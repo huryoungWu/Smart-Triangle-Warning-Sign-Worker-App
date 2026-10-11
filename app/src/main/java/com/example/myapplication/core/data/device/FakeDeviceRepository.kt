@@ -1,6 +1,9 @@
 package com.example.myapplication.core.data.device
 
+import com.example.myapplication.core.geo.CoordTransform
+import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
+import com.example.myapplication.core.model.vehicle.GpsFixState
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MotionState
 import com.example.myapplication.core.model.vehicle.MoveDir
@@ -10,6 +13,7 @@ import com.example.myapplication.core.model.vehicle.TaskInfo
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskRunState
 import com.example.myapplication.core.model.vehicle.TaskSource
+import com.example.myapplication.core.model.vehicle.VehicleGps
 import com.example.myapplication.core.model.vehicle.VehicleMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -48,6 +52,26 @@ class FakeDeviceRepository : DeviceRepository {
     private val mutex = Mutex()
 
     var fault: FakeFault = FakeFault.None
+
+    /**
+     * 是否模拟车端 GPS 模块（默认 false = 复刻现阶段真实硬件，主走行程估算路径）。
+     * 开启后**故意输出 WGS-84**，让演示机走真实 WGS-84→GCJ-02 转换链路，转换错误当场可见。
+     */
+    var gpsEnabled: Boolean = false
+
+    /**
+     * 车端 GPS 模拟基准点（GCJ-02）。默认取演示基准（北京）；
+     * 真机上由 MapViewModel 用手机实际定位覆盖，使人与车在同处、便于验证坐标转换重合。
+     */
+    @Volatile
+    var gpsBaseGcj02: GeoPoint = BASE_GCJ02
+
+    /**
+     * 模拟行进方向（度，正北=0）。
+     * 与作业人员方向一致；作业人员方向未知时默认正北。
+     */
+    @Volatile
+    var headingDeg: Double = 0.0
 
     private var lastTickAt = System.currentTimeMillis()
     private var lastCmdAt = System.currentTimeMillis()
@@ -335,11 +359,41 @@ class FakeDeviceRepository : DeviceRepository {
         obstacle = null,
         deviceTs = System.currentTimeMillis(),
         receivedAt = System.currentTimeMillis(),
+        gps = buildGps(),
     )
+
+    /**
+     * 车端 GPS 模拟：基准点取 `BASE_WGS84`（与 FakeLocationRepository 的演示基准互为转换对，
+     * 两者重合即可验证转换正确），按行驶里程沿固定航向漂移。
+     */
+    private fun buildGps(): VehicleGps? {
+        if (!gpsEnabled) return null
+        val driftedGcj = CoordTransform.projectGcj02(
+            start = gpsBaseGcj02,
+            headingDeg = headingDeg,
+            distanceM = odo.traveledM,
+        )
+        val wgs = CoordTransform.gcj02ToWgs84(driftedGcj) // 故意给 WGS-84，走真实转换链路
+        return VehicleGps(
+            wgs84Lat = wgs.lat,
+            wgs84Lng = wgs.lng,
+            accuracyM = 3.5f,
+            speedMps = odo.speedMps,
+            headingDeg = headingDeg,
+            state = GpsFixState.FIXED,
+            at = System.currentTimeMillis(),
+        )
+    }
 
     companion object {
         const val DEVICE_ID = "TC-001"
         const val FW_VERSION = "0.3.1"
+
+        /** 演示基准点（GCJ-02）。与 FakeLocationRepository 演示基准同点，可验证坐标转换重合。 */
+        val BASE_GCJ02: GeoPoint = GeoPoint(39.9928, 116.4004)
+
+        /** 默认航向：正北（作业人员方向未知时） */
+        const val DEMO_HEADING_DEG = 0.0
 
         private const val NETWORK_DELAY_MS = 50L
         private const val WATCHDOG_MS = 800L

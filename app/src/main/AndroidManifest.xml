@@ -6,6 +6,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- 定位（作业人员位置，地图显示用）：必须运行时申请 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 高德定位辅助（Wi-Fi/基站） -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <application
         android:name=".MyAppApplication"
@@ -18,6 +23,12 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
+
+        <!-- 高德地图/定位 Key（由 build.gradle.kts 从 local.properties 注入） -->
+        <meta-data
+            android:name="com.amap.api.v2.apikey"
+            android:value="${AMAP_KEY}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

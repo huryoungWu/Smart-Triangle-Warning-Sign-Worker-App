@@ -1,10 +1,12 @@
 package com.example.myapplication.core.data.device
 
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
+import com.example.myapplication.core.model.vehicle.GpsFixState
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MotionState
 import com.example.myapplication.core.model.vehicle.OdoInfo
 import com.example.myapplication.core.model.vehicle.StopSource
+import com.example.myapplication.core.model.vehicle.VehicleGps
 import com.example.myapplication.core.model.vehicle.TaskInfo
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskRunState
@@ -48,6 +50,7 @@ object DeviceJson {
                 speedMps = odoObj?.optDouble("speedMps", 0.0) ?: 0.0,
                 diffPulse = odoObj?.optLong("diffPulse", 0L) ?: 0L,
             ),
+            gps = parseGps(o.optJSONObject("gps")),
             batteryPercent = if (o.isNull("batteryPercent")) null else o.optInt("batteryPercent"),
             tilt = if (o.isNull("tilt")) null else o.optBoolean("tilt"),
             obstacle = if (o.isNull("obstacle")) null else o.optBoolean("obstacle"),
@@ -62,6 +65,33 @@ object DeviceJson {
             accepted = o.optBoolean("accepted", false),
             cmdId = o.optString("cmdId", null),
             reason = o.optString("reason", null),
+        )
+    }
+
+    /**
+     * 解析可选车端 GPS 块（协议契约，供 ESP32 固件照做）：
+     * ```json
+     * "gps": { "lat": 39.9088, "lng": 116.3975, "acc": 5.0, "speed": 0.12,
+     *          "heading": 180.0, "state": "fixed", "at": 1710000000000 }
+     * ```
+     * **坐标系 WGS-84**（车端模块原值）。无 GPS 硬件时**省略整个 gps 字段**（≠ 发 null 坐标）。
+     * 缺字段、NaN、0/0 均视作无有效定位。
+     */
+    private fun parseGps(g: JSONObject?): VehicleGps? {
+        if (g == null) return null
+        val lat = g.optDouble("lat", Double.NaN)
+        val lng = g.optDouble("lng", Double.NaN)
+        val invalid = lat.isNaN() || lng.isNaN() ||
+            (kotlin.math.abs(lat) < 1e-6 && kotlin.math.abs(lng) < 1e-6)
+        if (invalid) return null
+        return VehicleGps(
+            wgs84Lat = lat,
+            wgs84Lng = lng,
+            accuracyM = if (g.isNull("acc")) null else g.optDouble("acc", 0.0).toFloat(),
+            speedMps = if (g.isNull("speed")) null else g.optDouble("speed", 0.0),
+            headingDeg = if (g.isNull("heading")) null else g.optDouble("heading", 0.0),
+            state = enumOrDefault(g.optString("state"), GpsFixState.FIXED),
+            at = g.optLong("at", 0L),
         )
     }
 

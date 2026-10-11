@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -33,7 +34,16 @@ import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
+import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
+import com.example.myapplication.di.LocationSource
 import com.example.myapplication.di.ServiceLocator
+import com.example.myapplication.ui.theme.NeutralGrey
+import com.example.myapplication.ui.theme.NeutralGreyBg
+import com.example.myapplication.ui.theme.SafeGreen
+import com.example.myapplication.ui.theme.SafeGreenBg
+import com.example.myapplication.ui.theme.WarnOrange
+import com.example.myapplication.ui.theme.WarnOrangeBg
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import kotlinx.coroutines.launch
 
@@ -127,6 +137,45 @@ fun SettingsScreen(
             SecondaryActionButton(text = "设备信息", onClick = onOpenDeviceInfo)
             Spacer(Modifier.height(8.dp))
             SecondaryActionButton(text = "调试数据", onClick = onOpenDebug)
+        }
+
+        // 权限与定位（FR-502 对应：真实权限状态，不再是模拟）
+        SectionCard(title = "权限与定位") {
+            val permission = rememberLocationPermissionState()
+            val locationSource = ServiceLocator.get(LocalContext.current).locationSource
+
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("定位权限", modifier = Modifier.weight(1f))
+                when {
+                    permission.granted && permission.coarseOnly ->
+                        StatusChip("已授权 · 仅大致位置", WarnOrange, WarnOrangeBg)
+
+                    permission.granted -> StatusChip("已授权", SafeGreen, SafeGreenBg)
+                    else -> StatusChip("未授权", WarnOrange, WarnOrangeBg)
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            if (permission.granted) {
+                SecondaryActionButton(text = "去系统设置", onClick = permission::openAppSettings)
+            } else {
+                PrimaryActionButton(text = "申请定位权限", onClick = permission::request)
+                Spacer(Modifier.height(6.dp))
+                SecondaryActionButton(text = "去系统设置", onClick = permission::openAppSettings)
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("定位数据来源", modifier = Modifier.weight(1f))
+                Text(
+                    text = if (locationSource == LocationSource.AMAP) "真实高德定位" else "模拟轨迹（演示）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            SafetyText("定位仅用于地图显示作业人员位置，不用于任何安全判断。")
         }
 
         SectionCard(title = "待验收能力（C 阶段）") {

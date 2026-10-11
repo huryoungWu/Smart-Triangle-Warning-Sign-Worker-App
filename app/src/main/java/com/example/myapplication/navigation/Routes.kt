@@ -14,6 +14,7 @@ object Routes {
     const val ONETOUCH = "onetouch"
     const val DEBUG = "debug"
     const val DEVICE_INFO = "device_info"
+    const val MAP = "map"
 
     /** 预检页入口参数：deploy（定距布置）/ onetouch（一键布置） */
     const val ARG_KIND = "kind"
@@ -22,6 +23,6 @@ object Routes {
 
     val tabs = setOf(HOME, RECORDS, SETTINGS)
 
-    /** 需常驻急停入口的页面（M08：首页和运动页） */
+    /** 需常驻急停入口的页面（M08：首页和运动页）—— 地图页无运动指令，不列入 */
     val estopPages = setOf(HOME, MANUAL, PRECHECK, DEPLOY, ONETOUCH)
 }

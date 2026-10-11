@@ -102,4 +102,30 @@ class FakeDeviceRepositoryTest {
         assertEquals(MotionState.IDLE, after.motion)
         assertEquals(VehicleMode.STANDBY, after.mode)
     }
+
+    @Test
+    fun `gps disabled by default (matches current hardware, forces estimate path)`() = runBlocking {
+        val repo = FakeDeviceRepository()
+        val status = repo.fetchStatus().getOrThrow()
+        assertTrue(status.gps == null)
+    }
+
+    @Test
+    fun `gps enabled outputs wgs84 that converts to demo base (same-point overlap)`() = runBlocking {
+        val repo = FakeDeviceRepository()
+        repo.gpsEnabled = true
+        val status = repo.fetchStatus().getOrThrow()
+        val gps = status.gps
+        assertTrue(gps != null)
+
+        // 车端给 WGS-84；转换回 GCJ-02 后应与演示基准点重合（验证转换链路）
+        val gcj = com.example.myapplication.core.geo.CoordTransform.wgs84ToGcj02(
+            com.example.myapplication.core.geo.GeoPoint(gps!!.wgs84Lat, gps.wgs84Lng),
+        )
+        val distance = com.example.myapplication.core.geo.CoordTransform.distanceM(
+            gcj,
+            FakeDeviceRepository.BASE_GCJ02,
+        )
+        assertTrue("转换后应与基准点重合（<1m），实际 ${distance}m", distance < 1.0)
+    }
 }

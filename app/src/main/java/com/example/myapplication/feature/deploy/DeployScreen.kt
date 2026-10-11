@@ -40,6 +40,7 @@ import com.example.myapplication.core.ui.DeviceStatusStrip
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
+import com.example.myapplication.core.ui.map.MapPanel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
@@ -55,6 +56,7 @@ import com.example.myapplication.ui.theme.WarningRedBg
 @Composable
 fun DeployScreen(
     vm: VehicleViewModel,
+    mapVm: com.example.myapplication.feature.map.MapViewModel,
     onBack: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
@@ -83,6 +85,15 @@ fun DeployScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             DeviceStatusStrip(state)
+
+            // 小车实时位置（作业操作时同步展示）
+            MapPanel(
+                vm = vm,
+                mapVm = mapVm,
+                height = 220.dp,
+                title = "小车实时位置",
+                showLegend = false,
+            )
 
             // 目标距离（M05：仅三档，无输入框/滑块）
             SectionCard(title = "目标距离（首版仅提供已验证档位）") {

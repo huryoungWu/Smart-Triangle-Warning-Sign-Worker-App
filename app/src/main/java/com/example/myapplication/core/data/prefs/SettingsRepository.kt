@@ -24,6 +24,19 @@ class SettingsRepository(private val context: Context) {
         val PROMPT_SECONDS = intPreferencesKey("prompt_seconds")
         val DEFAULT_LIGHT = stringPreferencesKey("default_light")
         val USE_FAKE_DEVICE = booleanPreferencesKey("use_fake_device")
+        val AMAP_PRIVACY_ACCEPTED = booleanPreferencesKey("amap_privacy_accepted")
+    }
+
+    /**
+     * 高德 SDK 隐私合规门：用户同意前不得实例化 MapView / AMapLocationClient。
+     * 一次性同意，落库后不再弹。
+     */
+    val amapPrivacyAccepted: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.AMAP_PRIVACY_ACCEPTED] ?: false
+    }
+
+    suspend fun acceptAmapPrivacy() {
+        context.settingsDataStore.edit { it[Keys.AMAP_PRIVACY_ACCEPTED] = true }
     }
 
     val defaultDistance: Flow<DistancePreset> = context.settingsDataStore.data.map { prefs ->

@@ -14,6 +14,11 @@ data class DeviceSnapshot(
     val light: LightMode,
     val task: TaskInfo,
     val odo: OdoInfo,
+    /**
+     * 车端 GPS；null = 车端未装 GPS 模块或协议未带字段。
+     * **null 时小车位置只能是行程估算，UI 不得称"地图定位"**（规格第 4 节）。
+     */
+    val gps: VehicleGps? = null,
     /** C 阶段：待可靠数据来源验收后开放，null 表示无来源 → UI 置灰 */
     val batteryPercent: Int? = null,
     val tilt: Boolean? = null,
@@ -22,6 +27,25 @@ data class DeviceSnapshot(
     val deviceTs: Long = 0L,
     /** 手机侧收到时间（ms），用于"最后更新时间"与"非实时"判断 */
     val receivedAt: Long = System.currentTimeMillis(),
+)
+
+/** 车端 GPS 模块状态 */
+enum class GpsFixState { FIXED, NO_FIX, ABSENT }
+
+/**
+ * 车端上报 GPS（协议预留 lat/lng 字段）。
+ *
+ * **坐标系为 WGS-84**（车端 NMEA/模块原始输出），字段名即坐标系声明；
+ * 上图前必须经 `CoordTransform.wgs84ToGcj02`，禁止与 GCJ-02 混存。
+ */
+data class VehicleGps(
+    val wgs84Lat: Double,
+    val wgs84Lng: Double,
+    val accuracyM: Float? = null,
+    val speedMps: Double? = null,
+    val headingDeg: Double? = null,
+    val state: GpsFixState = GpsFixState.FIXED,
+    val at: Long = 0L,
 )
 
 data class TaskInfo(

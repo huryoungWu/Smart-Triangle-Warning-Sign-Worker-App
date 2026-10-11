@@ -37,6 +37,8 @@ import com.example.myapplication.core.ui.ScopeSafetyBanner
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.map.MapPanel
+import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
@@ -50,11 +52,13 @@ import com.example.myapplication.ui.theme.WarnOrange
 @Composable
 fun HomeScreen(
     vm: VehicleViewModel,
+    mapVm: MapViewModel,
     onOpenManual: () -> Unit,
     onOpenPrecheckDeploy: () -> Unit,
     onOpenPrecheckOneTouch: () -> Unit,
     onOpenDebug: () -> Unit,
     onOpenDeviceInfo: () -> Unit,
+    onOpenMap: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snapshot = state.snapshot
@@ -164,9 +168,22 @@ fun HomeScreen(
             SecondaryActionButton(text = "调试数据", onClick = onOpenDebug)
         }
 
+        // 地图位置：默认内嵌展示（无需点开）
+        MapPanel(
+            vm = vm,
+            mapVm = mapVm,
+            height = 260.dp,
+            title = "小车实时位置",
+            showLegend = true,
+            showFollowSwitch = true,
+        )
+        SecondaryActionButton(text = "全屏地图（含诊断信息）", onClick = onOpenMap)
+
         // 数据真实性（规格第 4 节）
         SectionCard(title = "能力说明") {
-            SafetyText("当前位置仅由车轮编码器估算行驶距离，不代表地图定位。")
+            SafetyText("手机定位用于在地图上显示作业人员位置。")
+            Spacer(Modifier.height(6.dp))
+            SafetyText("小车位置在车端 GPS 未接通前由车轮编码器估算，地图中以灰色虚线点标注「估算」，不得视为小车地图实时定位。")
             Spacer(Modifier.height(6.dp))
             SafetyText("样机不具备障碍、来车、道路安全检测能力；不具备自动寻找合适位置能力。")
             Spacer(Modifier.height(6.dp))
@@ -175,12 +192,6 @@ fun HomeScreen(
 
         // C 阶段置灰（用户拍板：A+B+C UI 全做，C 置灰）
         SectionCard(title = "待验收能力（C 阶段）") {
-            LockedFeatureCard(
-                title = "地图位置",
-                reason = LOCKED_FEATURE_NOTICE,
-                onClick = { vm.showInfo("地图位置", LOCKED_FEATURE_NOTICE) },
-            )
-            Spacer(Modifier.height(8.dp))
             LockedFeatureCard(
                 title = "事件编号",
                 reason = LOCKED_FEATURE_NOTICE,

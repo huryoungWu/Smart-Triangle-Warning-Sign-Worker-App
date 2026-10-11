@@ -31,6 +31,8 @@ import com.example.myapplication.feature.debug.DebugScreen
 import com.example.myapplication.feature.deploy.DeployScreen
 import com.example.myapplication.feature.home.HomeScreen
 import com.example.myapplication.feature.manual.ManualScreen
+import com.example.myapplication.feature.map.MapScreen
+import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.onetouch.OneTouchScreen
 import com.example.myapplication.feature.precheck.PrecheckScreen
 import com.example.myapplication.feature.record.RecordsScreen
@@ -56,6 +58,7 @@ private val tabItems = listOf(
 fun AppNavHost() {
     val navController = rememberNavController()
     val vm: VehicleViewModel = viewModel(factory = VehicleViewModel.Factory)
+    val mapVm: MapViewModel = viewModel(factory = MapViewModel.Factory)
     val state by vm.uiState.collectAsStateWithLifecycle()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -89,11 +92,13 @@ fun AppNavHost() {
             composable(Routes.HOME) {
                 HomeScreen(
                     vm = vm,
+                    mapVm = mapVm,
                     onOpenManual = { navController.navigate(Routes.MANUAL) },
                     onOpenPrecheckDeploy = { navController.navigate("${Routes.PRECHECK}?${Routes.ARG_KIND}=${Routes.KIND_DEPLOY}") },
                     onOpenPrecheckOneTouch = { navController.navigate("${Routes.PRECHECK}?${Routes.ARG_KIND}=${Routes.KIND_ONETOUCH}") },
                     onOpenDebug = { navController.navigate(Routes.DEBUG) },
                     onOpenDeviceInfo = { navController.navigate(Routes.DEVICE_INFO) },
+                    onOpenMap = { navController.navigate(Routes.MAP) },
                 )
             }
 
@@ -108,7 +113,7 @@ fun AppNavHost() {
             }
 
             composable(Routes.MANUAL) {
-                ManualScreen(vm = vm, onBack = { navController.popBackStack() })
+                ManualScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
             }
 
             composable(
@@ -133,11 +138,11 @@ fun AppNavHost() {
             }
 
             composable(Routes.DEPLOY) {
-                DeployScreen(vm = vm, onBack = { navController.popBackStack() })
+                DeployScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
             }
 
             composable(Routes.ONETOUCH) {
-                OneTouchScreen(vm = vm, onBack = { navController.popBackStack() })
+                OneTouchScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
             }
 
             composable(Routes.DEBUG) {
@@ -146,6 +151,14 @@ fun AppNavHost() {
 
             composable(Routes.DEVICE_INFO) {
                 DeviceInfoScreen(vm = vm, onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.MAP) {
+                MapScreen(
+                    vm = vm,
+                    mapVm = mapVm,
+                    onBack = { navController.popBackStack() },
+                )
             }
         }
     }

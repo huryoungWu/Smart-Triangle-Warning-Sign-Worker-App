@@ -40,6 +40,7 @@ import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatRow
 import com.example.myapplication.core.ui.StatTextTileRow
+import com.example.myapplication.core.ui.map.MapPanel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -55,6 +56,7 @@ import com.example.myapplication.ui.theme.WarningRed
 @Composable
 fun ManualScreen(
     vm: VehicleViewModel,
+    mapVm: com.example.myapplication.feature.map.MapViewModel,
     onBack: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
@@ -94,6 +96,15 @@ fun ManualScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             DeviceStatusStrip(state)
+
+            // 小车实时位置（作业操作时同步展示）
+            MapPanel(
+                vm = vm,
+                mapVm = mapVm,
+                height = 220.dp,
+                title = "小车实时位置",
+                showLegend = false,
+            )
 
             // 运行数据（首页只突出目标/进度，调试页看全量；此处给少量实时值）
             SectionCard(title = "实时数据") {

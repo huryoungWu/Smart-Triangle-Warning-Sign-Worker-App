@@ -42,6 +42,7 @@ import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.map.MapPanel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
@@ -68,6 +69,7 @@ private val stageLabels = listOf(
 @Composable
 fun OneTouchScreen(
     vm: VehicleViewModel,
+    mapVm: com.example.myapplication.feature.map.MapViewModel,
     onBack: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
@@ -97,6 +99,15 @@ fun OneTouchScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             DeviceStatusStrip(state)
+
+            // 小车实时位置（作业操作时同步展示）
+            MapPanel(
+                vm = vm,
+                mapVm = mapVm,
+                height = 220.dp,
+                title = "小车实时位置",
+                showLegend = false,
+            )
 
             // 任务来源角标（M06 实体按钮联动）
             if (task?.source == TaskSource.BUTTON) {
