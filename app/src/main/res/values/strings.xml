@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">三角警示牌作业</string>
+    <string name="safety_notice_scope">样机仅供有人看护的室内或封闭场地测试，不具备自动识别道路安全位置、障碍或来车的能力；布置前须人工现场确认。</string>
+</resources>
