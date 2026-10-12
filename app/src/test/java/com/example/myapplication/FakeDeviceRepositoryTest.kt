@@ -52,18 +52,19 @@ class FakeDeviceRepositoryTest {
     }
 
     @Test
-    fun `task rejects out-of-range distance (M05 only 0_5 1 2 m)`() = runBlocking {
+    fun `task rejects out-of-range distance (10 to 100 m only)`() = runBlocking {
         val repo = FakeDeviceRepository()
-        val ack = repo.startTask(TaskKind.FIXED_DISTANCE, 1.5).getOrThrow()
-        assertFalse(ack.accepted)
+        assertFalse(repo.startTask(TaskKind.FIXED_DISTANCE, 5.0).getOrThrow().accepted)   // < 10
+        assertFalse(repo.startTask(TaskKind.FIXED_DISTANCE, 150.0).getOrThrow().accepted) // > 100
+        assertTrue(repo.startTask(TaskKind.FIXED_DISTANCE, 30.0).getOrThrow().accepted)   // 合法
     }
 
     @Test
     fun `duplicate task start rejected (M05 no second task)`() = runBlocking {
         val repo = FakeDeviceRepository()
-        val first = repo.startTask(TaskKind.FIXED_DISTANCE, 1.0).getOrThrow()
+        val first = repo.startTask(TaskKind.FIXED_DISTANCE, 30.0).getOrThrow()
         assertTrue(first.accepted)
-        val second = repo.startTask(TaskKind.FIXED_DISTANCE, 2.0).getOrThrow()
+        val second = repo.startTask(TaskKind.FIXED_DISTANCE, 50.0).getOrThrow()
         assertFalse(second.accepted)
     }
 
@@ -79,7 +80,7 @@ class FakeDeviceRepositoryTest {
     @Test
     fun `odo reset refused while task running (M09)`() = runBlocking {
         val repo = FakeDeviceRepository()
-        repo.startTask(TaskKind.FIXED_DISTANCE, 2.0)
+        repo.startTask(TaskKind.FIXED_DISTANCE, 50.0)
         val ack = repo.resetOdo().getOrThrow()
         assertFalse(ack.accepted)
     }
@@ -101,6 +102,25 @@ class FakeDeviceRepositoryTest {
         val after = repo.fetchStatus().getOrThrow()
         assertEquals(MotionState.IDLE, after.motion)
         assertEquals(VehicleMode.STANDBY, after.mode)
+    }
+
+    @Test
+    fun `recover brings car back to operator position`() = runBlocking {
+        val repo = FakeDeviceRepository()
+        repo.sendMove(com.example.myapplication.core.model.vehicle.MoveDir.FWD)
+        Thread.sleep(300)
+        repo.fetchStatus() // 推进 tick
+        val before = repo.fetchStatus().getOrThrow().odo.traveledM
+        assertTrue("应先离开起点", before > 0.0)
+
+        repo.sendStop()
+        val ack = repo.startRecover().getOrThrow()
+        assertTrue(ack.accepted)
+        // 多次 tick 推进回收
+        repeat(30) { repo.fetchStatus(); Thread.sleep(60) }
+        val after = repo.fetchStatus().getOrThrow()
+        assertTrue("回收后应回到起点", after.odo.traveledM < 0.05)
+        assertEquals(TaskRunState.DONE, after.task.state)
     }
 
     @Test

@@ -44,6 +44,8 @@ class HttpDeviceRepository(
 
     override suspend fun cancelTask(): Result<CmdAck> = postCmd(JSONObject().put("type", "task_cancel"))
 
+    override suspend fun startRecover(): Result<CmdAck> = postCmd(JSONObject().put("type", "recover"))
+
     override suspend fun setLight(mode: LightMode): Result<CmdAck> =
         postJson("$baseUrl/light", JSONObject().put("mode", mode.token))
 
@@ -95,6 +97,7 @@ class HttpDeviceRepository(
         get() = when (this) {
             TaskKind.FIXED_DISTANCE -> "fixed_distance"
             TaskKind.ONE_TOUCH -> "one_touch"
+            TaskKind.RECOVER -> "recover"
         }
 
     private val LightMode.token: String

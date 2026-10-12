@@ -17,6 +17,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -89,9 +90,15 @@ fun HomeScreen(
                 }
                 if (connected) {
                     StatusChip("已连接", SafeGreen, SafeGreenBg)
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = vm::disconnect) {
+                        Icon(com.example.myapplication.core.ui.AppIcons.Disconnect, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("断开连接")
+                    }
                 } else {
                     Button(onClick = vm::connect) {
-                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Icon(com.example.myapplication.core.ui.AppIcons.Connect, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
                         Text("连接设备")
                     }
@@ -143,7 +150,7 @@ fun HomeScreen(
             )
             Spacer(Modifier.height(8.dp))
             PrimaryActionButton(
-                text = "定距布置（0.5／1／2 米）",
+                text = "定距布置",
                 onClick = onOpenPrecheckDeploy,
                 enabled = connected && state.taskStartEnabled,
             )

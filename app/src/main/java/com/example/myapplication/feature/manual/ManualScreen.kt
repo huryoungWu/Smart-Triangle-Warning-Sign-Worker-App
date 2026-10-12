@@ -35,7 +35,7 @@ import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.VehicleMode
 import com.example.myapplication.core.ui.DangerActionButton
 import com.example.myapplication.core.ui.DeviceStatusStrip
-import com.example.myapplication.core.ui.HoldDirectionPad
+import com.example.myapplication.core.ui.RemoteControlPad
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatRow
@@ -127,16 +127,18 @@ fun ManualScreen(
                 )
             }
 
-            // 方向盘（M04）
-            SectionCard(title = "方向控制") {
+            // 方向盘（M04）：遥控器式，按住即持续运行
+            SectionCard(title = "遥控器") {
                 val autoRunning = snapshot?.mode == VehicleMode.AUTO
                 val locked = snapshot?.estopLocked == true || snapshot?.mode == VehicleMode.SAFE_STOP
                 val enabled = state.motionCommandsEnabled && !autoRunning
 
-                HoldDirectionPad(
+                RemoteControlPad(
                     enabled = enabled,
+                    holdingDir = state.holdingDir,
                     onHoldStart = vm::onHoldStart,
                     onHoldEnd = vm::onHoldEnd,
+                    onStopClick = vm::stopNormal,
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -148,17 +150,11 @@ fun ManualScreen(
                     Warning("自动任务执行中，禁止手动抢占")
                 }
 
-                Spacer(Modifier.height(12.dp))
-                DangerActionButton(
-                    text = "停止（普通停车）",
-                    onClick = vm::stopNormal,
-                    enabled = state.connection == ConnectionPhase.CONNECTED,
-                )
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "普通停车会取消自动任务并回到待命；不锁定后续操作，不自动关闭警示灯。",
+                    text = "中央「停止」为普通停车：取消自动任务并回到待命；不锁定后续操作，不自动关闭警示灯。",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
-                    modifier = Modifier.padding(top = 6.dp),
                 )
             }
 

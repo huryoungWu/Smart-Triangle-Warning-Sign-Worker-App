@@ -163,8 +163,11 @@ class FakeDeviceRepository : DeviceRepository {
         if (task.state == TaskRunState.RUNNING) {
             return@command CmdAck(false, reason = "task_running：已有任务运行中，禁止重复启动")
         }
-        if (targetM !in ALLOWED_TARGETS) {
-            return@command CmdAck(false, reason = "param_out_of_range：仅支持 0.5／1／2 米档位")
+        if (targetM < MIN_TARGET_M || targetM > MAX_TARGET_M) {
+            return@command CmdAck(
+                false,
+                reason = "param_out_of_range：布设距离须在 ${MIN_TARGET_M.toInt()}~${MAX_TARGET_M.toInt()} 米之间",
+            )
         }
         task = TaskInfo(
             id = "t-${UUID.randomUUID().toString().take(6)}",
@@ -181,6 +184,35 @@ class FakeDeviceRepository : DeviceRepository {
         oneTouchStage = if (kind == TaskKind.ONE_TOUCH) "lighting" else null
         stageDeadline = System.currentTimeMillis() + STAGE_LIGHTING_MS
         if (kind == TaskKind.ONE_TOUCH) light = LightMode.BLINK
+        CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
+    }
+
+    /**
+     * 自动回收（M05 之后闭环）：小车从当前位置返回作业人员位置。
+     * 视作一项自动任务，`traveledM` 逐次递减回 0（= 作业人员锚点）。
+     */
+    override suspend fun startRecover(): Result<CmdAck> = command {
+        if (estopLocked || mode == VehicleMode.SAFE_STOP) {
+            return@command CmdAck(false, reason = "estop_locked：急停锁定中，禁止回收")
+        }
+        if (task.state == TaskRunState.RUNNING) {
+            return@command CmdAck(false, reason = "task_running：已有任务运行中，禁止重复启动")
+        }
+        if (odo.traveledM <= 0.01) {
+            return@command CmdAck(false, reason = "already_home：小车已在作业人员位置，无需回收")
+        }
+        task = TaskInfo(
+            id = "t-${UUID.randomUUID().toString().take(6)}",
+            kind = TaskKind.RECOVER,
+            source = TaskSource.APP,
+            targetM = odo.traveledM,
+            traveledM = odo.traveledM,
+            state = TaskRunState.RUNNING,
+            stage = "recovering",
+            resultNote = null,
+        )
+        mode = VehicleMode.AUTO
+        motion = MotionState.IDLE
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
@@ -266,10 +298,31 @@ class FakeDeviceRepository : DeviceRepository {
         if (task.state == TaskRunState.RUNNING) {
             when (task.kind) {
                 TaskKind.ONE_TOUCH -> tickOneTouch(now, dtSec)
+                TaskKind.RECOVER -> tickRecover(dtSec)
                 else -> tickFixedDistance(dtSec)
             }
         } else if (motion != MotionState.MOVING) {
             odo = odo.copy(speedMps = 0.0)
+        }
+    }
+
+    /** 回收：行驶里程递减回 0（= 作业人员锚点），到达即完成 */
+    private fun tickRecover(dtSec: Double) {
+        val step = RECOVER_SPEED_MPS * dtSec
+        val traveled = (task.traveledM - step).coerceAtLeast(0.0)
+        task = task.copy(traveledM = traveled)
+        odo = odo.copy(
+            traveledM = traveled,
+            leftPulse = (traveled * PULSE_PER_M).toLong(),
+            rightPulse = (traveled * PULSE_PER_M).toLong(),
+            speedMps = RECOVER_SPEED_MPS,
+        )
+        motion = MotionState.MOVING
+        if (traveled <= 0.01) {
+            task = task.copy(state = TaskRunState.DONE, resultNote = "recovered")
+            motion = MotionState.IDLE
+            mode = VehicleMode.STANDBY
+            odo = odo.copy(traveledM = 0.0, speedMps = 0.0)
         }
     }
 
@@ -403,6 +456,8 @@ class FakeDeviceRepository : DeviceRepository {
         private const val PULSE_PER_M = 500.0
         private const val STAGE_LIGHTING_MS = 1500L
         private const val STAGE_COUNTDOWN_MS = 3000L
-        private val ALLOWED_TARGETS = setOf(0.5, 1.0, 2.0)
+        private const val RECOVER_SPEED_MPS = 0.5
+        private const val MIN_TARGET_M = 10.0
+        private const val MAX_TARGET_M = 100.0
     }
 }

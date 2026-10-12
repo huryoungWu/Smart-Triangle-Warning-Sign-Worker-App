@@ -39,6 +39,11 @@ enum class CommandPhase(val label: String) {
     VERIFIED("人工已核验"),
     FAILED("设备报告失败"),
     UNKNOWN("结果未知"),
+    ;
+
+    /** 终态：可再次发起新任务（否则布置完就卡死） */
+    val isTerminal: Boolean
+        get() = this == DEVICE_DONE || this == VERIFIED || this == FAILED || this == UNKNOWN
 }
 
 /** 停止来源（M08）：区分人工停止/失联保护/编码器异常/左右偏差/超时 */
@@ -60,16 +65,17 @@ enum class MoveDir(val label: String) {
     RIGHT("右转"),
 }
 
-/** 定距档位（M05）：首版仅 0.5／1／2 米已验证档位，不开放任意距离 */
-enum class DistancePreset(val label: String, val meters: Double) {
-    M05("0.5 米", 0.5),
-    M1("1 米", 1.0),
-    M2("2 米", 2.0),
+/** 定距布置距离范围（米）：允许 10-100 自由输入 */
+object DistanceRange {
+    const val MIN_M = 10
+    const val MAX_M = 100
+    const val DEFAULT_M = 30
 }
 
 enum class TaskKind(val label: String) {
     FIXED_DISTANCE("定距布置"),
     ONE_TOUCH("一键布置"),
+    RECOVER("自动回收"),
 }
 
 /** 任务来源（M06）：APP 启动或车身实体按钮启动 */

@@ -25,7 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.myapplication.core.model.vehicle.DistancePreset
+import com.example.myapplication.core.model.vehicle.DistanceRange
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
@@ -61,7 +61,7 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val settings = remember { ServiceLocator.get(context).settingsRepository }
 
-    val savedDistance by settings.defaultDistance.collectAsStateWithLifecycle(initialValue = DistancePreset.M1)
+    val savedDistance by settings.defaultDistanceM.collectAsStateWithLifecycle(initialValue = DistanceRange.DEFAULT_M)
     val savedPrompt by settings.promptSeconds.collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_PROMPT_SECONDS)
     val savedLight by settings.defaultLight.collectAsStateWithLifecycle(initialValue = LightMode.OFF)
 
@@ -79,16 +79,21 @@ fun SettingsScreen(
         Text("设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
         SectionCard(title = "默认参数") {
-            Text("默认距离档", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text("默认距离（米）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DistancePreset.entries.forEach { preset ->
+                listOf(10, 20, 30, 50, 80, 100).forEach { quick ->
                     FilterChip(
-                        selected = distance == preset,
-                        onClick = { distance = preset },
-                        label = { Text(preset.label) },
+                        selected = distance == quick,
+                        onClick = { distance = quick },
+                        label = { Text("$quick") },
                     )
                 }
             }
+            Text(
+                text = "范围 ${DistanceRange.MIN_M}~${DistanceRange.MAX_M} 米，布置页可自由输入",
+                style = MaterialTheme.typography.labelSmall,
+                color = androidx.compose.ui.graphics.Color.Gray,
+            )
 
             Spacer(Modifier.height(12.dp))
             Text("启动提示时间（秒）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
@@ -119,7 +124,7 @@ fun SettingsScreen(
                 text = "保存设置",
                 onClick = {
                     scope.launch {
-                        settings.saveDefaultDistance(distance)
+                        settings.saveDefaultDistanceM(distance)
                         settings.savePromptSeconds(prompt)
                         settings.saveDefaultLight(light)
                         vm.showInfo(

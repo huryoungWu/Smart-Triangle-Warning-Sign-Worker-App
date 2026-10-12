@@ -41,6 +41,9 @@ interface DeviceRepository {
     /** POST /cmd {type:task_start} —— 启动定距/一键任务（M05/M06） */
     suspend fun startTask(kind: TaskKind, targetM: Double): Result<CmdAck>
 
+    /** POST /cmd {type:recover} —— 自动回收：小车返回作业人员位置（起点=车，终点=人） */
+    suspend fun startRecover(): Result<CmdAck>
+
     /** POST /cmd {type:task_cancel} */
     suspend fun cancelTask(): Result<CmdAck>
 

@@ -41,8 +41,11 @@ data class VehicleUiState(
     val activeTicket: CommandTicket? = null,
     /** 手动遥控按住中（M04） */
     val holdingMove: Boolean = false,
+    /** 当前按住的方向（遥控器高亮用） */
+    val holdingDir: MoveDir? = null,
     val precheckHuman: PrecheckHuman = PrecheckHuman(),
-    val deployPreset: DistancePreset = DistancePreset.M1,
+    /** 定距布置目标距离（米），允许 10-100 自由输入 */
+    val targetDistanceM: Int = 30,
     val lightSetting: LightMode = LightMode.OFF,
     /** 发出停止/急停后设备尚未确认（M08："停止未确认，需现场核查"） */
     val stopUnconfirmed: Boolean = false,
@@ -62,13 +65,16 @@ data class VehicleUiState(
             snapshot?.mode != VehicleMode.AUTO &&
             snapshot?.mode != VehicleMode.SAFE_STOP
 
-    /** 布置类任务是否可启动（预检必需项 + 连接 + 无进行中任务） */
+    /**
+     * 布置/回收类任务是否可启动。
+     * 票据处于**终态**（完成/核验/失败/结果未知）即可再次启动 —— 否则布置完就再也发不了下一次。
+     */
     val taskStartEnabled: Boolean
         get() = connection == ConnectionPhase.CONNECTED &&
             snapshot?.estopLocked != true &&
             snapshot?.mode != VehicleMode.SAFE_STOP &&
             snapshot?.task?.state != TaskRunState.RUNNING &&
-            activeTicket == null
+            (activeTicket == null || activeTicket!!.phase.isTerminal)
 
     /** 设备条件检查（M03）：至少在线、静止、未急停锁定、无其他运行任务 */
     fun deviceConditions(): List<Pair<String, Boolean>> {

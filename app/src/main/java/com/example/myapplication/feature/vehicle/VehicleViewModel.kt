@@ -15,7 +15,7 @@ import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.CommandTicket
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
-import com.example.myapplication.core.model.vehicle.DistancePreset
+import com.example.myapplication.core.model.vehicle.DistanceRange
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MotionState
 import com.example.myapplication.core.model.vehicle.MoveDir
@@ -62,6 +62,7 @@ class VehicleViewModel(
     val records: Flow<List<WorkRecord>> = workRecordRepository.records
 
     private var pollJob: Job? = null
+    private var keepaliveJob: Job? = null
     private var cmdSeq = 1
 
     /** 进行中任务的本地记录 id（任务结束时落库） */
@@ -73,7 +74,7 @@ class VehicleViewModel(
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    deployPreset = settingsRepository.defaultDistance.first(),
+                    targetDistanceM = settingsRepository.defaultDistanceM.first(),
                     lightSetting = settingsRepository.defaultLight.first(),
                 )
             }
@@ -99,12 +100,31 @@ class VehicleViewModel(
         }
     }
 
+    /** 手动断开连接（M01）：停止轮询与保持包，清空设备状态回未连接 */
+    fun disconnect() {
+        keepaliveJob?.cancel()
+        keepaliveJob = null
+        pollJob?.cancel()
+        pollJob = null
+        _uiState.update {
+            it.copy(
+                connection = ConnectionPhase.DISCONNECTED,
+                snapshot = null,
+                lastUpdateAt = 0L,
+                holdingMove = false,
+                holdingDir = null,
+                activeTicket = null,
+                stopUnconfirmed = false,
+            )
+        }
+    }
+
     /** 失联立即显示"已断开／状态未确认"并禁用运动操作（M01） */
     private fun onLinkLost() {
         val wasConnected = _uiState.value.connection == ConnectionPhase.CONNECTED
         if (_uiState.value.holdingMove) {
             // 失联：清"按住中"，尝试停车（命令标 UNKNOWN，不排队不重发）
-            _uiState.update { it.copy(holdingMove = false) }
+            _uiState.update { it.copy(holdingMove = false, holdingDir = null) }
         }
         // 失联时清空未确认命令票据（离线命令禁排队）
         _uiState.update {
@@ -304,15 +324,28 @@ class VehicleViewModel(
             rejectMotion("自动任务执行中，禁止手动抢占")
             return
         }
-        _uiState.update { it.copy(holdingMove = true) }
-        sendCommand(CommandKind.MOVE) { deviceRepository.sendMove(dir) }
+        if (_uiState.value.holdingMove) return
+        _uiState.update { it.copy(holdingMove = true, holdingDir = dir) }
+
+        // 立即发一条，随后持续发保持包：设备侧有断流看门狗，只发一条会被判失联自动停车
+        sendCommand(CommandKind.MOVE, trackTicket = false) { deviceRepository.sendMove(dir) }
+        keepaliveJob = viewModelScope.launch {
+            while (isActive && _uiState.value.holdingMove) {
+                delay(MOVE_KEEPALIVE_MS)
+                if (_uiState.value.holdingMove) {
+                    deviceRepository.sendMove(dir)   // 保持包：失败也不打断按住
+                }
+            }
+        }
     }
 
     /** 松手/触控取消/退出页面/失联 → 停车（M04） */
     fun onHoldEnd() {
         if (!_uiState.value.holdingMove) return
-        _uiState.update { it.copy(holdingMove = false) }
-        sendCommand(CommandKind.STOP) { deviceRepository.sendStop() }
+        keepaliveJob?.cancel()
+        keepaliveJob = null
+        _uiState.update { it.copy(holdingMove = false, holdingDir = null) }
+        sendCommand(CommandKind.STOP, trackTicket = false) { deviceRepository.sendStop() }
     }
 
     /** 离开手动遥控页（返回/切后台）→ 强制停车（三重保障之一） */
@@ -323,7 +356,7 @@ class VehicleViewModel(
     /** 普通停车（M04）：停运动 + 取消自动任务，不锁定、不自动关灯 */
     fun stopNormal() {
         sendCommand(CommandKind.STOP) { deviceRepository.sendStop() }
-        _uiState.update { it.copy(holdingMove = false) }
+        _uiState.update { it.copy(holdingMove = false, holdingDir = null) }
     }
 
     // ==================== M08 急停与恢复 ====================
@@ -336,7 +369,7 @@ class VehicleViewModel(
                 it.copy(activeTicket = pending.copy(phase = CommandPhase.UNKNOWN, note = "急停已触发，原任务结果未知"))
             }
         }
-        _uiState.update { it.copy(stopUnconfirmed = true, holdingMove = false) }
+        _uiState.update { it.copy(stopUnconfirmed = true, holdingMove = false, holdingDir = null) }
         sendCommand(CommandKind.ESTOP, trackTicket = false) { deviceRepository.sendEstop() }
         recordTaskIfNeeded(WorkRecord.RESULT_CANCELED, "急停锁定（estop）")
     }
@@ -362,13 +395,15 @@ class VehicleViewModel(
 
     // ==================== M05 定距布置 ====================
 
-    fun setDeployPreset(preset: DistancePreset) {
-        _uiState.update { it.copy(deployPreset = preset) }
+    /** 设置定距布置目标距离（米），范围 10-100 */
+    fun setTargetDistance(meters: Int) {
+        val v = meters.coerceIn(DistanceRange.MIN_M, DistanceRange.MAX_M)
+        _uiState.update { it.copy(targetDistanceM = v) }
     }
 
     /** 启动定距任务（M05）：重复点击不得启动第二项运动任务 */
     fun startFixedDistanceTask() {
-        startTask(TaskKind.FIXED_DISTANCE, _uiState.value.deployPreset.meters)
+        startTask(TaskKind.FIXED_DISTANCE, _uiState.value.targetDistanceM.toDouble())
     }
 
     private fun startTask(kind: TaskKind, targetM: Double) {
@@ -394,6 +429,29 @@ class VehicleViewModel(
         ) { deviceRepository.startTask(kind, targetM) }
     }
 
+    /**
+     * 自动回收：小车返回作业人员位置（起点=车、终点=人），
+     * 回收完成后即可直接发起下一次定距布置。
+     */
+    fun startRecoverTask() {
+        val state = _uiState.value
+        if (!state.taskStartEnabled) {
+            rejectMotion(
+                when {
+                    state.connection != ConnectionPhase.CONNECTED -> "设备未连接，无法下发回收"
+                    state.snapshot?.estopLocked == true -> "急停锁定中，请先现场核查后恢复"
+                    state.snapshot?.task?.state == TaskRunState.RUNNING -> "已有任务运行中"
+                    else -> "当前状态不允许回收"
+                },
+            )
+            return
+        }
+        val recordId = UUID.randomUUID().toString()
+        activeRecordId = recordId
+        activeRecordStartedAt = System.currentTimeMillis()
+        sendCommand(CommandKind.TASK_START, trackTicket = true) { deviceRepository.startRecover() }
+    }
+
     /** 取消任务（M05/M06） */
     fun cancelTask() {
         sendCommand(CommandKind.TASK_CANCEL, trackTicket = false) { deviceRepository.cancelTask() }
@@ -405,8 +463,8 @@ class VehicleViewModel(
     fun startOneTouchTask() {
         val settings = settingsRepository
         viewModelScope.launch {
-            val preset = settings.defaultDistance.first()
-            startTask(TaskKind.ONE_TOUCH, preset.meters)
+            val d = settings.defaultDistanceM.first()
+            startTask(TaskKind.ONE_TOUCH, d.toDouble())
         }
     }
 
@@ -611,6 +669,8 @@ class VehicleViewModel(
 
     companion object {
         private const val POLL_INTERVAL_MS = 1000L
+        /** 按住移动时的保持包间隔（须短于设备看门狗 800ms） */
+        private const val MOVE_KEEPALIVE_MS = 300L
 
         val Factory = viewModelFactory {
             initializer {

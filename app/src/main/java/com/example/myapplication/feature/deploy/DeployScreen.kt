@@ -22,6 +22,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -32,7 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.vehicle.CommandPhase
-import com.example.myapplication.core.model.vehicle.DistancePreset
+import com.example.myapplication.core.model.vehicle.DistanceRange
 import com.example.myapplication.core.model.vehicle.TaskRunState
 import com.example.myapplication.core.ui.CommandTimeline
 import com.example.myapplication.core.ui.DangerActionButton
@@ -40,6 +41,13 @@ import com.example.myapplication.core.ui.DeviceStatusStrip
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.example.myapplication.core.ui.map.MapPanel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -49,8 +57,9 @@ import com.example.myapplication.ui.theme.WarningRed
 import com.example.myapplication.ui.theme.WarningRedBg
 
 /**
- * 定距布置（M05）：仅 0.5／1／2 米三档；启动与进度按命令五层展示；
- * **重复点击不得启动第二项运动任务**；设备报告完成后人工现场核验（与设备完成分开记录）。
+ * 定距布置（M05）：距离 10~100 米自由输入；启动与进度按命令五层展示；
+ * **重复点击不得启动第二项运动任务**；设备报告完成后人工现场核验；
+ * 完成后可一键自动回收，随即布置下一次。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,6 +72,7 @@ fun DeployScreen(
     val snapshot = state.snapshot
     val task = snapshot?.task
     val ticket = state.activeTicket
+    var distanceText by remember { mutableStateOf(state.targetDistanceM.toString()) }
 
     Scaffold(
         topBar = {
@@ -95,19 +105,41 @@ fun DeployScreen(
                 showLegend = false,
             )
 
-            // 目标距离（M05：仅三档，无输入框/滑块）
-            SectionCard(title = "目标距离（首版仅提供已验证档位）") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DistancePreset.entries.forEach { preset ->
-                        FilterChip(
-                            selected = state.deployPreset == preset,
-                            onClick = { vm.setDeployPreset(preset) },
-                            label = { Text(preset.label) },
-                        )
-                    }
+            // 目标距离（10-100 米，滑块 + 自由输入）
+            SectionCard(title = "目标距离（${DistanceRange.MIN_M}~${DistanceRange.MAX_M} 米）") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${state.targetDistanceM} 米",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    OutlinedTextField(
+                        value = distanceText,
+                        onValueChange = { txt ->
+                            distanceText = txt
+                            txt.toIntOrNull()?.let { vm.setTargetDistance(it) }
+                        },
+                        label = { Text("自定义米数") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
                 }
+                Slider(
+                    value = state.targetDistanceM.toFloat().coerceIn(10f, 100f),
+                    onValueChange = { v ->
+                        val m = v.toInt().coerceIn(DistanceRange.MIN_M, DistanceRange.MAX_M)
+                        vm.setTargetDistance(m)
+                        distanceText = m.toString()
+                    },
+                    valueRange = DistanceRange.MIN_M.toFloat()..DistanceRange.MAX_M.toFloat(),
+                    steps = 89,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Spacer(Modifier.height(8.dp))
-                SafetyText("仅提供已验证的 0.5／1／2 米档位；不开放任意距离，不自动寻找合适位置。")
+                SafetyText("可自由输入 ${DistanceRange.MIN_M}~${DistanceRange.MAX_M} 米；车端仍会校验参数范围与启动条件。")
             }
 
             // 命令五层（规格第 4 节）
@@ -174,26 +206,31 @@ fun DeployScreen(
                 }
             }
 
-            // 操作区
-            val canStart = state.taskStartEnabled
-            if (ticket == null || ticket.phase == CommandPhase.FAILED || ticket.phase == CommandPhase.UNKNOWN) {
+            // 操作区：任务运行中可停；完成后可回收或直接布置下一次
+            val isRunning = task?.state == TaskRunState.RUNNING
+            val canStart = state.taskStartEnabled && !isRunning
+
+            if (isRunning) {
+                DangerActionButton(text = "停止并取消任务", onClick = vm::cancelTask)
+            } else {
+                // 自动回收：小车返回作业人员位置，之后即可布置下一次
+                if ((task?.traveledM ?: 0.0) > 0.01) {
+                    PrimaryActionButton(text = "自动回收（小车回到我这里）", onClick = vm::startRecoverTask)
+                    Spacer(Modifier.height(8.dp))
+                }
                 PrimaryActionButton(
-                    text = "启动定距直行（${state.deployPreset.label}）",
+                    text = "启动定距直行（${state.targetDistanceM} 米）",
                     onClick = vm::startFixedDistanceTask,
                     enabled = canStart,
                 )
                 if (!canStart) {
                     Text(
-                        "禁止重复启动：已有命令或任务进行中（重复点击不会启动第二项运动任务）",
+                        "当前状态不允许启动（急停锁定／命令未确认）",
                         color = WarningRed,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-            }
-
-            if (task?.state == TaskRunState.RUNNING || state.holdingMove) {
-                DangerActionButton(text = "停止并取消任务", onClick = vm::cancelTask)
             }
 
             if (state.pendingVerify != null) {

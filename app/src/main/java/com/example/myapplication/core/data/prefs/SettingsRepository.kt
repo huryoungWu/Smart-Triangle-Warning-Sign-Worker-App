@@ -6,7 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.example.myapplication.core.model.vehicle.DistancePreset
+import com.example.myapplication.core.model.vehicle.DistanceRange
 import com.example.myapplication.core.model.vehicle.LightMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -20,7 +20,7 @@ private val Context.settingsDataStore by preferencesDataStore(name = "app_settin
 class SettingsRepository(private val context: Context) {
 
     private object Keys {
-        val DEFAULT_DISTANCE = stringPreferencesKey("default_distance")
+        val DEFAULT_DISTANCE_M = intPreferencesKey("default_distance_m")
         val PROMPT_SECONDS = intPreferencesKey("prompt_seconds")
         val DEFAULT_LIGHT = stringPreferencesKey("default_light")
         val USE_FAKE_DEVICE = booleanPreferencesKey("use_fake_device")
@@ -39,10 +39,11 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[Keys.AMAP_PRIVACY_ACCEPTED] = true }
     }
 
-    val defaultDistance: Flow<DistancePreset> = context.settingsDataStore.data.map { prefs ->
-        prefs[Keys.DEFAULT_DISTANCE]?.let { name ->
-            DistancePreset.entries.firstOrNull { it.name == name }
-        } ?: DistancePreset.M1
+    /** 默认定距布置距离（米），范围 10-100 */
+    val defaultDistanceM: Flow<Int> = context.settingsDataStore.data.map { prefs ->
+        (prefs[Keys.DEFAULT_DISTANCE_M] ?: DistanceRange.DEFAULT_M).coerceIn(
+            DistanceRange.MIN_M, DistanceRange.MAX_M,
+        )
     }
 
     /** 启动提示时间（秒），用于一键布置倒计时 */
@@ -61,8 +62,9 @@ class SettingsRepository(private val context: Context) {
         prefs[Keys.USE_FAKE_DEVICE] ?: true
     }
 
-    suspend fun saveDefaultDistance(preset: DistancePreset) {
-        context.settingsDataStore.edit { it[Keys.DEFAULT_DISTANCE] = preset.name }
+    suspend fun saveDefaultDistanceM(meters: Int) {
+        val v = meters.coerceIn(DistanceRange.MIN_M, DistanceRange.MAX_M)
+        context.settingsDataStore.edit { it[Keys.DEFAULT_DISTANCE_M] = v }
     }
 
     suspend fun savePromptSeconds(seconds: Int) {
