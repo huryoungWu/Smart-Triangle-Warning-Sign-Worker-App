@@ -3,7 +3,9 @@ package com.example.myapplication.core.data.device
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MoveDir
+import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.core.model.vehicle.TaskMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -23,6 +25,16 @@ class HttpDeviceRepository(
     private val connectTimeoutMs: Int = 1500,
     private val readTimeoutMs: Int = 2000,
 ) : DeviceRepository {
+
+    override suspend fun listDevices(): List<com.example.myapplication.core.model.vehicle.DeviceSummary> {
+        // 暂无设备发现服务；返回单台「当前设备」，后续可接服务端设备列表
+        return listOf(
+            com.example.myapplication.core.model.vehicle.DeviceSummary(
+                id = "TC-001", name = "当前设备",
+                started = true, available = true, batteryPercent = -1,
+            ),
+        )
+    }
 
     override suspend fun fetchStatus(): Result<DeviceSnapshot> = withContext(Dispatchers.IO) {
         runCatching { DeviceJson.parseStatus(request("GET", "$baseUrl/status", body = null)) }
@@ -45,6 +57,33 @@ class HttpDeviceRepository(
     override suspend fun cancelTask(): Result<CmdAck> = postCmd(JSONObject().put("type", "task_cancel"))
 
     override suspend fun startRecover(): Result<CmdAck> = postCmd(JSONObject().put("type", "recover"))
+
+    override suspend fun startRoute(
+        kind: TaskKind,
+        mode: TaskMode,
+        segments: List<RouteSegment>,
+        light: LightMode,
+    ): Result<CmdAck> {
+        val segArr = org.json.JSONArray()
+        segments.forEach { seg ->
+            segArr.put(
+                JSONObject()
+                    .put("action", seg.action.token)
+                    .put("value", seg.value),
+            )
+        }
+        return postCmd(
+            JSONObject()
+                .put("type", "task_start")
+                .put("kind", kind.token)
+                .put("mode", mode.token)
+                .put("light", light.token)
+                .put("segments", segArr),
+        )
+    }
+
+    override suspend fun confirmSegment(): Result<CmdAck> =
+        postCmd(JSONObject().put("type", "segment_confirm"))
 
     override suspend fun setLight(mode: LightMode): Result<CmdAck> =
         postJson("$baseUrl/light", JSONObject().put("mode", mode.token))
@@ -96,6 +135,7 @@ class HttpDeviceRepository(
     private val TaskKind.token: String
         get() = when (this) {
             TaskKind.FIXED_DISTANCE -> "fixed_distance"
+            TaskKind.MANUAL -> "manual"
             TaskKind.ONE_TOUCH -> "one_touch"
             TaskKind.RECOVER -> "recover"
         }

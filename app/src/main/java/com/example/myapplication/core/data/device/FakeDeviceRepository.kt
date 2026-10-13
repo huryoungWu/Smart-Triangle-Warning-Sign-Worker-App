@@ -3,14 +3,20 @@ package com.example.myapplication.core.data.device
 import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
+import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.model.vehicle.GpsFixState
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MotionState
 import com.example.myapplication.core.model.vehicle.MoveDir
 import com.example.myapplication.core.model.vehicle.OdoInfo
+import com.example.myapplication.core.model.vehicle.RouteSegment
+import com.example.myapplication.core.model.vehicle.SegmentAction
+import com.example.myapplication.core.model.vehicle.SegmentRunState
+import com.example.myapplication.core.model.vehicle.SegmentState
 import com.example.myapplication.core.model.vehicle.StopSource
 import com.example.myapplication.core.model.vehicle.TaskInfo
 import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.core.model.vehicle.TaskMode
 import com.example.myapplication.core.model.vehicle.TaskRunState
 import com.example.myapplication.core.model.vehicle.TaskSource
 import com.example.myapplication.core.model.vehicle.VehicleGps
@@ -20,6 +26,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.util.UUID
+import kotlin.math.abs
 
 /** Fake 设备异常注入（供无真机验证规格异常分支） */
 sealed interface FakeFault {
@@ -39,13 +46,17 @@ sealed interface FakeFault {
 /**
  * 模拟三角警示牌小车（无真机时跑通全流程）。
  *
- * 内部持有一个"设备侧状态机"，按已验证的车端行为模拟：
- * - 按住移动：sendMove 后 0.25 m/s 递增；sendStop 立即停车
- * - 断流看门狗：800ms 内无 move/stop 自动停车（stopSource=LINK_LOSS）
- * - 定距任务：递增至目标后 state=DONE
- * - 一键任务：灯光双闪 → 倒计时 → 低速直行 → 停车续闪
+ * **路线分段状态机**：整条路线一次性下发，车端逐段执行：
+ * - FWD/BACK：odo 按 0.25 m/s 递增，heading 不变
+ * - TURN：**只改 heading**（60°/s），不动位置、不计里程
+ * - WAIT：原地不动，计时完成
  *
- * 状态推进由 fetchStatus() 的调用节奏驱动（tick()），无需额外定时器。
+ * 两种模式：
+ * - [TaskMode.AUTO]：段间零间隔，自动接续
+ * - [TaskMode.SEGMENT_CONFIRM]：段间停在 `WAITING_CONFIRM`，等 `confirmSegment()` 才跑下一段
+ *
+ * 段失败 → 后续段 `SKIPPED`（熔断）；急停/取消同理。
+ * 状态推进由 fetchStatus() 的调用节奏驱动（tick()）。
  */
 class FakeDeviceRepository : DeviceRepository {
 
@@ -55,29 +66,34 @@ class FakeDeviceRepository : DeviceRepository {
 
     /**
      * 是否模拟车端 GPS 模块（默认 false = 复刻现阶段真实硬件，主走行程估算路径）。
-     * 开启后**故意输出 WGS-84**，让演示机走真实 WGS-84→GCJ-02 转换链路，转换错误当场可见。
+     * 开启后**故意输出 WGS-84**，让演示机走真实 WGS-84→GCJ-02 转换链路。
      */
     var gpsEnabled: Boolean = false
 
-    /**
-     * 车端 GPS 模拟基准点（GCJ-02）。默认取演示基准（北京）；
-     * 真机上由 MapViewModel 用手机实际定位覆盖，使人与车在同处、便于验证坐标转换重合。
-     */
+    /** 车端 GPS 模拟基准点（GCJ-02）；真机上由 MapViewModel 用手机实际定位覆盖 */
     @Volatile
     var gpsBaseGcj02: GeoPoint = BASE_GCJ02
 
-    /**
-     * 模拟行进方向（度，正北=0）。
-     * 与作业人员方向一致；作业人员方向未知时默认正北。
-     */
+    /** 模拟行进方向（度，正北=0）；与作业人员方向一致，未知时默认正北 */
     @Volatile
     var headingDeg: Double = 0.0
+
+    /**
+     * 时间加速系数（**仅供单测**，生产默认 1.0）。
+     * 让 tick() 的 dtSec 按倍数放大，测试无需真实等待即可推进完整路线。
+     */
+    @Volatile
+    var tickScale: Double = 1.0
+
+    /** 当前选中的设备 id（连接页下拉选择后写入） */
+    @Volatile
+    var selectedDeviceId: String = DEVICE_ID
 
     private var lastTickAt = System.currentTimeMillis()
     private var lastCmdAt = System.currentTimeMillis()
     private var movingDir: MoveDir? = null
 
-    // 设备侧状态
+    // ── 设备侧状态 ──
     private var mode = VehicleMode.STANDBY
     private var motion = MotionState.IDLE
     private var estopLocked = false
@@ -85,51 +101,94 @@ class FakeDeviceRepository : DeviceRepository {
     private var light = LightMode.OFF
     private var task = TaskInfo()
     private var odo = OdoInfo()
-    private var oneTouchStage: String? = null
-    private var stageDeadline = 0L
+
+    // ── 路线分段状态机 ──
+    private var routeSegments: MutableList<SegmentState> = mutableListOf()
+    private var routeMode: TaskMode = TaskMode.AUTO
+    private var segElapsedSec = 0.0     // WAIT 段计时
+    private var turnDoneDeg = 0.0       // TURN 段已转角度
+
+    // ══════════════ 设备列表 ══════════════
+
+    /** 默认两台设备，供连接页下拉选择 */
+    private val devices = listOf(
+        com.example.myapplication.core.model.vehicle.DeviceSummary(
+            id = "TC-001", name = "三角警示牌一号车",
+            started = true, available = true, batteryPercent = 86,
+        ),
+        com.example.myapplication.core.model.vehicle.DeviceSummary(
+            id = "TC-002", name = "三角警示牌二号车",
+            started = false, available = false, batteryPercent = 32,
+        ),
+    )
+
+    override suspend fun listDevices(): List<com.example.myapplication.core.model.vehicle.DeviceSummary> {
+        delay(150)
+        return devices
+    }
+
+    // ══════════════ 查询 ══════════════
 
     override suspend fun fetchStatus(): Result<DeviceSnapshot> = mutex.withLock {
         if (fault is FakeFault.LinkLoss) {
-            return Result.failure(IOException("无法连接 192.168.4.1（模拟失联）"))
+            return Result.failure(IOException("无法连接设备（模拟失联）"))
         }
         delay(NETWORK_DELAY_MS)
         tick()
-        val faultNow = fault
         val snapshot = buildSnapshot()
-        if (faultNow is FakeFault.OdoDeviation) {
-            // 注入左右轮偏差，行程差变大（M09 差值数据）
-            return Result.success(
-                snapshot.copy(odo = snapshot.odo.copy(diffPulse = snapshot.odo.diffPulse + faultNow.extraPulse)),
-            )
+        val f = fault
+        if (f is FakeFault.OdoDeviation) {
+            return Result.success(snapshot.copy(odo = snapshot.odo.copy(diffPulse = snapshot.odo.diffPulse + f.extraPulse)))
         }
         Result.success(snapshot)
     }
+
+    // ══════════════ 手动遥控 ══════════════
 
     override suspend fun sendMove(dir: MoveDir): Result<CmdAck> = command {
         if (estopLocked || mode == VehicleMode.SAFE_STOP) {
             return@command CmdAck(false, reason = "estop_locked：急停锁定中，禁止运动指令")
         }
-        if (mode == VehicleMode.AUTO && task.state == TaskRunState.RUNNING) {
-            return@command CmdAck(false, reason = "task_running：自动任务执行中，禁止手动抢占")
+        // 自动任务执行运动段时禁止抢占；分段确认的 WAITING_CONFIRM 间隙允许微调
+        if (task.state == TaskRunState.RUNNING && currentSegment()?.state == SegmentRunState.RUNNING) {
+            return@command CmdAck(false, reason = "task_running：任务段执行中，禁止手动抢占")
         }
         movingDir = dir
         lastCmdAt = System.currentTimeMillis()
-        mode = VehicleMode.MANUAL
+        if (task.state != TaskRunState.RUNNING) {
+            mode = VehicleMode.MANUAL
+        }
         motion = MotionState.MOVING
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
+    /**
+     * 停车语义细化：手动微调停车**不取消**处于 WAITING_CONFIRM 的任务；
+     * 仅当任务正在执行运动段时才把任务置 CANCELED。
+     */
     override suspend fun sendStop(): Result<CmdAck> = command {
         movingDir = null
         lastCmdAt = System.currentTimeMillis()
         motion = MotionState.IDLE
-        if (task.state == TaskRunState.RUNNING) {
-            task = task.copy(state = TaskRunState.CANCELED, resultNote = "manual_stop")
+        val runningSeg = currentSegment()
+        if (task.state == TaskRunState.RUNNING && runningSeg?.state == SegmentRunState.RUNNING) {
+            routeSegments = routeSegments.map {
+                if (it.state == SegmentRunState.RUNNING) it.copy(state = SegmentRunState.FAILED) else it
+            }.map {
+                if (it.state == SegmentRunState.PENDING) it.copy(state = SegmentRunState.SKIPPED) else it
+            }.toMutableList()
+            task = task.copy(state = TaskRunState.CANCELED, resultNote = "manual_stop", segments = routeSegments)
+            mode = VehicleMode.STANDBY
+            stopSource = StopSource.MANUAL
+        } else {
+            // 微调停车 / 无任务：仅停运动，不碰任务
+            if (task.state != TaskRunState.RUNNING && !estopLocked) mode = VehicleMode.STANDBY
+            stopSource = StopSource.MANUAL
         }
-        if (!estopLocked) mode = VehicleMode.STANDBY
-        stopSource = StopSource.MANUAL
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
+
+    // ══════════════ 急停 / 恢复 ══════════════
 
     override suspend fun sendEstop(): Result<CmdAck> = command {
         movingDir = null
@@ -138,9 +197,8 @@ class FakeDeviceRepository : DeviceRepository {
         mode = VehicleMode.SAFE_STOP
         stopSource = StopSource.ESTOP
         if (task.state == TaskRunState.RUNNING) {
-            task = task.copy(state = TaskRunState.CANCELED, resultNote = "estop")
+            failRoute("estop", TaskRunState.CANCELED)
         }
-        // 关键：急停不自动关灯（M07 灯光与运动分离）
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
@@ -152,45 +210,96 @@ class FakeDeviceRepository : DeviceRepository {
         mode = VehicleMode.STANDBY
         motion = MotionState.IDLE
         stopSource = StopSource.NONE
-        // 不自动续跑任何任务（M08）
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
-    override suspend fun startTask(kind: TaskKind, targetM: Double): Result<CmdAck> = command {
-        if (estopLocked || mode == VehicleMode.SAFE_STOP) {
+    // ══════════════ 路线任务 ══════════════
+
+    /** 单段快捷路径（兼容旧调用 / 车身按钮任务） */
+    override suspend fun startTask(kind: TaskKind, targetM: Double): Result<CmdAck> = startRoute(
+        kind = kind,
+        mode = TaskMode.AUTO,
+        segments = listOf(RouteSegment(action = SegmentAction.FWD, value = targetM)),
+        light = light,
+    )
+
+    override suspend fun startRoute(
+        kind: TaskKind,
+        mode: TaskMode,
+        segments: List<RouteSegment>,
+        light: LightMode,
+    ): Result<CmdAck> = command {
+        if (estopLocked || this.mode == VehicleMode.SAFE_STOP) {
             return@command CmdAck(false, reason = "estop_locked：急停锁定中，禁止启动任务")
         }
         if (task.state == TaskRunState.RUNNING) {
             return@command CmdAck(false, reason = "task_running：已有任务运行中，禁止重复启动")
         }
-        if (targetM < MIN_TARGET_M || targetM > MAX_TARGET_M) {
-            return@command CmdAck(
-                false,
-                reason = "param_out_of_range：布设距离须在 ${MIN_TARGET_M.toInt()}~${MAX_TARGET_M.toInt()} 米之间",
-            )
+        if (segments.isEmpty()) {
+            return@command CmdAck(false, reason = "route_empty：路线不能为空")
         }
+        if (segments.size > MAX_SEGMENTS) {
+            return@command CmdAck(false, reason = "too_many_segments：路段不能超过 $MAX_SEGMENTS 段")
+        }
+        segments.forEach { seg ->
+            val ok = when (seg.action) {
+                SegmentAction.FWD, SegmentAction.BACK ->
+                    seg.value in MIN_M..MAX_M
+
+                SegmentAction.TURN ->
+                    abs(seg.value) in MIN_DEG..MAX_DEG
+
+                SegmentAction.WAIT ->
+                    seg.value in MIN_S.toDouble()..MAX_S.toDouble()
+            }
+            if (!ok) {
+                return@command CmdAck(false, reason = "segment_out_of_range：路段参数超出允许范围")
+            }
+        }
+
+        routeMode = mode
+        this.light = light
+        routeSegments = segments.map {
+            SegmentState(action = it.action, value = it.value, state = SegmentRunState.PENDING)
+        }.toMutableList()
+        resetSegProgress()
+        beginSegment(0, autoStart = mode == TaskMode.AUTO)
+
+        val totalM = segments
+            .filter { it.action == SegmentAction.FWD || it.action == SegmentAction.BACK }
+            .sumOf { it.value }
+
         task = TaskInfo(
             id = "t-${UUID.randomUUID().toString().take(6)}",
             kind = kind,
             source = TaskSource.APP,
-            targetM = targetM,
+            targetM = totalM,
             traveledM = 0.0,
             state = TaskRunState.RUNNING,
-            stage = if (kind == TaskKind.ONE_TOUCH) "lighting" else null,
+            stage = null,
             resultNote = null,
+            segments = routeSegments,
+            headingDeg = headingDeg,
         )
-        mode = VehicleMode.AUTO
+        this.mode = if (mode == TaskMode.AUTO) VehicleMode.AUTO else VehicleMode.STANDBY
         motion = MotionState.IDLE
-        oneTouchStage = if (kind == TaskKind.ONE_TOUCH) "lighting" else null
-        stageDeadline = System.currentTimeMillis() + STAGE_LIGHTING_MS
-        if (kind == TaskKind.ONE_TOUCH) light = LightMode.BLINK
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
-    /**
-     * 自动回收（M05 之后闭环）：小车从当前位置返回作业人员位置。
-     * 视作一项自动任务，`traveledM` 逐次递减回 0（= 作业人员锚点）。
-     */
+    override suspend fun confirmSegment(): Result<CmdAck> = command {
+        if (task.state != TaskRunState.RUNNING) {
+            return@command CmdAck(false, reason = "no_task：当前无运行中任务")
+        }
+        val idx = routeSegments.indexOfFirst { it.state == SegmentRunState.WAITING_CONFIRM }
+        if (idx == -1) {
+            return@command CmdAck(false, reason = "not_waiting_confirm：当前没有待确认的路段")
+        }
+        resetSegProgress()
+        beginSegment(idx, autoStart = true)
+        task = task.copy(segments = routeSegments)
+        CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
+    }
+
     override suspend fun startRecover(): Result<CmdAck> = command {
         if (estopLocked || mode == VehicleMode.SAFE_STOP) {
             return@command CmdAck(false, reason = "estop_locked：急停锁定中，禁止回收")
@@ -218,7 +327,7 @@ class FakeDeviceRepository : DeviceRepository {
 
     override suspend fun cancelTask(): Result<CmdAck> = command {
         if (task.state == TaskRunState.RUNNING) {
-            task = task.copy(state = TaskRunState.CANCELED, resultNote = "canceled_by_app")
+            failRoute("canceled_by_app", TaskRunState.CANCELED)
             mode = VehicleMode.STANDBY
             motion = MotionState.IDLE
             movingDir = null
@@ -239,14 +348,14 @@ class FakeDeviceRepository : DeviceRepository {
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
-    // ---------- 内部 ----------
+    // ══════════════ 内部：命令通道 ══════════════
 
     private suspend fun command(block: suspend () -> CmdAck): Result<CmdAck> = mutex.withLock {
-        val faultNow = fault
-        when (faultNow) {
+        val f = fault
+        when (f) {
             is FakeFault.LinkLoss -> return Result.failure(IOException("连接中断（模拟失联）"))
             is FakeFault.SlowAck -> {
-                delay(faultNow.delayMs)
+                delay(f.delayMs)
                 return Result.failure(java.net.SocketTimeoutException("命令应答超时"))
             }
 
@@ -254,35 +363,63 @@ class FakeDeviceRepository : DeviceRepository {
         }
         delay(NETWORK_DELAY_MS)
         val ack = block()
-        return when (faultNow) {
-            is FakeFault.CommandRejected ->
-                Result.success(CmdAck(false, reason = "estop_locked：设备拒绝该指令"))
-
-            is FakeFault.ResultUnknown ->
-                Result.success(ack.copy(accepted = true)) // 接受但 tick 不推进执行
-
+        return when (f) {
+            is FakeFault.CommandRejected -> Result.success(CmdAck(false, reason = "estop_locked：设备拒绝该指令"))
+            is FakeFault.ResultUnknown -> Result.success(ack.copy(accepted = true))
             else -> Result.success(ack)
         }
     }
 
-    /** 按经过时间推进设备侧状态（由 fetchStatus 节奏驱动） */
+    // ══════════════ 内部：分段推进 ══════════════
+
+    private fun currentSegment(): SegmentState? = routeSegments.firstOrNull {
+        it.state == SegmentRunState.RUNNING || it.state == SegmentRunState.WAITING_CONFIRM
+    }
+
+    private fun resetSegProgress() {
+        segElapsedSec = 0.0
+        turnDoneDeg = 0.0
+    }
+
+    /** 开始第 idx 段 */
+    private fun beginSegment(idx: Int, autoStart: Boolean) {
+        if (idx !in routeSegments.indices) return
+        val st = if (autoStart) SegmentRunState.RUNNING else SegmentRunState.WAITING_CONFIRM
+        routeSegments[idx] = routeSegments[idx].copy(state = st, progress = 0f)
+    }
+
+    /** 当前段中止（失败/取消/急停），后续段一律 SKIPPED（熔断） */
+    private fun failRoute(note: String, finalState: TaskRunState = TaskRunState.FAILED) {
+        routeSegments = routeSegments.map {
+            when {
+                it.state == SegmentRunState.RUNNING || it.state == SegmentRunState.WAITING_CONFIRM ->
+                    it.copy(state = SegmentRunState.FAILED)
+
+                it.state == SegmentRunState.PENDING -> it.copy(state = SegmentRunState.SKIPPED)
+                else -> it
+            }
+        }.toMutableList()
+        task = task.copy(state = finalState, resultNote = note, segments = routeSegments)
+        mode = VehicleMode.STANDBY
+        motion = MotionState.IDLE
+    }
+
     private fun tick() {
         val now = System.currentTimeMillis()
-        val dtSec = (now - lastTickAt).coerceAtLeast(0L) / 1000.0
+        val dtSec = (now - lastTickAt).coerceAtLeast(0L) / 1000.0 * tickScale
         lastTickAt = now
 
-        // 断流看门狗：800ms 无 move/stop 则自动停车（已验证的车端能力）
+        // 断流看门狗：手动移动中 800ms 无新指令 → 自动停车
         if (movingDir != null && now - lastCmdAt > WATCHDOG_MS) {
             movingDir = null
             motion = MotionState.IDLE
             stopSource = StopSource.LINK_LOSS
-            if (mode == VehicleMode.MANUAL) mode = VehicleMode.STANDBY
+            if (task.state != TaskRunState.RUNNING && mode == VehicleMode.MANUAL) mode = VehicleMode.STANDBY
         }
 
-        val faultNow = fault
-        if (faultNow is FakeFault.ResultUnknown) return // 接受命令但不推进 → 结果未知
+        if (fault is FakeFault.ResultUnknown) return   // 接受命令但不推进 → 结果未知
 
-        // 手动移动：0.25 m/s
+        // 手动微调移动（不推进段进度）
         if (movingDir != null && motion == MotionState.MOVING) {
             val step = MANUAL_SPEED_MPS * dtSec
             odo = odo.copy(
@@ -290,23 +427,99 @@ class FakeDeviceRepository : DeviceRepository {
                 leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
                 rightPulse = odo.rightPulse + (step * PULSE_PER_M).toLong(),
                 speedMps = MANUAL_SPEED_MPS,
-                diffPulse = 0L,
             )
         }
 
-        // 自动任务推进
-        if (task.state == TaskRunState.RUNNING) {
-            when (task.kind) {
-                TaskKind.ONE_TOUCH -> tickOneTouch(now, dtSec)
-                TaskKind.RECOVER -> tickRecover(dtSec)
-                else -> tickFixedDistance(dtSec)
-            }
-        } else if (motion != MotionState.MOVING) {
-            odo = odo.copy(speedMps = 0.0)
+        // 任务推进
+        when {
+            task.kind == TaskKind.RECOVER && task.state == TaskRunState.RUNNING -> tickRecover(dtSec)
+            task.state == TaskRunState.RUNNING -> tickRoute(dtSec, now)
+            motion != MotionState.MOVING -> odo = odo.copy(speedMps = 0.0)
         }
     }
 
-    /** 回收：行驶里程递减回 0（= 作业人员锚点），到达即完成 */
+    /** 路线分段推进 */
+    private fun tickRoute(dtSec: Double, now: Long) {
+        val idx = routeSegments.indexOfFirst { it.state == SegmentRunState.RUNNING }
+        if (idx == -1) {
+            // 无运行段（可能全在 WAITING_CONFIRM）
+            motion = MotionState.IDLE
+            odo = odo.copy(speedMps = 0.0)
+            task = task.copy(segments = routeSegments)
+            return
+        }
+        val seg = routeSegments[idx]
+        when (seg.action) {
+            SegmentAction.FWD, SegmentAction.BACK -> {
+                val step = MOVE_SPEED_MPS * dtSec
+                val done = (seg.value * seg.progress) + step
+                val progress = (done / seg.value).toFloat().coerceAtMost(1f)
+                routeSegments[idx] = seg.copy(progress = progress)
+                odo = odo.copy(
+                    traveledM = odo.traveledM + step,
+                    leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
+                    rightPulse = odo.rightPulse + (step * PULSE_PER_M).toLong(),
+                    speedMps = MOVE_SPEED_MPS,
+                )
+                motion = MotionState.MOVING
+                if (progress >= 1f) completeSegment(idx)
+            }
+
+            SegmentAction.TURN -> {
+                val target = abs(seg.value)
+                val stepDeg = TURN_SPEED_DPS * dtSec
+                turnDoneDeg += stepDeg
+                val progress = (turnDoneDeg / target).toFloat().coerceAtMost(1f)
+                routeSegments[idx] = seg.copy(progress = progress)
+                // 只改 heading，不动位置、不计里程
+                headingDeg += if (seg.value < 0) -stepDeg else stepDeg
+                motion = MotionState.MOVING
+                odo = odo.copy(speedMps = 0.0)
+                if (progress >= 1f) completeSegment(idx)
+            }
+
+            SegmentAction.WAIT -> {
+                segElapsedSec += dtSec
+                val progress = (segElapsedSec / seg.value).toFloat().coerceAtMost(1f)
+                routeSegments[idx] = seg.copy(progress = progress)
+                motion = MotionState.IDLE
+                odo = odo.copy(speedMps = 0.0)
+                if (progress >= 1f) completeSegment(idx)
+            }
+        }
+        task = task.copy(segments = routeSegments, headingDeg = headingDeg)
+    }
+
+    /** 段完成：接续下一段或收尾 */
+    private fun completeSegment(idx: Int) {
+        routeSegments[idx] = routeSegments[idx].copy(state = SegmentRunState.DONE, progress = 1f)
+        resetSegProgress()
+        val next = idx + 1
+        if (next >= routeSegments.size) {
+            // 全部完成
+            task = task.copy(
+                state = TaskRunState.DONE,
+                resultNote = "route_done",
+                segments = routeSegments,
+                traveledM = routeSegments
+                    .filter { it.action == SegmentAction.FWD || it.action == SegmentAction.BACK }
+                    .sumOf { it.value },
+            )
+            motion = MotionState.IDLE
+            mode = VehicleMode.STANDBY
+            odo = odo.copy(speedMps = 0.0)
+        } else {
+            beginSegment(next, autoStart = routeMode == TaskMode.AUTO)
+            task = task.copy(segments = routeSegments)
+            if (routeMode == TaskMode.SEGMENT_CONFIRM) {
+                // 间隙：待人工确认，允许手动微调
+                mode = VehicleMode.STANDBY
+                motion = MotionState.IDLE
+            }
+        }
+    }
+
+    /** 回收：行驶里程递减回 0（= 作业人员锚点） */
     private fun tickRecover(dtSec: Double) {
         val step = RECOVER_SPEED_MPS * dtSec
         val traveled = (task.traveledM - step).coerceAtLeast(0.0)
@@ -326,88 +539,19 @@ class FakeDeviceRepository : DeviceRepository {
         }
     }
 
-    private fun tickFixedDistance(dtSec: Double) {
-        val step = FIXED_SPEED_MPS * dtSec
-        val traveled = (task.traveledM + step).coerceAtMost(task.targetM)
-        task = task.copy(traveledM = traveled)
-        odo = odo.copy(
-            traveledM = odo.traveledM + step,
-            leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
-            rightPulse = odo.rightPulse + (step * PULSE_PER_M).toLong(),
-            speedMps = FIXED_SPEED_MPS,
-        )
-        motion = MotionState.MOVING
-        if (traveled >= task.targetM - 1e-6) {
-            task = task.copy(state = TaskRunState.DONE, resultNote = "arrived")
-            motion = MotionState.IDLE
-            mode = VehicleMode.STANDBY
-            odo = odo.copy(speedMps = 0.0)
-        }
-    }
-
-    private fun tickOneTouch(now: Long, dtSec: Double) {
-        val stage = oneTouchStage
-        when {
-            stage == "lighting" -> {
-                light = LightMode.BLINK
-                motion = MotionState.IDLE
-                if (now >= stageDeadline) {
-                    oneTouchStage = "countdown"
-                    stageDeadline = now + STAGE_COUNTDOWN_MS
-                    task = task.copy(stage = "countdown")
-                }
-            }
-
-            stage == "countdown" -> {
-                light = LightMode.BLINK
-                if (now >= stageDeadline) {
-                    oneTouchStage = "moving"
-                    task = task.copy(stage = "moving")
-                }
-            }
-
-            stage == "moving" -> {
-                light = LightMode.BLINK
-                val step = ONE_TOUCH_SPEED_MPS * dtSec
-                val traveled = (task.traveledM + step).coerceAtMost(task.targetM)
-                task = task.copy(traveledM = traveled, stage = "moving")
-                motion = MotionState.MOVING
-                odo = odo.copy(
-                    traveledM = odo.traveledM + step,
-                    leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
-                    rightPulse = odo.rightPulse + (step * PULSE_PER_M).toLong(),
-                    speedMps = ONE_TOUCH_SPEED_MPS,
-                )
-                if (traveled >= task.targetM - 1e-6) {
-                    // 自动停车且继续闪灯
-                    oneTouchStage = "parked"
-                    task = task.copy(state = TaskRunState.DONE, stage = "parked", resultNote = "parked_keep_blink")
-                    motion = MotionState.IDLE
-                    mode = VehicleMode.STANDBY
-                    light = LightMode.BLINK
-                    odo = odo.copy(speedMps = 0.0)
-                }
-            }
-
-            else -> {
-                // parked / 完成：保持双闪，等待人工核验
-                light = LightMode.BLINK
-                motion = MotionState.IDLE
-            }
-        }
-    }
+    // ══════════════ 快照与 GPS ══════════════
 
     private fun buildSnapshot(): DeviceSnapshot = DeviceSnapshot(
-        deviceId = DEVICE_ID,
+        deviceId = selectedDeviceId,
         fw = FW_VERSION,
         mode = mode,
         motion = motion,
         estopLocked = estopLocked,
         stopSource = stopSource,
         light = light,
-        task = task.copy(stage = task.stage ?: oneTouchStage),
+        task = task.copy(segments = routeSegments, headingDeg = headingDeg),
         odo = odo,
-        batteryPercent = null, // C 阶段：无可靠数据来源
+        batteryPercent = null,
         tilt = null,
         obstacle = null,
         deviceTs = System.currentTimeMillis(),
@@ -415,10 +559,6 @@ class FakeDeviceRepository : DeviceRepository {
         gps = buildGps(),
     )
 
-    /**
-     * 车端 GPS 模拟：基准点取 `BASE_WGS84`（与 FakeLocationRepository 的演示基准互为转换对，
-     * 两者重合即可验证转换正确），按行驶里程沿固定航向漂移。
-     */
     private fun buildGps(): VehicleGps? {
         if (!gpsEnabled) return null
         val driftedGcj = CoordTransform.projectGcj02(
@@ -442,22 +582,24 @@ class FakeDeviceRepository : DeviceRepository {
         const val DEVICE_ID = "TC-001"
         const val FW_VERSION = "0.3.1"
 
-        /** 演示基准点（GCJ-02）。与 FakeLocationRepository 演示基准同点，可验证坐标转换重合。 */
         val BASE_GCJ02: GeoPoint = GeoPoint(39.9928, 116.4004)
-
-        /** 默认航向：正北（作业人员方向未知时） */
         const val DEMO_HEADING_DEG = 0.0
 
         private const val NETWORK_DELAY_MS = 50L
         private const val WATCHDOG_MS = 800L
         private const val MANUAL_SPEED_MPS = 0.25
-        private const val FIXED_SPEED_MPS = 0.25
-        private const val ONE_TOUCH_SPEED_MPS = 0.15
-        private const val PULSE_PER_M = 500.0
-        private const val STAGE_LIGHTING_MS = 1500L
-        private const val STAGE_COUNTDOWN_MS = 3000L
+        private const val MOVE_SPEED_MPS = 0.25
         private const val RECOVER_SPEED_MPS = 0.5
-        private const val MIN_TARGET_M = 10.0
-        private const val MAX_TARGET_M = 100.0
+        private const val TURN_SPEED_DPS = 60.0
+        private const val PULSE_PER_M = 500.0
+
+        // 与 TaskSpec/SegmentRange 同一套规则
+        private const val MAX_SEGMENTS = 10
+        private const val MIN_M = 1.0
+        private const val MAX_M = 50.0
+        private const val MIN_DEG = 5.0
+        private const val MAX_DEG = 180.0
+        private const val MIN_S = 1.0
+        private const val MAX_S = 60.0
     }
 }

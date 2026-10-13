@@ -1,9 +1,12 @@
 package com.example.myapplication.core.data.device
 
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
+import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MoveDir
+import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.core.model.vehicle.TaskMode
 
 /** 设备命令应答 */
 data class CmdAck(
@@ -23,6 +26,9 @@ data class CmdAck(
  * - 200 但 `accepted:false` → 设备拒绝，携带 reason
  */
 interface DeviceRepository {
+    /** 可选设备列表（连接页下拉选择用） */
+    suspend fun listDevices(): List<DeviceSummary>
+
     /** GET /status —— 唯一事实源，仅收到有效状态才算"已连接" */
     suspend fun fetchStatus(): Result<DeviceSnapshot>
 
@@ -38,8 +44,22 @@ interface DeviceRepository {
     /** POST /cmd {type:resume} —— 人工恢复至待命，解锁急停，不续跑任务（M08） */
     suspend fun sendResume(): Result<CmdAck>
 
-    /** POST /cmd {type:task_start} —— 启动定距/一键任务（M05/M06） */
+    /** POST /cmd {type:task_start} —— 启动定距/一键任务（M05/M06，单段快捷路径） */
     suspend fun startTask(kind: TaskKind, targetM: Double): Result<CmdAck>
+
+    /**
+     * POST /cmd {type:task_start, segments:[...]} —— **整条路线一次性下发**。
+     * 车端离线执行整条路线（失联语义正确），段间衔接由车端闭环。
+     */
+    suspend fun startRoute(
+        kind: TaskKind,
+        mode: TaskMode,
+        segments: List<RouteSegment>,
+        light: LightMode,
+    ): Result<CmdAck>
+
+    /** POST /cmd {type:segment_confirm} —— 分段确认模式：确认执行当前段 */
+    suspend fun confirmSegment(): Result<CmdAck>
 
     /** POST /cmd {type:recover} —— 自动回收：小车返回作业人员位置（起点=车，终点=人） */
     suspend fun startRecover(): Result<CmdAck>

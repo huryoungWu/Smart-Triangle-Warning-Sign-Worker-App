@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -13,6 +14,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -25,34 +29,37 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.myapplication.core.ui.AppDialogRenderer
-import com.example.myapplication.core.ui.ConfirmDialog
-import com.example.myapplication.core.ui.EstopBar
+import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.feature.connect.ConnectScreen
+import com.example.myapplication.feature.login.LoginScreen
 import com.example.myapplication.feature.debug.DebugScreen
-import com.example.myapplication.feature.deploy.DeployScreen
 import com.example.myapplication.feature.home.HomeScreen
-import com.example.myapplication.feature.manual.ManualScreen
 import com.example.myapplication.feature.map.MapScreen
 import com.example.myapplication.feature.map.MapViewModel
-import com.example.myapplication.feature.onetouch.OneTouchScreen
-import com.example.myapplication.feature.precheck.PrecheckScreen
 import com.example.myapplication.feature.record.RecordsScreen
+import com.example.myapplication.feature.risk.AccidentDetailScreen
+import com.example.myapplication.feature.risk.RiskScreen
+import com.example.myapplication.feature.settings.AboutScreen
 import com.example.myapplication.feature.settings.DeviceInfoScreen
 import com.example.myapplication.feature.settings.SettingsScreen
+import com.example.myapplication.feature.task.TaskExecScreen
+import com.example.myapplication.feature.task.TaskPublishScreen
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 
 private data class TabItem(val route: String, val label: String, val icon: ImageVector)
 
 private val tabItems = listOf(
     TabItem(Routes.HOME, "作业", Icons.Default.Home),
+    TabItem(Routes.RISK, "风险", Icons.Default.Warning),
     TabItem(Routes.RECORDS, "记录", Icons.Default.List),
     TabItem(Routes.SETTINGS, "设置", Icons.Default.Settings),
 )
 
 /**
- * 顶层导航：作业首页 / 作业记录 / 设置（Tab）+ 手动遥控 / 预检 / 布置 / 调试 / 设备信息（压栈）。
+ * 顶层导航。
  *
- * `VehicleViewModel` 在此创建（Activity 作用域）并下传各页，全应用共享同一状态机。
- * 急停条（M08）在首页与各运动页底部常驻。
+ * 主流程：HOME（连接门）→ TASK_PUBLISH（发布表单）→ TASK_EXEC（执行，无启动按钮）。
+ * 发布时 `popUpTo(TASK_PUBLISH){inclusive=true}`，表单出栈防重复发布。
  */
 @Composable
 fun AppNavHost() {
@@ -64,42 +71,92 @@ fun AppNavHost() {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
+    // 事故详情传参（简单场景用内存传递，避免序列化）
+    var pendingAccident by remember { mutableStateOf<com.example.myapplication.core.model.risk.Accident?>(null) }
+
     Scaffold(
         bottomBar = {
-            Column {
-                if (currentRoute in Routes.estopPages) {
-                    EstopBar(
-                        locked = state.snapshot?.estopLocked == true || state.snapshot?.mode == com.example.myapplication.core.model.vehicle.VehicleMode.SAFE_STOP,
-                        stopUnconfirmed = state.stopUnconfirmed,
-                        onEstop = vm::estop,
-                        onResume = vm::requestResume,
-                    )
-                }
-                if (currentRoute in Routes.tabs) {
-                    AppBottomBar(
-                        currentRoute = currentRoute,
-                        onSelect = { route -> navController.navigateToTab(route) },
-                    )
-                }
+            if (currentRoute in Routes.bottomBarPages) {
+                AppBottomBar(
+                    currentRoute = currentRoute,
+                    onSelect = { route -> navController.navigateToTab(route) },
+                )
             }
         },
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Routes.HOME,
+            startDestination = Routes.LOGIN,
             modifier = Modifier.padding(innerPadding),
         ) {
+            // ⓪ 登录页：演示状态，可跳过
+            composable(Routes.LOGIN) {
+                LoginScreen(
+                    onLoggedIn = {
+                        navController.navigate(Routes.CONNECT) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
+                    },
+                    onSkip = {
+                        navController.navigate(Routes.CONNECT) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
+                    },
+                )
+            }
+
+            // ① 设备连接页：独立页，连接成功才放行
+            composable(Routes.CONNECT) {
+                ConnectScreen(
+                    vm = vm,
+                    onEnterWork = {
+                        navController.navigate(Routes.HOME) {
+                            popUpTo(Routes.CONNECT) { inclusive = true }
+                        }
+                    },
+                )
+            }
+
+            // ② 开始作业页：只有两个入口
             composable(Routes.HOME) {
                 HomeScreen(
                     vm = vm,
-                    mapVm = mapVm,
-                    onOpenManual = { navController.navigate(Routes.MANUAL) },
-                    onOpenPrecheckDeploy = { navController.navigate("${Routes.PRECHECK}?${Routes.ARG_KIND}=${Routes.KIND_DEPLOY}") },
-                    onOpenPrecheckOneTouch = { navController.navigate("${Routes.PRECHECK}?${Routes.ARG_KIND}=${Routes.KIND_ONETOUCH}") },
-                    onOpenDebug = { navController.navigate(Routes.DEBUG) },
-                    onOpenDeviceInfo = { navController.navigate(Routes.DEVICE_INFO) },
-                    onOpenMap = { navController.navigate(Routes.MAP) },
+                    onOpenPublishFixed = {
+                        navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
+                    },
+                    onOpenPublishManual = {
+                        navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_MANUAL}")
+                    },
+                    onBackToConnect = {
+                        navController.navigate(Routes.CONNECT) {
+                            popUpTo(Routes.HOME) { inclusive = true }
+                        }
+                    },
+                    onOpenExec = { navController.navigate(Routes.TASK_EXEC) },
                 )
+            }
+
+            // 风险提示（新增 Tab）：半径可设 + 高德地图 + 距离排序事故列表
+            composable(Routes.RISK) {
+                RiskScreen(
+                    mapVm = mapVm,
+                    onOpenDetail = { accident ->
+                        pendingAccident = accident
+                        navController.navigate(Routes.ACCIDENT_DETAIL)
+                    },
+                )
+            }
+
+            composable(Routes.ACCIDENT_DETAIL) {
+                val acc = pendingAccident
+                if (acc != null) {
+                    AccidentDetailScreen(
+                        accident = acc,
+                        onBack = { navController.popBackStack() },
+                    )
+                } else {
+                    navController.popBackStack()
+                }
             }
 
             composable(Routes.RECORDS) { RecordsScreen(vm = vm) }
@@ -109,40 +166,47 @@ fun AppNavHost() {
                     vm = vm,
                     onOpenDeviceInfo = { navController.navigate(Routes.DEVICE_INFO) },
                     onOpenDebug = { navController.navigate(Routes.DEBUG) },
-                )
-            }
-
-            composable(Routes.MANUAL) {
-                ManualScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
-            }
-
-            composable(
-                route = "${Routes.PRECHECK}?${Routes.ARG_KIND}={${Routes.ARG_KIND}}",
-                arguments = listOf(navArgument(Routes.ARG_KIND) {
-                    type = NavType.StringType
-                    defaultValue = Routes.KIND_DEPLOY
-                }),
-            ) { entry ->
-                val kind = entry.arguments?.getString(Routes.ARG_KIND) ?: Routes.KIND_DEPLOY
-                PrecheckScreen(
-                    vm = vm,
-                    kind = kind,
-                    onBack = { navController.popBackStack() },
-                    onPassed = {
-                        val target = if (kind == Routes.KIND_ONETOUCH) Routes.ONETOUCH else Routes.DEPLOY
-                        navController.navigate(target) {
-                            popUpTo(Routes.PRECHECK) { inclusive = true }
+                    onOpenAbout = { navController.navigate(Routes.ABOUT) },
+                    onBackToLogin = {
+                        navController.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
                         }
                     },
                 )
             }
 
-            composable(Routes.DEPLOY) {
-                DeployScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
+            composable(
+                route = "${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}={${Routes.ARG_KIND}}",
+                arguments = listOf(navArgument(Routes.ARG_KIND) {
+                    type = NavType.StringType
+                    defaultValue = Routes.KIND_FIXED
+                }),
+            ) { entry ->
+                val kindToken = entry.arguments?.getString(Routes.ARG_KIND) ?: Routes.KIND_FIXED
+                val kind = if (kindToken == Routes.KIND_MANUAL) TaskKind.MANUAL else TaskKind.FIXED_DISTANCE
+                TaskPublishScreen(
+                    vm = vm,
+                    kind = kind,
+                    onBack = { navController.popBackStack() },
+                    onPublished = {
+                        // 发布即执行：表单出栈，防重复发布
+                        navController.navigate(Routes.TASK_EXEC) {
+                            popUpTo(Routes.TASK_PUBLISH) { inclusive = true }
+                        }
+                    },
+                )
             }
 
-            composable(Routes.ONETOUCH) {
-                OneTouchScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
+            composable(Routes.TASK_EXEC) {
+                TaskExecScreen(
+                    vm = vm,
+                    mapVm = mapVm,
+                    onBack = { navController.popBackStack() },
+                    onOpenMap = { navController.navigate(Routes.MAP) },
+                    onRepublish = {
+                        navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
+                    },
+                )
             }
 
             composable(Routes.DEBUG) {
@@ -154,34 +218,19 @@ fun AppNavHost() {
             }
 
             composable(Routes.MAP) {
-                MapScreen(
-                    vm = vm,
-                    mapVm = mapVm,
-                    onBack = { navController.popBackStack() },
-                )
+                MapScreen(vm = vm, mapVm = mapVm, onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.ABOUT) {
+                AboutScreen(onBack = { navController.popBackStack() })
             }
         }
     }
 
-    // 全局一次性弹窗（拒绝原因/告警/结果未知，规格第 4 节）
     state.dialog?.let { dialog ->
         AppDialogRenderer(dialog = dialog, onDismiss = vm::dismissDialog)
     }
 
-    // 恢复待命前的人工现场核查确认（M08）
-    if (state.pendingResumeConfirm) {
-        ConfirmDialog(
-            title = "恢复前请现场核查",
-            message = "恢复至待命前，请确认：\n\n" +
-                "1. 设备与车辆周围无人员、无障碍\n" +
-                "2. 现场风险已排除或有人看护\n" +
-                "3. 确需继续作业时请重新发起任务\n\n" +
-                "恢复后设备回到待命，不会自动续跑之前的任务。",
-            confirmText = "确认恢复",
-            onConfirm = vm::confirmResume,
-            onDismiss = vm::cancelResumeConfirm,
-        )
-    }
 }
 
 @Composable

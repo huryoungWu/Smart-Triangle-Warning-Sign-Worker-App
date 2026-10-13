@@ -52,11 +52,12 @@ class FakeDeviceRepositoryTest {
     }
 
     @Test
-    fun `task rejects out-of-range distance (10 to 100 m only)`() = runBlocking {
+    fun `segment distance must be within 1 to 50 m`() = runBlocking {
         val repo = FakeDeviceRepository()
-        assertFalse(repo.startTask(TaskKind.FIXED_DISTANCE, 5.0).getOrThrow().accepted)   // < 10
-        assertFalse(repo.startTask(TaskKind.FIXED_DISTANCE, 150.0).getOrThrow().accepted) // > 100
-        assertTrue(repo.startTask(TaskKind.FIXED_DISTANCE, 30.0).getOrThrow().accepted)   // 合法
+        // 新语义：每段 1~50 米（多段可累计到 200 米）
+        assertFalse(repo.startTask(TaskKind.FIXED_DISTANCE, 0.5).getOrThrow().accepted)    // < 1
+        assertFalse(repo.startTask(TaskKind.FIXED_DISTANCE, 60.0).getOrThrow().accepted)   // > 50
+        assertTrue(repo.startTask(TaskKind.FIXED_DISTANCE, 30.0).getOrThrow().accepted)    // 合法
     }
 
     @Test

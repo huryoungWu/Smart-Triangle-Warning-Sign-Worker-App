@@ -72,10 +72,11 @@ object DistanceRange {
     const val DEFAULT_M = 30
 }
 
-enum class TaskKind(val label: String) {
-    FIXED_DISTANCE("定距布置"),
-    ONE_TOUCH("一键布置"),
-    RECOVER("自动回收"),
+enum class TaskKind(val label: String, val token: String) {
+    FIXED_DISTANCE("定距布置", "fixed_distance"),
+    MANUAL("手动遥控", "manual"),
+    ONE_TOUCH("一键布置", "one_touch"),
+    RECOVER("自动回收", "recover"),
 }
 
 /** 任务来源（M06）：APP 启动或车身实体按钮启动 */
@@ -101,6 +102,7 @@ enum class CommandKind(val label: String) {
     TASK_CANCEL("取消任务"),
     LIGHT("灯光设置"),
     ODO_RESET("计数清零"),
+    SEGMENT_CONFIRM("确认执行本段"),
 }
 
 /** 一键布置阶段（M06）：阶段状态由设备回报，不以 APP 计时为准 */

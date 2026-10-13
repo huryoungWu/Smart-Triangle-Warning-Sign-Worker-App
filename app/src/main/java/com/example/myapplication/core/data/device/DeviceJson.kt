@@ -42,6 +42,8 @@ object DeviceJson {
                 state = enumOrDefault(taskObj?.optString("state"), TaskRunState.IDLE),
                 stage = taskObj?.optString("stage", null),
                 resultNote = taskObj?.optString("resultNote", null),
+                segments = parseSegments(taskObj?.optJSONArray("segments")),
+                headingDeg = taskObj?.optDouble("heading", 0.0) ?: 0.0,
             ),
             odo = OdoInfo(
                 leftPulse = odoObj?.optLong("leftPulse", 0L) ?: 0L,
@@ -66,6 +68,31 @@ object DeviceJson {
             cmdId = o.optString("cmdId", null),
             reason = o.optString("reason", null),
         )
+    }
+
+    /** 解析路段进度数组（旧固件无此字段 → 空列表，UI 退化为整体进度） */
+    private fun parseSegments(arr: org.json.JSONArray?): List<com.example.myapplication.core.model.vehicle.SegmentState> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val action = runCatching {
+                    com.example.myapplication.core.model.vehicle.SegmentAction
+                        .valueOf(o.optString("action", "").uppercase())
+                }.getOrNull() ?: continue
+                add(
+                    com.example.myapplication.core.model.vehicle.SegmentState(
+                        action = action,
+                        value = o.optDouble("value", 0.0),
+                        state = enumOrDefault(
+                            o.optString("state"),
+                            com.example.myapplication.core.model.vehicle.SegmentRunState.PENDING,
+                        ),
+                        progress = o.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f),
+                    ),
+                )
+            }
+        }
     }
 
     /**

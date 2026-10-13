@@ -29,6 +29,24 @@ data class DeviceSnapshot(
     val receivedAt: Long = System.currentTimeMillis(),
 )
 
+/**
+ * 设备摘要（连接页设备选择用）。
+ * 一台或多台可选，每台显示：是否开始（已上电）、是否可用、电量。
+ */
+data class DeviceSummary(
+    val id: String,
+    val name: String,
+    /** 是否开始（已上电/启动） */
+    val started: Boolean = false,
+    /** 是否可用（可用于作业） */
+    val available: Boolean = true,
+    /** 电量百分比，-1 表示无来源 */
+    val batteryPercent: Int = -1,
+) {
+    val batteryText: String
+        get() = if (batteryPercent < 0) "未知" else "$batteryPercent%"
+}
+
 /** 车端 GPS 模块状态 */
 enum class GpsFixState { FIXED, NO_FIX, ABSENT }
 
@@ -58,7 +76,21 @@ data class TaskInfo(
     /** 一键布置阶段标识（lighting/countdown/moving/parked） */
     val stage: String? = null,
     val resultNote: String? = null,
+    /** 分段进度（设备回报）；旧固件无此字段时为空列表，UI 退化为整体进度 */
+    val segments: List<SegmentState> = emptyList(),
+    /** 当前航向（度），转向段推进可见 */
+    val headingDeg: Double = 0.0,
 ) {
+    /** 当前段下标（RUNNING/WAITING_CONFIRM），无则已完成段数 */
+    val segmentIndex: Int
+        get() = segments.indexOfFirst {
+            it.state == SegmentRunState.RUNNING || it.state == SegmentRunState.WAITING_CONFIRM
+        }.let { if (it == -1) segments.count { s -> s.state == SegmentRunState.DONE } else it }
+
+    /** 当前段是否为「待确认」（分段确认模式的间隙） */
+    val waitingConfirm: Boolean
+        get() = segments.any { it.state == SegmentRunState.WAITING_CONFIRM }
+
     val progress: Float
         get() = if (targetM <= 0.0) 0f else (traveledM / targetM).toFloat().coerceIn(0f, 1f)
 }
@@ -100,10 +132,32 @@ data class WorkRecord(
     val verifyResult: String = VERIFY_NOT_DONE,
     val verifyNote: String? = null,
     val abnormalNote: String? = null,
+    // ── 任务规格与上传状态（服务器尚未接入）──
+    val name: String? = null,
+    val mode: TaskMode? = null,
+    /** 发布时的路线原样保存 */
+    val route: List<RouteSegment> = emptyList(),
+    /** local=仅本机 / pending=待上传 / uploaded=已模拟上传 / failed=上传失败 */
+    val uploadState: String = UPLOAD_LOCAL,
+    val uploadedAt: Long? = null,
+    val serverId: String? = null,
 ) {
     companion object {
         /** M09：记录仅保存在本机手机，不得宣称已上传平台 */
         const val LOCAL_ONLY_NOTICE = "仅本机保存"
+
+        const val UPLOAD_LOCAL = "local"
+        const val UPLOAD_PENDING = "pending"
+        const val UPLOAD_UPLOADED = "uploaded"
+        const val UPLOAD_FAILED = "failed"
+
+        fun uploadStateLabel(v: String): String = when (v) {
+            UPLOAD_LOCAL -> "仅本机保存"
+            UPLOAD_PENDING -> "已保存本机 · 待上传"
+            UPLOAD_UPLOADED -> "已保存本机 · 已模拟上传"
+            UPLOAD_FAILED -> "上传失败 · 可重试"
+            else -> v
+        }
 
         const val VERIFY_PASS = "pass"
         const val VERIFY_FAIL = "fail"

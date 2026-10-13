@@ -12,8 +12,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.example.myapplication.ui.theme.WarningRed
 
 /**
- * 二次确认弹窗：用于「恢复至待命」（M08 须人工现场核查）等需要确认的操作。
- * 注意：**急停不使用本弹窗**（安全指令不容迟滞，见 EstopBar）。
+ * 二次确认弹窗：用于「恢复待命」「取消任务」等需要确认的操作。
  */
 @Composable
 fun ConfirmDialog(

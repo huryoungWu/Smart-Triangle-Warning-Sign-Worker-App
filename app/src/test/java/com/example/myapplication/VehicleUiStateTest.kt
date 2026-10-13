@@ -105,14 +105,12 @@ class VehicleUiStateTest {
     }
 
     @Test
-    fun `precheck human all checked`() {
+    fun `precheck is a single combined confirmation`() {
         val unchecked = com.example.myapplication.core.model.vehicle.PrecheckHuman()
         assertFalse(unchecked.allChecked)
-        assertEquals(4, unchecked.uncheckedItems().size)
+        assertEquals(1, unchecked.uncheckedItems().size)
 
-        val checked = com.example.myapplication.core.model.vehicle.PrecheckHuman(
-            heading = true, passage = true, bystanders = true, distance = true,
-        )
+        val checked = com.example.myapplication.core.model.vehicle.PrecheckHuman(confirmed = true)
         assertTrue(checked.allChecked)
         assertTrue(checked.uncheckedItems().isEmpty())
     }

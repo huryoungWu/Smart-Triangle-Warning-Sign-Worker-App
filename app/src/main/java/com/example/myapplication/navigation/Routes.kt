@@ -1,28 +1,43 @@
 package com.example.myapplication.navigation
 
-/** 全部页面路由（新规格：无登录、无地图） */
+/**
+ * 全部页面路由。
+ *
+ * 主流程：登录 → 设备连接 → 开始作业 → 任务发布表单 → 任务执行页 → 上传
+ */
 object Routes {
+    /** 主流程第 ⓪ 站：登录（演示状态可跳过） */
+    const val LOGIN = "login"
+
+    /** 主流程第一站：设备连接（独立页，连接成功才能进作业页） */
+    const val CONNECT = "connect"
+
     // 底部 Tab
     const val HOME = "home"
     const val RECORDS = "records"
     const val SETTINGS = "settings"
 
     // 压栈页
-    const val MANUAL = "manual"
-    const val PRECHECK = "precheck"
-    const val DEPLOY = "deploy"
-    const val ONETOUCH = "onetouch"
+    const val TASK_PUBLISH = "task_publish"
+    const val TASK_EXEC = "task_exec"
+    const val MAP = "map"
     const val DEBUG = "debug"
     const val DEVICE_INFO = "device_info"
-    const val MAP = "map"
+    const val ABOUT = "about"
+    const val RISK = "risk"
+    const val ACCIDENT_DETAIL = "accident_detail"
 
-    /** 预检页入口参数：deploy（定距布置）/ onetouch（一键布置） */
+    /** 任务发布表单参数：fixed（定距布置）/ manual（手动遥控） */
+    /** 事故详情页参数 */
+    const val ARG_ACCIDENT_ID = "accidentId"
+
     const val ARG_KIND = "kind"
-    const val KIND_DEPLOY = "deploy"
-    const val KIND_ONETOUCH = "onetouch"
+    const val KIND_FIXED = "fixed"
+    const val KIND_MANUAL = "manual"
 
-    val tabs = setOf(HOME, RECORDS, SETTINGS)
+    val tabs = setOf(HOME, RISK, RECORDS, SETTINGS)
 
-    /** 需常驻急停入口的页面（M08：首页和运动页）—— 地图页无运动指令，不列入 */
-    val estopPages = setOf(HOME, MANUAL, PRECHECK, DEPLOY, ONETOUCH)
+    /** 显示底部导航栏的页面：**除登录页外全部显示** */
+    val bottomBarPages = setOf(CONNECT, HOME, RISK, RECORDS, SETTINGS, TASK_PUBLISH, TASK_EXEC, MAP, DEBUG, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL)
+
 }

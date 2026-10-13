@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.core.model.vehicle.TaskMode
 import com.example.myapplication.core.model.vehicle.TaskSource
 import com.example.myapplication.core.model.vehicle.WorkRecord
 import kotlinx.coroutines.flow.Flow
@@ -54,6 +55,30 @@ class WorkRecordRepository(private val context: Context) {
         context.recordDataStore.edit { it[KEY_JSON] = toJson(next) }
     }
 
+    /** 设置上传状态（local/pending/failed） */
+    suspend fun setUploadState(id: String, state: String) {
+        val current = records.first()
+        val next = current.map {
+            if (it.id == id) it.copy(uploadState = state) else it
+        }
+        context.recordDataStore.edit { it[KEY_JSON] = toJson(next) }
+    }
+
+    /** 标记模拟上传成功 */
+    suspend fun setUploaded(id: String, serverId: String, uploadedAt: Long) {
+        val current = records.first()
+        val next = current.map {
+            if (it.id == id) {
+                it.copy(
+                    uploadState = WorkRecord.UPLOAD_UPLOADED,
+                    serverId = serverId,
+                    uploadedAt = uploadedAt,
+                )
+            } else it
+        }
+        context.recordDataStore.edit { it[KEY_JSON] = toJson(next) }
+    }
+
     private fun toJson(list: List<WorkRecord>): String {
         val arr = JSONArray()
         list.forEach { r ->
@@ -70,10 +95,43 @@ class WorkRecordRepository(private val context: Context) {
                     .put("deviceResultNote", r.deviceResultNote)
                     .put("verifyResult", r.verifyResult)
                     .put("verifyNote", r.verifyNote)
-                    .put("abnormalNote", r.abnormalNote),
+                    .put("abnormalNote", r.abnormalNote)
+                    .put("name", r.name)
+                    .put("mode", r.mode?.name)
+                    .put("route", org.json.JSONArray().apply {
+                        r.route.forEach { seg ->
+                            put(
+                                org.json.JSONObject()
+                                    .put("action", seg.action.name)
+                                    .put("value", seg.value),
+                            )
+                        }
+                    })
+                    .put("uploadState", r.uploadState)
+                    .put("uploadedAt", r.uploadedAt ?: 0L)
+                    .put("serverId", r.serverId),
             )
         }
         return arr.toString()
+    }
+
+    private fun parseRoute(arr: org.json.JSONArray?): List<com.example.myapplication.core.model.vehicle.RouteSegment> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val action = runCatching {
+                    com.example.myapplication.core.model.vehicle.SegmentAction
+                        .valueOf(o.optString("action"))
+                }.getOrNull() ?: continue
+                add(
+                    com.example.myapplication.core.model.vehicle.RouteSegment(
+                        action = action,
+                        value = o.optDouble("value", 0.0),
+                    ),
+                )
+            }
+        }
     }
 
     private fun parseAll(raw: String): List<WorkRecord> {
@@ -97,6 +155,14 @@ class WorkRecordRepository(private val context: Context) {
                             verifyResult = o.optString("verifyResult", WorkRecord.VERIFY_NOT_DONE),
                             verifyNote = o.optString("verifyNote", null),
                             abnormalNote = o.optString("abnormalNote", null),
+                            name = o.optString("name", null),
+                            mode = o.optString("mode", null)
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { runCatching { TaskMode.valueOf(it) }.getOrNull() },
+                            route = parseRoute(o.optJSONArray("route")),
+                            uploadState = o.optString("uploadState", WorkRecord.UPLOAD_LOCAL),
+                            uploadedAt = o.optLong("uploadedAt", 0L).takeIf { it > 0 },
+                            serverId = o.optString("serverId", null),
                         ),
                     )
                 }

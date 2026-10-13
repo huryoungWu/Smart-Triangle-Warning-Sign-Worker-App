@@ -15,7 +15,8 @@ import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.CommandTicket
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
-import com.example.myapplication.core.model.vehicle.DistanceRange
+import com.example.myapplication.core.model.vehicle.RouteSegment
+import com.example.myapplication.core.model.vehicle.TaskSpec
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MotionState
 import com.example.myapplication.core.model.vehicle.MoveDir
@@ -54,6 +55,7 @@ class VehicleViewModel(
     private val deviceRepository: DeviceRepository,
     private val workRecordRepository: WorkRecordRepository,
     private val settingsRepository: SettingsRepository,
+    private val taskUploadRepository: com.example.myapplication.core.data.upload.TaskUploadRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(VehicleUiState())
@@ -69,16 +71,31 @@ class VehicleViewModel(
     private var activeRecordId: String? = null
     private var activeRecordStartedAt = 0L
     private val writtenTaskIds = mutableSetOf<String>()
+    private var activeSpecRef: TaskSpec? = null
 
     init {
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    targetDistanceM = settingsRepository.defaultDistanceM.first(),
+                    draft = TaskSpec.defaultFixed(),
                     lightSetting = settingsRepository.defaultLight.first(),
                 )
             }
+            // 加载可选设备列表，默认选第一台
+            val devices = deviceRepository.listDevices()
+            _uiState.update {
+                it.copy(
+                    deviceList = devices,
+                    selectedDeviceId = devices.firstOrNull()?.id ?: "",
+                )
+            }
         }
+    }
+
+    /** 选择要连接的设备（连接页下拉） */
+    fun selectDevice(deviceId: String) {
+        if (_uiState.value.connection == ConnectionPhase.CONNECTED) return
+        _uiState.update { it.copy(selectedDeviceId = deviceId) }
     }
 
     // ==================== M01 设备连接 ====================
@@ -86,6 +103,10 @@ class VehicleViewModel(
     /** 连接设备：只有收到有效状态才显示"已连接"（M01） */
     fun connect() {
         if (pollJob?.isActive == true) return
+        // 把所选设备 id 下发到设备层（Fake 会据此回对应设备信息）
+        (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let { fake ->
+            fake.selectedDeviceId = _uiState.value.selectedDeviceId
+        }
         _uiState.update { it.copy(connection = ConnectionPhase.CONNECTING) }
         pollJob = viewModelScope.launch {
             while (isActive) {
@@ -247,6 +268,7 @@ class VehicleViewModel(
         if (activeRecordStartedAt == 0L) activeRecordStartedAt = snapshot.receivedAt
 
         viewModelScope.launch {
+            syncUploadRecord(recordId)
             workRecordRepository.append(
                 WorkRecord(
                     id = recordId,
@@ -259,6 +281,11 @@ class VehicleViewModel(
                     deviceResult = WorkRecord.RESULT_DONE,
                     deviceResultNote = snapshot.task.resultNote,
                     verifyResult = WorkRecord.VERIFY_NOT_DONE,
+                    name = activeSpecRef?.name,
+                    mode = activeSpecRef?.mode,
+                    route = activeSpecRef?.segments?.map {
+                        RouteSegment(action = it.action, value = it.value)
+                    } ?: emptyList(),
                 ),
             )
         }
@@ -293,6 +320,7 @@ class VehicleViewModel(
 
         val recordId = activeRecordId ?: UUID.randomUUID().toString()
         viewModelScope.launch {
+            syncUploadRecord(recordId)
             workRecordRepository.append(
                 WorkRecord(
                     id = recordId,
@@ -395,15 +423,21 @@ class VehicleViewModel(
 
     // ==================== M05 定距布置 ====================
 
-    /** 设置定距布置目标距离（米），范围 10-100 */
-    fun setTargetDistance(meters: Int) {
-        val v = meters.coerceIn(DistanceRange.MIN_M, DistanceRange.MAX_M)
-        _uiState.update { it.copy(targetDistanceM = v) }
+    // ==================== 任务发布草稿 ====================
+
+    /** 重置草稿为某类型默认值（进入发布表单时调用） */
+    fun initDraft(kind: TaskKind) {
+        _uiState.update { it.copy(draft = TaskSpec.defaultFor(kind)) }
     }
 
-    /** 启动定距任务（M05）：重复点击不得启动第二项运动任务 */
-    fun startFixedDistanceTask() {
-        startTask(TaskKind.FIXED_DISTANCE, _uiState.value.targetDistanceM.toDouble())
+    /** 更新草稿（表单任意字段） */
+    fun updateDraft(transform: (TaskSpec) -> TaskSpec) {
+        _uiState.update { it.copy(draft = transform(it.draft)) }
+    }
+
+    /** 切换预检勾选项（草稿内） */
+    fun togglePrecheck(item: (PrecheckHuman) -> PrecheckHuman) {
+        _uiState.update { it.copy(draft = it.draft.copy(precheck = item(it.draft.precheck))) }
     }
 
     private fun startTask(kind: TaskKind, targetM: Double) {
@@ -452,20 +486,106 @@ class VehicleViewModel(
         sendCommand(CommandKind.TASK_START, trackTicket = true) { deviceRepository.startRecover() }
     }
 
+    /**
+     * **发布任务**：校验 -> 生成默认任务名 -> 整条路线下发 -> 立即进入执行。
+     * 发布即代表任务已开始（执行页无启动按钮）。
+     */
+    fun publishDraft() {
+        val draft = _uiState.value.draft
+        val errors = draft.validate()
+        if (errors.isNotEmpty()) {
+            _uiState.update {
+                it.copy(dialog = AppDialog.Reject("任务参数校验未通过", errors, "请修正路线设计后重新发布"))
+            }
+            return
+        }
+        val state = _uiState.value
+        if (!state.taskStartEnabled || state.connection != ConnectionPhase.CONNECTED) {
+            rejectMotion(
+                when {
+                    state.connection != ConnectionPhase.CONNECTED -> "设备未连接，无法发布任务"
+                    state.snapshot?.estopLocked == true -> "急停锁定中，请先现场核查后恢复"
+                    state.snapshot?.task?.state == TaskRunState.RUNNING -> "已有任务运行中，禁止重复发布"
+                    else -> "当前状态不允许发布任务"
+                },
+            )
+            return
+        }
+        val spec = draft.copy(
+            name = draft.name.ifBlank {
+                "布置任务-" + java.text.SimpleDateFormat("MMdd-HHmm", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+            },
+        )
+        _uiState.update { it.copy(draft = spec, activeSpec = spec) }
+
+        activeRecordId = UUID.randomUUID().toString()
+        activeRecordStartedAt = System.currentTimeMillis()
+        activeSpecRef = spec
+
+        sendCommand(CommandKind.TASK_START, trackTicket = true) {
+            deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun)
+        }
+    }
+
+    /** 发布失败后「重新下发」：用同一份规格再发一次（走 taskStartEnabled 门） */
+    fun retryPublish() {
+        val spec = _uiState.value.activeSpec ?: return
+        if (!_uiState.value.taskStartEnabled) {
+            rejectMotion("当前状态不允许重新下发")
+            return
+        }
+        activeRecordId = UUID.randomUUID().toString()
+        activeRecordStartedAt = System.currentTimeMillis()
+        sendCommand(CommandKind.TASK_START, trackTicket = true) {
+            deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun)
+        }
+    }
+
+    /** 分段确认模式：确认执行当前段 */
+    fun confirmCurrentSegment() {
+        sendCommand(CommandKind.SEGMENT_CONFIRM, trackTicket = false) { deviceRepository.confirmSegment() }
+    }
+
+    /** 触发任务上传（服务器尚未接入 -> 占位实现） */
+    fun uploadActiveRecord() {
+        val id = activeRecordId ?: _uiState.value.pendingVerify?.recordId ?: return
+        viewModelScope.launch {
+            workRecordRepository.setUploadState(id, WorkRecord.UPLOAD_PENDING)
+            syncUploadRecord(id)
+            val record = workRecordRepository.records.first().firstOrNull { it.id == id } ?: return@launch
+            val result = taskUploadRepository.upload(record)
+            result.onSuccess { r ->
+                workRecordRepository.setUploaded(id, r.serverId, r.uploadedAt)
+                syncUploadRecord(id)
+                _uiState.update {
+                    it.copy(
+                        dialog = AppDialog.Alert(
+                            "已模拟上传",
+                            "任务记录已保存本机，并完成模拟上传（演示占位）。\n\n" +
+                                "占位单号：" + r.serverId + "\n未接入真实服务器，不构成正式上传。",
+                        ),
+                    )
+                }
+            }.onFailure { e ->
+                workRecordRepository.setUploadState(id, WorkRecord.UPLOAD_FAILED)
+                syncUploadRecord(id)
+                _uiState.update {
+                    it.copy(
+                        dialog = AppDialog.Warn(
+                            "上传失败",
+                            (e.message ?: "未知原因") + "\n记录已保存本机，可稍后重试。",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     /** 取消任务（M05/M06） */
     fun cancelTask() {
         sendCommand(CommandKind.TASK_CANCEL, trackTicket = false) { deviceRepository.cancelTask() }
         recordTaskIfNeeded(WorkRecord.RESULT_CANCELED, "用户取消任务")
-    }
-
-    // ==================== M06 一键布置 ====================
-
-    fun startOneTouchTask() {
-        val settings = settingsRepository
-        viewModelScope.launch {
-            val d = settings.defaultDistanceM.first()
-            startTask(TaskKind.ONE_TOUCH, d.toDouble())
-        }
     }
 
     /** 一键布置阶段（M06）：以设备回报为准 */
@@ -526,6 +646,7 @@ class VehicleViewModel(
     fun confirmVerify(pass: Boolean, note: String?) {
         val pending = _uiState.value.pendingVerify ?: return
         viewModelScope.launch {
+            syncUploadRecord(pending.recordId)
             workRecordRepository.updateVerify(
                 id = pending.recordId,
                 verifyResult = if (pass) WorkRecord.VERIFY_PASS else WorkRecord.VERIFY_FAIL,
@@ -555,17 +676,13 @@ class VehicleViewModel(
         }
     }
 
-    // ==================== 预检（M03） ====================
-
-    fun togglePrecheck(item: (PrecheckHuman) -> PrecheckHuman) {
-        _uiState.update { it.copy(precheckHuman = item(it.precheckHuman)) }
-    }
-
-    fun resetPrecheck() {
-        _uiState.update { it.copy(precheckHuman = PrecheckHuman()) }
-    }
-
     // ==================== 通用 ====================
+
+    /** 刷新执行页展示用的作业记录（含上传状态） */
+    private suspend fun syncUploadRecord(id: String) {
+        val r = workRecordRepository.records.first().firstOrNull { it.id == id }
+        _uiState.update { it.copy(uploadRecord = r) }
+    }
 
     fun dismissDialog() {
         _uiState.update { it.copy(dialog = null) }
@@ -676,7 +793,7 @@ class VehicleViewModel(
             initializer {
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MyAppApplication
                 val sl = app.serviceLocator
-                VehicleViewModel(sl.deviceRepository, sl.workRecordRepository, sl.settingsRepository)
+                VehicleViewModel(sl.deviceRepository, sl.workRecordRepository, sl.settingsRepository, sl.taskUploadRepository)
             }
         }
     }

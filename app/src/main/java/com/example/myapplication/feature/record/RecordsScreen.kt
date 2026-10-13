@@ -59,7 +59,7 @@ fun RecordsScreen(vm: VehicleViewModel) {
         // M09：必须标注"仅本机保存"，不得宣称已上传平台
         SafetyNoticeBanner(
             variant = BannerVariant.INFO,
-            text = "记录${WorkRecord.LOCAL_ONLY_NOTICE}在本机手机，未上传任何平台。",
+            text = "记录保存在本机手机（${WorkRecord.LOCAL_ONLY_NOTICE}）；上传为演示占位，未接入真实服务器。",
         )
 
         if (records.isEmpty()) {
@@ -132,6 +132,34 @@ private fun RecordCard(record: WorkRecord, timeText: String) {
                 style = MaterialTheme.typography.labelSmall,
                 color = NeutralGrey,
             )
+            if (record.route.isNotEmpty()) {
+                Text(
+                    "路线：${record.route.joinToString(" → ") { it.summary() }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "上传状态：",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+                val (ufg, ubg) = when (record.uploadState) {
+                    WorkRecord.UPLOAD_UPLOADED -> SafeGreen to SafeGreenBg
+                    WorkRecord.UPLOAD_FAILED -> WarningRed to WarningRedBg
+                    else -> com.example.myapplication.ui.theme.WarnOrange to com.example.myapplication.ui.theme.WarnOrangeBg
+                }
+                StatusChip(WorkRecord.uploadStateLabel(record.uploadState), ufg, ubg)
+            }
+            if (record.uploadState == WorkRecord.UPLOAD_UPLOADED) {
+                Text(
+                    "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+            }
             if (!record.deviceResultNote.isNullOrBlank()) {
                 Text("设备备注：${record.deviceResultNote}", style = MaterialTheme.typography.labelSmall, color = NeutralGrey)
             }

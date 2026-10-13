@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,8 @@ fun SettingsScreen(
     vm: VehicleViewModel,
     onOpenDeviceInfo: () -> Unit,
     onOpenDebug: () -> Unit,
+    onOpenAbout: () -> Unit,
+    onBackToLogin: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -78,71 +81,8 @@ fun SettingsScreen(
     ) {
         Text("设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
-        SectionCard(title = "默认参数") {
-            Text("默认距离（米）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(10, 20, 30, 50, 80, 100).forEach { quick ->
-                    FilterChip(
-                        selected = distance == quick,
-                        onClick = { distance = quick },
-                        label = { Text("$quick") },
-                    )
-                }
-            }
-            Text(
-                text = "范围 ${DistanceRange.MIN_M}~${DistanceRange.MAX_M} 米，布置页可自由输入",
-                style = MaterialTheme.typography.labelSmall,
-                color = androidx.compose.ui.graphics.Color.Gray,
-            )
 
-            Spacer(Modifier.height(12.dp))
-            Text("启动提示时间（秒）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(3, 5, 10).forEach { sec ->
-                    FilterChip(
-                        selected = prompt == sec,
-                        onClick = { prompt = sec },
-                        label = { Text("$sec 秒") },
-                    )
-                }
-            }
 
-            Spacer(Modifier.height(12.dp))
-            Text("默认灯光模式", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LightMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = light == mode,
-                        onClick = { light = mode },
-                        label = { Text(mode.label) },
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            PrimaryActionButton(
-                text = "保存设置",
-                onClick = {
-                    scope.launch {
-                        settings.saveDefaultDistanceM(distance)
-                        settings.savePromptSeconds(prompt)
-                        settings.saveDefaultLight(light)
-                        vm.showInfo(
-                            "设置已保存",
-                            "设置已保存到本机。\n\n注意：**保存设置不会启动车辆**，车端仍会校验参数范围与启动条件。",
-                        )
-                    }
-                },
-            )
-            Spacer(Modifier.height(6.dp))
-            SafetyText("保存设置不会启动车辆；车端仍校验参数范围及启动条件。")
-        }
-
-        SectionCard(title = "设备与调试") {
-            SecondaryActionButton(text = "设备信息", onClick = onOpenDeviceInfo)
-            Spacer(Modifier.height(8.dp))
-            SecondaryActionButton(text = "调试数据", onClick = onOpenDebug)
-        }
 
         // 权限与定位（FR-502 对应：真实权限状态，不再是模拟）
         SectionCard(title = "权限与定位") {
@@ -183,26 +123,57 @@ fun SettingsScreen(
             SafetyText("定位仅用于地图显示作业人员位置，不用于任何安全判断。")
         }
 
-        SectionCard(title = "待验收能力（C 阶段）") {
-            LockedFeatureCard(
-                title = "电量显示",
-                reason = "待可靠数据来源及车端能力验收后开放",
-                onClick = { vm.showInfo("电量显示", "电池百分比须待可靠数据来源及车端能力验收后开放。") },
-            )
-            Spacer(Modifier.height(8.dp))
-            LockedFeatureCard(
-                title = "远程升级",
-                reason = "待车端能力验收后开放",
-                onClick = { vm.showInfo("远程升级", "远程升级须待车端能力验收后开放。") },
-            )
-            Spacer(Modifier.height(8.dp))
-            LockedFeatureCard(
-                title = "云端记录 / 多设备管理 / 远程调度",
-                reason = LOCKED_FEATURE_NOTICE,
-                onClick = { vm.showInfo("待验收能力", LOCKED_FEATURE_NOTICE) },
-            )
+
+        // ── 更多（APP 一切入口）──
+        SectionCard(title = "更多") {
+            MenuRow("关于我们", onClick = onOpenAbout)
+            MenuRow("帮助与反馈", onClick = {
+                vm.showInfo(
+                    "帮助与反馈",
+                    "常见问题：\n\n" +
+                        "· 连不上设备：确认手机已连上小车热点，且设备已上电\n" +
+                        "· 任务发不出：检查是否已连接、是否勾选现场安全确认\n" +
+                        "· 遥控不响应：确认当前非任务执行中（自动任务禁止抢占）\n\n" +
+                        "如需反馈问题，请联系项目组。",
+                )
+            })
+            MenuRow("检查更新", onClick = {
+                vm.showInfo("检查更新", "当前已是最新版本 V1.0（演示）。")
+            })
+            MenuRow("切换账号", onClick = onBackToLogin)
+            MenuRow("退出登录", onClick = onBackToLogin, danger = true)
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun MenuRow(
+    label: String,
+    danger: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (danger) com.example.myapplication.ui.theme.WarningRed
+            else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onClick) {
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (danger) com.example.myapplication.ui.theme.WarningRed
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

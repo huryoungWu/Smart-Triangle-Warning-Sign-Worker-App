@@ -12,13 +12,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -27,197 +32,180 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
+import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskRunState
-import com.example.myapplication.core.ui.DeviceStatusStrip
-import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
-import com.example.myapplication.core.ui.LightModeChip
-import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.PrimaryActionButton
-import com.example.myapplication.core.ui.SafetyText
-import com.example.myapplication.core.ui.ScopeSafetyBanner
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
-import com.example.myapplication.core.ui.map.MapPanel
-import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
+import com.example.myapplication.ui.theme.InfoBlue
+import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
 import com.example.myapplication.ui.theme.WarnOrange
+import com.example.myapplication.ui.theme.WarnOrangeBg
 
 /**
- * 作业首页（M01/M02/M08 + C 置灰）：
- * 连接卡、状态总览、作业入口、数据真实性提示、C 阶段置灰卡。
+ * 开始作业页（主流程第二站）。
+ *
+ * 页面骨架与「发布任务」页一致：Scaffold + TopAppBar（标题 + ← 返回）+ 16dp 边距。
+ * 内容：当前任务入口 → 两个作业入口 → 当前设备信息。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     vm: VehicleViewModel,
-    mapVm: MapViewModel,
-    onOpenManual: () -> Unit,
-    onOpenPrecheckDeploy: () -> Unit,
-    onOpenPrecheckOneTouch: () -> Unit,
-    onOpenDebug: () -> Unit,
-    onOpenDeviceInfo: () -> Unit,
-    onOpenMap: () -> Unit,
+    onOpenPublishFixed: () -> Unit,
+    onOpenPublishManual: () -> Unit,
+    onBackToConnect: () -> Unit,
+    onOpenExec: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
-    val snapshot = state.snapshot
     val connected = state.connection == ConnectionPhase.CONNECTED
+    val snapshot = state.snapshot
+    val task = snapshot?.task
+    val spec = state.activeSpec
+    val taskRunning = task?.state == TaskRunState.RUNNING
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("智能三角警示牌作业", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("开始作业") },
+                navigationIcon = {
+                    IconButton(onClick = onBackToConnect) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "选择作业类型后进入任务发布表单，填好路线点「发布」即开始执行",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
-        // 连接卡（M01）
-        SectionCard(title = "设备连接") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
+            // ── 当前设备 ──
+            SectionCard(title = "当前设备") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = snapshot?.let { "${it.deviceId}" } ?: "未读取到设备信息",
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = snapshot?.let { "固件 ${it.fw} · 本地 Wi-Fi 192.168.4.1" }
+                                ?: "本地 Wi-Fi · 192.168.4.1",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (connected) {
+                        StatusChip("已连接", SafeGreen, SafeGreenBg)
+                    } else {
+                        StatusChip("设备未连接", WarnOrange, WarnOrangeBg)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                SecondaryActionButton(text = "重新选择设备", onClick = onBackToConnect)
+            }
+
+            // ── 正在执行的任务（**仅当任务运行中才显示**，可跳回执行页）──
+            if (taskRunning && spec != null) {
+                SectionCard(title = "正在执行的任务") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = spec.name,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        StatusChip("执行中", InfoBlue, InfoBlueBg)
+                    }
                     Text(
-                        text = snapshot?.let { "${it.deviceId} · 固件 ${it.fw}" } ?: "未读取到设备信息",
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        "本地 Wi-Fi · 192.168.4.1",
+                        text = "${spec.kind.label} · ${spec.mode.label}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                if (connected) {
-                    StatusChip("已连接", SafeGreen, SafeGreenBg)
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = vm::disconnect) {
-                        Icon(com.example.myapplication.core.ui.AppIcons.Disconnect, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("断开连接")
-                    }
-                } else {
-                    Button(onClick = vm::connect) {
-                        Icon(com.example.myapplication.core.ui.AppIcons.Connect, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("连接设备")
-                    }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            SecondaryActionButton(text = "设备信息", onClick = onOpenDeviceInfo)
-        }
-
-        // 状态总览（M02）
-        SectionCard(title = "设备状态") {
-            DeviceStatusStrip(state)
-            snapshot?.let { s ->
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("灯光模式", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    LightModeChip(s.light)
-                }
-                if (s.task.state != TaskRunState.IDLE) {
-                    Spacer(Modifier.height(10.dp))
-                    Text("自动任务进度", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Row {
-                        Text("目标 ${s.task.targetM} 米", style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.weight(1f))
-                        Text("已行驶 ${"%.2f".format(s.task.traveledM)} 米", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = { s.task.progress },
-                        modifier = Modifier.fillMaxWidth().height(8.dp),
-                    )
-                    Spacer(Modifier.height(4.dp))
                     Text(
-                        "结果：${s.task.state.label}",
+                        text = spec.routeSummary(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                    )
+                    if (taskRunning) {
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { task?.progress ?: 0f },
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "第 ${(task?.segmentIndex ?: 0) + 1}/${task?.segments?.size ?: spec.segments.size} 段",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InfoBlue,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    PrimaryActionButton(text = "进入任务执行", onClick = onOpenExec)
+                }
+            }
+
+            // ── 两个作业入口 ──
+            SectionCard(title = "开始新任务") {
+                PrimaryActionButton(
+                    text = "手动遥控 · 分段确认",
+                    onClick = {
+                        vm.initDraft(TaskKind.MANUAL)
+                        onOpenPublishManual()
+                    },
+                    enabled = connected && state.taskStartEnabled,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "每段执行前需人工确认，段间可手动微调车辆位置",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                PrimaryActionButton(
+                    text = "定距布置 · 全自动驾驶",
+                    onClick = {
+                        vm.initDraft(TaskKind.FIXED_DISTANCE)
+                        onOpenPublishFixed()
+                    },
+                    enabled = connected && state.taskStartEnabled,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "发布后各路段自动接续执行，无需逐段确认",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+
+                if (connected && !state.taskStartEnabled) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "当前状态不允许发布（急停锁定／任务运行中／命令未确认）",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (s.task.state == TaskRunState.DONE) SafeGreen else NeutralGrey,
+                        color = WarnOrange,
                     )
                 }
             }
+
+            Spacer(Modifier.height(24.dp))
         }
-
-        // 作业入口
-        SectionCard(title = "作业操作") {
-            PrimaryActionButton(
-                text = "手动遥控",
-                onClick = onOpenManual,
-                enabled = connected,
-            )
-            Spacer(Modifier.height(8.dp))
-            PrimaryActionButton(
-                text = "定距布置",
-                onClick = onOpenPrecheckDeploy,
-                enabled = connected && state.taskStartEnabled,
-            )
-            Spacer(Modifier.height(8.dp))
-            PrimaryActionButton(
-                text = "一键布置",
-                onClick = onOpenPrecheckOneTouch,
-                enabled = connected && state.taskStartEnabled,
-            )
-            if (!connected) {
-                Spacer(Modifier.height(6.dp))
-                Text("请先连接设备", color = NeutralGrey, style = MaterialTheme.typography.labelSmall)
-            } else if (!state.taskStartEnabled) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "当前状态不允许启动布置任务（急停锁定／任务运行中／命令未确认）",
-                    color = WarnOrange,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            SecondaryActionButton(text = "调试数据", onClick = onOpenDebug)
-        }
-
-        // 地图位置：默认内嵌展示（无需点开）
-        MapPanel(
-            vm = vm,
-            mapVm = mapVm,
-            height = 260.dp,
-            title = "小车实时位置",
-            showLegend = true,
-            showFollowSwitch = true,
-        )
-        SecondaryActionButton(text = "全屏地图（含诊断信息）", onClick = onOpenMap)
-
-        // 数据真实性（规格第 4 节）
-        SectionCard(title = "能力说明") {
-            SafetyText("手机定位用于在地图上显示作业人员位置。")
-            Spacer(Modifier.height(6.dp))
-            SafetyText("小车位置在车端 GPS 未接通前由车轮编码器估算，地图中以灰色虚线点标注「估算」，不得视为小车地图实时定位。")
-            Spacer(Modifier.height(6.dp))
-            SafetyText("样机不具备障碍、来车、道路安全检测能力；不具备自动寻找合适位置能力。")
-            Spacer(Modifier.height(6.dp))
-            ScopeSafetyBanner()
-        }
-
-        // C 阶段置灰（用户拍板：A+B+C UI 全做，C 置灰）
-        SectionCard(title = "待验收能力（C 阶段）") {
-            LockedFeatureCard(
-                title = "事件编号",
-                reason = LOCKED_FEATURE_NOTICE,
-                onClick = { vm.showInfo("事件编号", LOCKED_FEATURE_NOTICE) },
-            )
-            Spacer(Modifier.height(8.dp))
-            LockedFeatureCard(
-                title = "云端记录",
-                reason = LOCKED_FEATURE_NOTICE,
-                onClick = { vm.showInfo("云端记录", LOCKED_FEATURE_NOTICE) },
-            )
-            Spacer(Modifier.height(8.dp))
-            LockedFeatureCard(
-                title = "多设备管理",
-                reason = LOCKED_FEATURE_NOTICE,
-                onClick = { vm.showInfo("多设备管理", LOCKED_FEATURE_NOTICE) },
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
     }
 }

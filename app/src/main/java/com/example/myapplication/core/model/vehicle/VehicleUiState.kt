@@ -2,20 +2,20 @@ package com.example.myapplication.core.model.vehicle
 
 import com.example.myapplication.core.model.AppDialog
 
-/** 预检·人工现场确认（M03）：系统不检测障碍物与道路安全，全靠人工核对 */
+/**
+ * 预检·人工现场确认（M03）：系统不检测障碍物与道路安全，全靠人工核对。
+ * **四项合并为一个勾选项**（车头朝向、前方通道、周边人员、路线距离一并确认），节省表单空间。
+ */
 data class PrecheckHuman(
-    val heading: Boolean = false,
-    val passage: Boolean = false,
-    val bystanders: Boolean = false,
-    val distance: Boolean = false,
+    val confirmed: Boolean = false,
 ) {
-    val allChecked: Boolean get() = heading && passage && bystanders && distance
+    val allChecked: Boolean get() = confirmed
 
-    fun uncheckedItems(): List<String> = buildList {
-        if (!heading) add("车头朝向是否正确")
-        if (!passage) add("前方通道是否无障碍")
-        if (!bystanders) add("周边是否有人员")
-        if (!distance) add("目标距离是否合适")
+    fun uncheckedItems(): List<String> =
+        if (confirmed) emptyList() else listOf(CONFIRM_ITEM)
+
+    companion object {
+        const val CONFIRM_ITEM = "我已现场确认：车头朝向、前方通道、周边人员、路线与距离均符合作业要求"
     }
 }
 
@@ -34,6 +34,10 @@ data class PendingVerify(
  */
 data class VehicleUiState(
     val connection: ConnectionPhase = ConnectionPhase.DISCONNECTED,
+    /** 可选设备列表（连接页下拉） */
+    val deviceList: List<DeviceSummary> = emptyList(),
+    /** 当前选中的设备 id */
+    val selectedDeviceId: String = "",
     val snapshot: DeviceSnapshot? = null,
     /** 最近一次成功收到设备状态的时间，用于"最后更新时间"与"非实时"标注（M02/M09） */
     val lastUpdateAt: Long = 0L,
@@ -43,13 +47,16 @@ data class VehicleUiState(
     val holdingMove: Boolean = false,
     /** 当前按住的方向（遥控器高亮用） */
     val holdingDir: MoveDir? = null,
-    val precheckHuman: PrecheckHuman = PrecheckHuman(),
-    /** 定距布置目标距离（米），允许 10-100 自由输入 */
-    val targetDistanceM: Int = 30,
+    /** 任务发布表单草稿（手动遥控/定距布置共用） */
+    val draft: TaskSpec = TaskSpec.defaultFixed(),
+    /** 已发布并执行中的任务规格 */
+    val activeSpec: TaskSpec? = null,
     val lightSetting: LightMode = LightMode.OFF,
     /** 发出停止/急停后设备尚未确认（M08："停止未确认，需现场核查"） */
     val stopUnconfirmed: Boolean = false,
     val pendingVerify: PendingVerify? = null,
+    /** 当前任务的作业记录（含上传状态），执行页展示用 */
+    val uploadRecord: WorkRecord? = null,
     /** 恢复待命前的人工现场核查确认（M08） */
     val pendingResumeConfirm: Boolean = false,
     val dialog: AppDialog? = null,

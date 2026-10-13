@@ -37,11 +37,23 @@ import com.example.myapplication.core.geo.MapRenderModel
  *
  * 渲染用**增量 diff**（Marker 复用）而非 clear+add，防止 1s 轮询导致闪烁/内存抖动。
  */
+/**
+ * 通用地图标记点（如道路风险事故点位）。
+ */
+data class MapPin(
+    val id: String,
+    val point: GeoPoint,
+    val title: String,
+    val snippet: String,
+    val colorArgb: Int,
+)
+
 @Composable
 fun AMapCanvas(
     model: MapRenderModel,
     onMapReady: (AMap) -> Unit,
     modifier: Modifier = Modifier,
+    extraMarkers: List<MapPin> = emptyList(),
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -84,7 +96,7 @@ fun AMapCanvas(
         factory = { _ -> mapView },   // factory 收到 Context，返回已 remember 的 MapView
         update = { _ ->
             val aMap = aMapHolder.value ?: mapView.map.also { aMapHolder.value = it; onMapReady(it) }
-            renderMap(aMap, model, markers, polylines, cameraDone)
+            renderMap(aMap, model, markers, polylines, cameraDone, extraMarkers)
         },
     )
 }
@@ -95,7 +107,19 @@ private fun renderMap(
     markers: MutableMap<String, Marker>,
     polylines: MutableMap<String, Polyline>,
     cameraDone: androidx.compose.runtime.MutableState<Boolean>,
+    extraMarkers: List<MapPin> = emptyList(),
 ) {
+    // ── 额外通用标记（事故点位等）──
+    val extraIds = extraMarkers.map { it.id }.toSet()
+    markers.keys.filter { it.startsWith("extra:") && it.removePrefix("extra:") !in extraIds }
+        .forEach { markers.remove(it)?.remove() }
+    extraMarkers.forEach { pin ->
+        putMarker(
+            aMap, markers, "extra:" + pin.id, pin.point,
+            pin.title, pin.snippet, pin.colorArgb,
+        )
+    }
+
     // ---- 作业人员（蓝点，GCJ-02 直用，禁止转换）----
     val phone = model.phone
     if (phone != null) {
