@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -23,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,6 +35,7 @@ import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.geo.MapRenderModel
 import com.example.myapplication.core.model.risk.Accident
 import com.example.myapplication.core.model.risk.RiskRadius
+import com.example.myapplication.core.ui.RemoteImage
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.core.ui.map.AMapCanvas
@@ -158,6 +162,18 @@ private fun AccidentCard(accident: Accident, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(12.dp),
         ) {
+            // 有照片就显示缩略图（作业人员上报的快照图片，便于区分各条事件）
+            val photo = accident.photoUrls.firstOrNull()
+            if (photo != null) {
+                RemoteImage(
+                    url = photo,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                )
+                Spacer(Modifier.width(10.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text(
                     text = accident.title,

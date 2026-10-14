@@ -1,4 +1,4 @@
-package com.example.myapplication.core.data.location
+package com.example.myapplication.core.data.api
 
 import com.example.myapplication.core.geo.GeoPoint
 import kotlinx.coroutines.flow.Flow
@@ -25,8 +25,12 @@ data class TrackPoint(val point: GeoPoint, val source: TrackSource, val at: Long
 enum class TrackSource { PHONE, VEHICLE_GPS, VEHICLE_ESTIMATE }
 
 /**
- * 手机定位接口。与 `DeviceRepository` 同款双实现（Fake / AMap），
- * 由 `ServiceLocator.LOCATION_SOURCE` 一行开关选择。
+ * 手机定位接口（对外接口契约）。与 `DeviceRepository` 同款双实现，
+ * 由 [com.example.myapplication.di.ServiceLocator.LOCATION_SOURCE] 一行开关选择。
+ *
+ * 实现分布（本文件为纯接口，不含实现）：
+ * - [com.example.myapplication.core.data.location.FakeLocationRepository] 模拟轨迹（演示）
+ * - [com.example.myapplication.core.data.location.AMapLocationRepository] 真实高德定位
  *
  * **权限与隐私合规**：[start] 只能在用户同意隐私政策且已授予定位权限后调用；
  * 实现类不得在构造函数里实例化定位 SDK。

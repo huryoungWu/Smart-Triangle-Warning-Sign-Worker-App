@@ -63,6 +63,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings = remember { ServiceLocator.get(context).settingsRepository }
+    val auth = remember { ServiceLocator.get(context).authRepository }
 
     val savedDistance by settings.defaultDistanceM.collectAsStateWithLifecycle(initialValue = DistanceRange.DEFAULT_M)
     val savedPrompt by settings.promptSeconds.collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_PROMPT_SECONDS)
@@ -140,8 +141,14 @@ fun SettingsScreen(
             MenuRow("检查更新", onClick = {
                 vm.showInfo("检查更新", "当前已是最新版本 V1.0（演示）。")
             })
-            MenuRow("切换账号", onClick = onBackToLogin)
-            MenuRow("退出登录", onClick = onBackToLogin, danger = true)
+            MenuRow("切换账号", onClick = {
+                scope.launch { auth.logout() } // 清空本地会话（token），回登录页重新登录
+                onBackToLogin()
+            })
+            MenuRow("退出登录", onClick = {
+                scope.launch { auth.logout() }
+                onBackToLogin()
+            }, danger = true)
         }
 
         Spacer(Modifier.height(24.dp))

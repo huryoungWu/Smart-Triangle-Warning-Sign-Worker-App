@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android 9+ 默认禁止明文 HTTP。
-  三角警示牌小车由 ESP32 提供本地 Wi-Fi 服务（192.168.4.1），必须放行该地址的明文 HTTP。
+  Android 9+ 默认禁止明文 HTTP，这里放行联调所需的局域网地址：
+  - 192.168.4.1：旧方案（手机直连 ESP32 小车热点）
+  - 127.0.0.1 / localhost：三层架构联调 —— 配合 `adb reverse tcp:8080 tcp:8080`
+  - 10.0.2.2：Android 模拟器访问宿主机
+  - 真机同 Wi-Fi 联调时，把电脑局域网 IP 再加一行，如：
+    <domain includeSubdomains="false">192.168.1.5</domain>
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">192.168.4.1</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- 真机同局域网联调：电脑（Mock 服务端）的局域网 IP -->
+        <domain includeSubdomains="false">192.168.43.120</domain>
     </domain-config>
 </network-security-config>

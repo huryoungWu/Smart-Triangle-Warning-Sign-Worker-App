@@ -6,11 +6,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.myapplication.MyAppApplication
-import com.example.myapplication.core.data.device.DeviceRepository
-import com.example.myapplication.core.data.location.LocationRepository
-import com.example.myapplication.core.data.location.PhoneFix
-import com.example.myapplication.core.data.location.TrackPoint
-import com.example.myapplication.core.data.location.TrackSource
+import com.example.myapplication.core.data.api.DeviceRepository
+import com.example.myapplication.core.data.api.LocationRepository
+import com.example.myapplication.core.data.api.PhoneFix
+import com.example.myapplication.core.data.api.TrackPoint
+import com.example.myapplication.core.data.api.TrackSource
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.EstimateAnchor
@@ -131,6 +131,11 @@ class MapViewModel(
         (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let { fake ->
             fake.gpsBaseGcj02 = fix.point
             fake.headingDeg = operatorHeadingDeg
+        }
+        // 服务端实现：把手机位置随状态查询上报（服务端据此把"车端 GPS"锚定在作业人员附近，联调约定）
+        (deviceRepository as? com.example.myapplication.core.data.device.ServerDeviceRepository)?.let { srv ->
+            srv.phoneLat = fix.gcj02Lat
+            srv.phoneLng = fix.gcj02Lng
         }
 
         appendPhoneTrail(fix)

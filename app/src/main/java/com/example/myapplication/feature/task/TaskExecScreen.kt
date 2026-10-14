@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -58,12 +59,15 @@ import com.example.myapplication.core.ui.ConfirmDialog
 import com.example.myapplication.core.ui.DangerActionButton
 import com.example.myapplication.core.ui.DeviceStatusStrip
 import com.example.myapplication.core.ui.map.MapPanel
+import com.example.myapplication.core.ui.MjpegStreamView
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.RemoteControlPad
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.di.DeviceTransport
+import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import java.util.Locale
@@ -161,31 +165,56 @@ fun TaskExecScreen(
 
             // ── 实时视频与快照捕捉 ──
             SectionCard(title = "实时视频") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(180.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(Color(0xFF37474F), Color(0xFF263238)),
+                val context = LocalContext.current
+                val sl = remember { ServiceLocator.get(context) }
+                // 联调模式：播放服务端视频流（所有视频共用同一路；快照即从该流截帧）
+                val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
+                    "${ServiceLocator.SERVER_BASE_URL}/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
+                } else {
+                    null
+                }
+                if (streamUrl != null) {
+                    MjpegStreamView(
+                        url = streamUrl,
+                        contentDescription = "实时视频",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "服务端视频流（演示动画帧 · 所有视频共用一路流）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NeutralGrey,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    listOf(Color(0xFF37474F), Color(0xFF263238)),
+                                ),
                             ),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(42.dp),
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "实时视频（演示占位 · 未接入车载摄像头）",
-                            color = Color.White.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(42.dp),
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "实时视频（演示占位 · 未接入车载摄像头）",
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
                     }
                 }
 
@@ -197,7 +226,7 @@ fun TaskExecScreen(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "任务开始、结束会自动各抓拍一张并弹窗提示；执行中间可自行补拍（可拍可不拍）。" +
-                        "快照含图片、时间与事件类型，可用于发给过往司机的预警信息。",
+                        "快照上传后将在「风险」页作为作业人员上报展示，用于提醒过往司机。",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
@@ -322,44 +351,48 @@ fun TaskExecScreen(
                     // 上传卡（核验通过后自动上传，不再需要手动「提交上传」）
                     val record = state.uploadRecord
                     val autoUploaded = record?.verifyResult == WorkRecord.VERIFY_PASS
-                    SectionCard(title = "任务上传") {
-                        StatusChip(
-                            text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL),
-                            fg = when (record?.uploadState) {
-                                WorkRecord.UPLOAD_UPLOADED -> SafeGreen
-                                WorkRecord.UPLOAD_FAILED -> WarningRed
-                                else -> WarnOrange
-                            },
-                            bg = when (record?.uploadState) {
-                                WorkRecord.UPLOAD_UPLOADED -> SafeGreenBg
-                                WorkRecord.UPLOAD_FAILED -> WarningRedBg
-                                else -> WarnOrangeBg
-                            },
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = when {
-                                record?.uploadState == WorkRecord.UPLOAD_UPLOADED ->
-                                    "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
-                                record?.uploadState == WorkRecord.UPLOAD_FAILED ->
-                                    "上传失败，记录已保存本机，可重试。"
-                                autoUploaded ->
-                                    "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
-                                else -> "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        // 核验通过 → 已自动上传，无需按钮；上传失败仍可重试；核验异常保留手动提交
-                        if (!autoUploaded || record?.uploadState == WorkRecord.UPLOAD_FAILED) {
-                            PrimaryActionButton(
-                                text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) "重试上传" else "提交上传（演示）",
-                                onClick = vm::uploadActiveRecord,
-                                enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
+                    // 上传成功后不再保留「任务上传」模块（成功反馈由上传完成弹窗给出）；
+                    // 未上传/上传失败时保留卡片，供重试。
+                    if (record?.uploadState != WorkRecord.UPLOAD_UPLOADED) {
+                        SectionCard(title = "任务上传") {
+                            StatusChip(
+                                text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL),
+                                fg = when (record?.uploadState) {
+                                    WorkRecord.UPLOAD_UPLOADED -> SafeGreen
+                                    WorkRecord.UPLOAD_FAILED -> WarningRed
+                                    else -> WarnOrange
+                                },
+                                bg = when (record?.uploadState) {
+                                    WorkRecord.UPLOAD_UPLOADED -> SafeGreenBg
+                                    WorkRecord.UPLOAD_FAILED -> WarningRedBg
+                                    else -> WarnOrangeBg
+                                },
                             )
                             Spacer(Modifier.height(6.dp))
-                            SecondaryActionButton(text = "稍后上传", onClick = onBack)
+                            Text(
+                                text = when {
+                                    record?.uploadState == WorkRecord.UPLOAD_UPLOADED ->
+                                        "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
+                                    record?.uploadState == WorkRecord.UPLOAD_FAILED ->
+                                        "上传失败，记录已保存本机，可重试。"
+                                    autoUploaded ->
+                                        "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
+                                    else -> "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            // 核验通过 → 已自动上传，无需按钮；上传失败仍可重试；核验异常保留手动提交
+                            if (!autoUploaded || record?.uploadState == WorkRecord.UPLOAD_FAILED) {
+                                PrimaryActionButton(
+                                    text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) "重试上传" else "提交上传（演示）",
+                                    onClick = vm::uploadActiveRecord,
+                                    enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                SecondaryActionButton(text = "稍后上传", onClick = onBack)
+                            }
                         }
                     }
 

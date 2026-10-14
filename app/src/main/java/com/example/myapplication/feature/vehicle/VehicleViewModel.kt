@@ -6,7 +6,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.myapplication.MyAppApplication
-import com.example.myapplication.core.data.device.DeviceRepository
+import com.example.myapplication.core.data.api.CmdAck
+import com.example.myapplication.core.data.api.DeviceRepository
+import com.example.myapplication.core.data.api.SnapshotUploadRepository
+import com.example.myapplication.core.data.api.TaskUploadRepository
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.data.record.WorkRecordRepository
 import com.example.myapplication.core.model.AppDialog
@@ -56,8 +59,10 @@ class VehicleViewModel(
     private val deviceRepository: DeviceRepository,
     private val workRecordRepository: WorkRecordRepository,
     private val settingsRepository: SettingsRepository,
-    private val taskUploadRepository: com.example.myapplication.core.data.upload.TaskUploadRepository,
+    private val taskUploadRepository: TaskUploadRepository,
     private val snapshotRepository: com.example.myapplication.core.data.media.SnapshotRepository,
+    /** 快照上传（SERVER 模式启用；演示模式为 null，仅存本机） */
+    private val snapshotUploadRepository: SnapshotUploadRepository?,
     private val deviceRegistryRepository: com.example.myapplication.core.data.device.DeviceRegistryRepository,
 ) : ViewModel() {
 
@@ -116,6 +121,23 @@ class VehicleViewModel(
         val builtin = deviceRepository.listDevices()
         val added = deviceRegistryRepository.devices.first()
         return (builtin + added).distinctBy { it.id }
+    }
+
+    /**
+     * 重新拉取设备列表（登录/切换账号完成后由登录页回调触发）。
+     * 设备信息按登录用户获取：登录前拉到的是未鉴权（默认用户）的列表，登录成功后需要刷新。
+     */
+    fun reloadDevices() {
+        viewModelScope.launch {
+            val devices = loadDeviceList()
+            _uiState.update { s ->
+                val keep = s.selectedDeviceId.takeIf { id -> devices.any { it.id == id } }
+                s.copy(
+                    deviceList = devices,
+                    selectedDeviceId = keep ?: devices.firstOrNull()?.id ?: "",
+                )
+            }
+        }
     }
 
     /**
@@ -199,9 +221,13 @@ class VehicleViewModel(
     /** 连接设备：只有收到有效状态才显示"已连接"（M01） */
     fun connect() {
         if (pollJob?.isActive == true) return
-        // 把所选设备 id 下发到设备层（Fake 会据此回对应设备信息）
-        (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let { fake ->
-            fake.selectedDeviceId = _uiState.value.selectedDeviceId
+        // 把所选设备 id 下发到设备层（Fake / 服务端实现据此回对应设备信息与路由命令）
+        val selectedId = _uiState.value.selectedDeviceId
+        (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let {
+            it.selectedDeviceId = selectedId
+        }
+        (deviceRepository as? com.example.myapplication.core.data.device.ServerDeviceRepository)?.let {
+            it.selectedDeviceId = selectedId
         }
         _uiState.update { it.copy(connection = ConnectionPhase.CONNECTING) }
         pollJob = viewModelScope.launch {
@@ -817,13 +843,19 @@ class VehicleViewModel(
      * 快照含图片 + 时间 + 事件类型，用于后续发给过往司机的预警信息。
      */
     fun captureSnapshot(eventLabel: String) {
+        val uploaded = snapshotUploadRepository != null
         saveSnapshot(eventLabel, "人工抓拍（演示占位快照）")
         _uiState.update {
             it.copy(
                 dialog = AppDialog.Alert(
                     "快照已保存",
-                    "已抓拍一张快照并保存本机。事件类型：" + eventLabel +
-                        "。该快照可与时间、事件类型一同用于预警信息；预警上传接口已预留，暂未启用。",
+                    buildString {
+                        append("已抓拍一张快照：保存本机")
+                        if (uploaded) append("，并上传服务端（将作为「作业人员上报」在风险页展示）")
+                        append("。\n事件类型：")
+                        append(eventLabel)
+                        append("。")
+                    },
                 ),
             )
         }
@@ -877,19 +909,21 @@ class VehicleViewModel(
         }
     }
 
-    /** 落一张快照到本机（自动/手动共用；自动快照不弹窗） */
+    /** 落一张快照到本机，并上传服务端（自动/手动共用；服务端登记为风险事件，风险页可见） */
     private fun saveSnapshot(eventLabel: String, note: String) {
         viewModelScope.launch {
             val spec = _uiState.value.activeSpec
-            snapshotRepository.capture(
-                com.example.myapplication.core.model.media.TaskSnapshot(
-                    capturedAt = System.currentTimeMillis(),
-                    taskName = spec?.name ?: "布置任务",
-                    eventLabel = eventLabel,
-                    imageUri = null,           // 当前无摄像头，占位；接摄像头后存实际图片
-                    note = note,
-                ),
+            val snapshot = com.example.myapplication.core.model.media.TaskSnapshot(
+                capturedAt = System.currentTimeMillis(),
+                taskName = spec?.name ?: "布置任务",
+                eventLabel = eventLabel,
+                imageUri = null,           // 当前无摄像头，占位；接摄像头后存实际图片
+                note = note,
             )
+            snapshotRepository.capture(snapshot)
+            // 统一约定：快照上传到服务端 → 服务端登记为风险事件（风险页展示「作业人员上报」）。
+            // 失败不阻塞主流程（本机已保存）；重试标记/队列为后续增强。
+            snapshotUploadRepository?.upload(snapshot, _uiState.value.selectedDeviceId)
         }
     }
 
@@ -920,7 +954,7 @@ class VehicleViewModel(
     private fun sendCommand(
         kind: CommandKind,
         trackTicket: Boolean = false,
-        block: suspend () -> Result<com.example.myapplication.core.data.device.CmdAck>,
+        block: suspend () -> Result<CmdAck>,
     ) {
         val now = System.currentTimeMillis()
         val ticket = CommandTicket(
@@ -1010,6 +1044,7 @@ class VehicleViewModel(
                     sl.settingsRepository,
                     sl.taskUploadRepository,
                     sl.snapshotRepository,
+                    sl.snapshotUploadRepository,
                     sl.deviceRegistryRepository,
                 )
             }

@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
+import com.example.myapplication.core.model.vehicle.GpsFixState
 import com.example.myapplication.core.model.vehicle.VehicleUiState
 import java.util.Locale
 
@@ -56,9 +57,15 @@ fun DeviceStatusStrip(
                 .padding(top = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
+            // 位置来源按事实标注：车端 GPS 定位 / 车轮编码器估算（数据真实性要求）
+            val gpsFixed = snapshot?.gps?.state == GpsFixState.FIXED
             Text(
                 text = if (state.connection == ConnectionPhase.CONNECTED) {
-                    "以设备返回值为准 · 位置由车轮编码器估算"
+                    if (gpsFixed) {
+                        "以设备返回值为准 · 位置来自车端 GPS"
+                    } else {
+                        "以设备返回值为准 · 位置由车轮编码器估算"
+                    }
                 } else {
                     "状态未确认，禁用运动操作"
                 },

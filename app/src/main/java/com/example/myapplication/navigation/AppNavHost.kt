@@ -89,15 +89,18 @@ fun AppNavHost() {
             startDestination = Routes.LOGIN,
             modifier = Modifier.padding(innerPadding),
         ) {
-            // ⓪ 登录页：演示状态，可跳过
+            // ⓪ 登录页：接入服务端登录（默认账号 demo/123456 已预填），可跳过
             composable(Routes.LOGIN) {
                 LoginScreen(
                     onLoggedIn = {
+                        // 设备信息按登录用户获取：登录成功后刷新设备列表
+                        vm.reloadDevices()
                         navController.navigate(Routes.CONNECT) {
                             popUpTo(Routes.LOGIN) { inclusive = true }
                         }
                     },
                     onSkip = {
+                        vm.reloadDevices()
                         navController.navigate(Routes.CONNECT) {
                             popUpTo(Routes.LOGIN) { inclusive = true }
                         }

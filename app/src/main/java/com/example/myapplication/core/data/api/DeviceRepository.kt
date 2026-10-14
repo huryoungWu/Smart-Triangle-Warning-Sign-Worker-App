@@ -1,4 +1,4 @@
-package com.example.myapplication.core.data.device
+package com.example.myapplication.core.data.api
 
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
 import com.example.myapplication.core.model.vehicle.DeviceSummary
@@ -8,7 +8,7 @@ import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskMode
 
-/** 设备命令应答 */
+/** 设备命令应答（契约数据类） */
 data class CmdAck(
     val accepted: Boolean,
     val cmdId: String? = null,
@@ -17,8 +17,15 @@ data class CmdAck(
 )
 
 /**
- * 三角警示牌小车通信接口（M01）。
- * **仓库只负责一次请求-应答**；轮询、连接态、命令分层票据全在 VehicleViewModel（便于单测）。
+ * 三角警示牌小车通信接口（M01）——**手机对外（设备/服务端）的唯一通道契约**。
+ * 仓库只负责一次请求-应答；轮询、连接态、命令分层票据全在 VehicleViewModel（便于单测）。
+ *
+ * 实现分布（本文件为纯接口，不含实现）：
+ * - [com.example.myapplication.core.data.device.FakeDeviceRepository]   模拟设备（演示）
+ * - [com.example.myapplication.core.data.device.HttpDeviceRepository]   直连真机 192.168.4.1（旧方案）
+ * - [com.example.myapplication.core.data.device.ServerDeviceRepository] 三层架构：手机 → 服务端 → 小车
+ * 装配与切换见 [com.example.myapplication.di.ServiceLocator.TRANSPORT]。
+ * 协议见 docs/后端接口设计文档.md。
  *
  * 约定失败语义：
  * - `Result.failure`（IO/Connect）→ 失联

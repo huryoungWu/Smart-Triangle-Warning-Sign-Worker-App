@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.risk.Accident
+import com.example.myapplication.core.ui.MjpegStreamView
+import com.example.myapplication.core.ui.RemoteImage
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
@@ -101,31 +103,51 @@ fun AccidentDetailScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            // ── 事故照片 ──
+            // ── 事故照片（服务端有真实图片地址时直接加载；无地址则回退占位）──
             SectionCard(title = "事故照片") {
-                if (accident.hasPhoto) {
-                    MediaPlaceholder(
+                val photo = accident.photoUrls.firstOrNull()
+                when {
+                    photo != null -> RemoteImage(
+                        url = photo,
+                        contentDescription = "事故现场照片",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                    )
+
+                    accident.hasPhoto -> MediaPlaceholder(
                         title = "事故现场照片",
                         subtitle = "演示占位 · 未接入真实事故数据源",
                         icon = Icons.Default.Warning,
                         height = 180.dp,
                     )
-                } else {
-                    Text("暂无现场照片", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
+
+                    else -> Text("暂无现场照片", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
-            // ── 事故视频 ──
+            // ── 事故视频（联调阶段所有视频共用服务端同一路视频流）──
             SectionCard(title = "事故视频") {
-                if (accident.hasVideo) {
-                    MediaPlaceholder(
+                val video = accident.videoUrl
+                when {
+                    video != null -> MjpegStreamView(
+                        url = video,
+                        contentDescription = "事故视频",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                    )
+
+                    accident.hasVideo -> MediaPlaceholder(
                         title = "点击查看视频",
                         subtitle = "演示占位 · 未接入真实事故数据源",
                         icon = Icons.Default.PlayArrow,
                         height = 180.dp,
                     )
-                } else {
-                    Text("暂无现场视频", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
+
+                    else -> Text("暂无现场视频", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
                 }
             }
 

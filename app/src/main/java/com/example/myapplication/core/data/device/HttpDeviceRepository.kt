@@ -1,5 +1,7 @@
 package com.example.myapplication.core.data.device
 
+import com.example.myapplication.core.data.api.CmdAck
+import com.example.myapplication.core.data.api.DeviceRepository
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MoveDir

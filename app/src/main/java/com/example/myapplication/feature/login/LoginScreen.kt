@@ -20,22 +20,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.di.DeviceTransport
+import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
+import com.example.myapplication.ui.theme.WarningRed
+import kotlinx.coroutines.launch
 
 /**
  * 登录页（主流程第一站，位于设备连接页之前）。
  *
- * **演示状态**：不做真实鉴权，任意用户名密码均可登录；也可直接「跳过登录」。
- * 后续接真实账号系统时替换本页校验逻辑即可。
+ * - 联调模式（TRANSPORT=SERVER）：调用服务端 `POST /api/v1/auth/login` 获取 token，
+ *   设备信息按登录用户获取（见 docs/后端接口设计文档.md 第 3/4 节）。
+ * - **调试默认账号 `demo / 123456` 已预填**（Mock 服务端内置并绑定两台演示设备）。
+ * - 「跳过登录」保留：不取 token，Mock 服务端按默认用户 demo 处理（正式服务端会拒绝无鉴权请求）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,8 +50,17 @@ fun LoginScreen(
     onLoggedIn: () -> Unit,
     onSkip: () -> Unit,
 ) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val sl = remember(context) { ServiceLocator.get(context) }
+    val auth = sl.authRepository
+    val serverMode = sl.transport == DeviceTransport.SERVER
+
+    // 调试默认账号（正式账号接入后替换预填值即可）
+    var username by remember { mutableStateOf("demo") }
+    var password by remember { mutableStateOf("123456") }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -74,8 +90,11 @@ fun LoginScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            // 演示状态提示
-            StatusChip("演示状态 · 未接入账号系统", InfoBlue, InfoBlueBg)
+            if (serverMode) {
+                StatusChip("已接入服务端登录 · 设备按账号获取", InfoBlue, InfoBlueBg)
+            } else {
+                StatusChip("演示状态 · 未接入账号系统", InfoBlue, InfoBlueBg)
+            }
 
             Spacer(Modifier.height(8.dp))
 
@@ -96,9 +115,35 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            if (error != null) {
+                Text(
+                    text = error!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = WarningRed,
+                )
+            }
+
             Spacer(Modifier.height(8.dp))
 
-            PrimaryActionButton(text = "登录", onClick = onLoggedIn)
+            PrimaryActionButton(
+                text = if (loading) "登录中…" else "登录",
+                onClick = {
+                    error = null
+                    loading = true
+                    scope.launch {
+                        auth.login(username.trim(), password)
+                            .onSuccess {
+                                loading = false
+                                onLoggedIn()
+                            }
+                            .onFailure { e ->
+                                loading = false
+                                error = "登录失败：${e.message ?: "网络异常"}"
+                            }
+                    }
+                },
+                enabled = !loading && username.isNotBlank() && password.isNotBlank(),
+            )
 
             TextButton(
                 onClick = onSkip,
@@ -109,7 +154,14 @@ fun LoginScreen(
 
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "当前为演示状态，任意用户名密码均可登录；\n后续接入账号系统后将启用真实鉴权。",
+                text = if (serverMode) {
+                    "调试默认账号：demo / 123456（已预填，Mock 服务端内置）。\n" +
+                        "设备信息按登录账号获取；跳过登录时服务端按默认账号处理。\n" +
+                        "当前服务端：${ServiceLocator.SERVER_BASE_URL}"
+                } else {
+                    "当前为演示模式（模拟设备），无需真实账号；\n" +
+                        "切到联调模式（TRANSPORT = SERVER）后启用服务端登录。"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -1,5 +1,7 @@
 package com.example.myapplication.core.data.location
 
+import com.example.myapplication.core.data.api.LocationRepository
+import com.example.myapplication.core.data.api.PhoneFix
 import com.example.myapplication.core.data.device.FakeDeviceRepository
 import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.GeoPoint

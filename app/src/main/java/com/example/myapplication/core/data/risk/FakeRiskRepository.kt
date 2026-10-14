@@ -1,5 +1,6 @@
 package com.example.myapplication.core.data.risk
 
+import com.example.myapplication.core.data.api.RiskRepository
 import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.model.risk.Accident
@@ -7,17 +8,9 @@ import com.example.myapplication.core.model.risk.AccidentType
 import kotlinx.coroutines.delay
 
 /**
- * 道路风险数据源（前方道路风险提示）。
- *
- * **当前为演示数据**：无真实事故数据源，返回模拟事故点。
- * 接通真实数据源（如交警开放平台/自建服务）时实现 [HttpRiskRepository] 即可，UI 不变。
+ * 演示数据源：按中心点生成周围事故点。
+ * 无真实事故数据源时使用（`ServiceLocator.RISK_SOURCE = FAKE`）。
  */
-interface RiskRepository {
-    /** 拉取用户周围 [radiusKm] 公里内的风险事件 */
-    suspend fun getAccidents(center: GeoPoint, radiusKm: Double): List<Accident>
-}
-
-/** 演示数据源：按中心点生成周围事故点 */
 class FakeRiskRepository : RiskRepository {
 
     override suspend fun getAccidents(center: GeoPoint, radiusKm: Double): List<Accident> {
@@ -60,14 +53,4 @@ class FakeRiskRepository : RiskRepository {
         val photo: Boolean,
         val video: Boolean = true,
     )
-}
-
-/** 真实数据源（留口，当前不接） */
-class HttpRiskRepository(
-    private val baseUrl: String = "https://api.example.com",
-) : RiskRepository {
-    override suspend fun getAccidents(center: GeoPoint, radiusKm: Double): List<Accident> {
-        // TODO: GET $baseUrl/api/v1/risks?lat=..&lng=..&radiusKm=..
-        return emptyList()
-    }
 }

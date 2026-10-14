@@ -1,5 +1,6 @@
 package com.example.myapplication.core.data.device
 
+import com.example.myapplication.core.data.api.CmdAck
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
 import com.example.myapplication.core.model.vehicle.GpsFixState
 import com.example.myapplication.core.model.vehicle.LightMode
