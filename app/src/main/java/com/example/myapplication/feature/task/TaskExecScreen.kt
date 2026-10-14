@@ -196,7 +196,8 @@ fun TaskExecScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "抓拍的快照含图片、时间与事件类型，可用于发给过往司机的预警信息。",
+                    "任务开始、结束会自动各抓拍一张并弹窗提示；执行中间可自行补拍（可拍可不拍）。" +
+                        "快照含图片、时间与事件类型，可用于发给过往司机的预警信息。",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
@@ -205,19 +206,11 @@ fun TaskExecScreen(
 
 
 
-            // 任务进度（命令五层，以进度条呈现）
+            // 任务进度（命令五层，以进度条呈现；口径与首页「正在执行的任务」一致）
             SectionCard(title = "任务进度") {
                 val phase = ticket?.phase
-                val step = when (phase) {
-                    com.example.myapplication.core.model.vehicle.CommandPhase.SENDING -> 1
-                    com.example.myapplication.core.model.vehicle.CommandPhase.ACCEPTED -> 2
-                    com.example.myapplication.core.model.vehicle.CommandPhase.EXECUTING -> 3
-                    com.example.myapplication.core.model.vehicle.CommandPhase.DEVICE_DONE -> 4
-                    com.example.myapplication.core.model.vehicle.CommandPhase.VERIFIED -> 5
-                    else -> 0
-                }
-                val halted = phase == com.example.myapplication.core.model.vehicle.CommandPhase.FAILED ||
-                    phase == com.example.myapplication.core.model.vehicle.CommandPhase.UNKNOWN
+                val step = phase?.progressStep ?: 0
+                val halted = phase == CommandPhase.FAILED || phase == CommandPhase.UNKNOWN
 
                 Text(
                     text = when {
@@ -326,8 +319,9 @@ fun TaskExecScreen(
                         )
                     }
                 } else {
-                    // 上传卡
+                    // 上传卡（核验通过后自动上传，不再需要手动「提交上传」）
                     val record = state.uploadRecord
+                    val autoUploaded = record?.verifyResult == WorkRecord.VERIFY_PASS
                     SectionCard(title = "任务上传") {
                         StatusChip(
                             text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL),
@@ -344,23 +338,29 @@ fun TaskExecScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            text = when (record?.uploadState) {
-                                WorkRecord.UPLOAD_UPLOADED ->
+                            text = when {
+                                record?.uploadState == WorkRecord.UPLOAD_UPLOADED ->
                                     "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
-                                WorkRecord.UPLOAD_FAILED -> "上传失败，记录已保存本机，可重试。"
+                                record?.uploadState == WorkRecord.UPLOAD_FAILED ->
+                                    "上传失败，记录已保存本机，可重试。"
+                                autoUploaded ->
+                                    "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
                                 else -> "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.height(8.dp))
-                        PrimaryActionButton(
-                            text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) "重试上传" else "提交上传（演示）",
-                            onClick = vm::uploadActiveRecord,
-                            enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        SecondaryActionButton(text = "稍后上传", onClick = onBack)
+                        // 核验通过 → 已自动上传，无需按钮；上传失败仍可重试；核验异常保留手动提交
+                        if (!autoUploaded || record?.uploadState == WorkRecord.UPLOAD_FAILED) {
+                            PrimaryActionButton(
+                                text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) "重试上传" else "提交上传（演示）",
+                                onClick = vm::uploadActiveRecord,
+                                enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            SecondaryActionButton(text = "稍后上传", onClick = onBack)
+                        }
                     }
 
                     // 任务完成总结

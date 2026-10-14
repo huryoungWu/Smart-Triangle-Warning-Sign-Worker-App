@@ -38,9 +38,7 @@ data class Accident(
         get() = if (distanceM < 1000) "${distanceM.toInt()} 米" else String.format("%.1f 公里", distanceM / 1000)
 }
 
-/** 风险提示页的距离半径（公里），用户可自行设置 */
+/** 风险提示页的搜索距离半径（公里）：固定 2 公里，不做设置项 */
 object RiskRadius {
-    const val MIN_KM = 1
-    const val MAX_KM = 20
-    const val DEFAULT_KM = 5
+    const val DEFAULT_KM = 2
 }

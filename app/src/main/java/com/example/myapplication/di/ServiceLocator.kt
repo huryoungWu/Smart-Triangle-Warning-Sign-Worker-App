@@ -30,6 +30,10 @@ class ServiceLocator(context: Context) {
 
     val workRecordRepository = WorkRecordRepository(context)
 
+    /** 用户添加设备登记（连接页「添加设备」：手动编号 / 扫码） */
+    val deviceRegistryRepository =
+        com.example.myapplication.core.data.device.DeviceRegistryRepository(context)
+
     /** 任务快照本地存储（小车运行中抓拍） */
     val snapshotRepository: com.example.myapplication.core.data.media.SnapshotRepository =
         com.example.myapplication.core.data.media.LocalSnapshotRepository(context)

@@ -15,6 +15,7 @@ import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.CommandTicket
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
+import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.TaskSpec
 import com.example.myapplication.core.model.vehicle.LightMode
@@ -57,6 +58,7 @@ class VehicleViewModel(
     private val settingsRepository: SettingsRepository,
     private val taskUploadRepository: com.example.myapplication.core.data.upload.TaskUploadRepository,
     private val snapshotRepository: com.example.myapplication.core.data.media.SnapshotRepository,
+    private val deviceRegistryRepository: com.example.myapplication.core.data.device.DeviceRegistryRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(VehicleUiState())
@@ -68,6 +70,9 @@ class VehicleViewModel(
     val snapshots: Flow<List<com.example.myapplication.core.model.media.TaskSnapshot>> =
         snapshotRepository.snapshots
 
+    /** 用户添加的设备（连接页「添加设备」弹窗内展示，可手动删除） */
+    val customDevices: Flow<List<DeviceSummary>> = deviceRegistryRepository.devices
+
     private var pollJob: Job? = null
     private var keepaliveJob: Job? = null
     private var cmdSeq = 1
@@ -78,6 +83,9 @@ class VehicleViewModel(
     private val writtenTaskIds = mutableSetOf<String>()
     private var activeSpecRef: TaskSpec? = null
 
+    /** 上一帧设备回报的任务状态（自动快照：检测任务开始/结束迁移用） */
+    private var lastTaskRunState: TaskRunState? = null
+
     init {
         viewModelScope.launch {
             _uiState.update {
@@ -86,8 +94,8 @@ class VehicleViewModel(
                     lightSetting = settingsRepository.defaultLight.first(),
                 )
             }
-            // 加载可选设备列表，默认选第一台
-            val devices = deviceRepository.listDevices()
+            // 加载可选设备列表（内置 + 用户已添加），默认选第一台
+            val devices = loadDeviceList()
             _uiState.update {
                 it.copy(
                     deviceList = devices,
@@ -101,6 +109,89 @@ class VehicleViewModel(
     fun selectDevice(deviceId: String) {
         if (_uiState.value.connection == ConnectionPhase.CONNECTED) return
         _uiState.update { it.copy(selectedDeviceId = deviceId) }
+    }
+
+    /** 设备列表 = 内置设备 + 用户已添加登记（按编号去重） */
+    private suspend fun loadDeviceList(): List<DeviceSummary> {
+        val builtin = deviceRepository.listDevices()
+        val added = deviceRegistryRepository.devices.first()
+        return (builtin + added).distinctBy { it.id }
+    }
+
+    /**
+     * 添加设备（连接页「添加设备」：手动输入设备编号或扫码）。
+     * 登记到本机设备表后立即可选；同编号重复添加时直接选中已有项。
+     */
+    fun addDevice(rawId: String) {
+        val id = rawId.trim()
+        if (id.isEmpty()) {
+            rejectMotion("设备编号不能为空")
+            return
+        }
+        if (id.length > MAX_DEVICE_ID_LEN) {
+            rejectMotion("设备编号不能超过 $MAX_DEVICE_ID_LEN 个字符")
+            return
+        }
+        val existing = _uiState.value.deviceList.firstOrNull { it.id.equals(id, ignoreCase = true) }
+        if (existing != null) {
+            _uiState.update {
+                it.copy(
+                    selectedDeviceId = existing.id,
+                    dialog = AppDialog.Alert("设备已存在", "编号 ${existing.id} 已在设备列表中，已为你选中该设备。"),
+                )
+            }
+            return
+        }
+        val summary = DeviceSummary(
+            id = id,
+            name = "自定义设备",
+            started = false,
+            available = true,
+            batteryPercent = -1,
+        )
+        viewModelScope.launch {
+            deviceRegistryRepository.add(summary)
+            _uiState.update {
+                it.copy(
+                    deviceList = loadDeviceList(),
+                    selectedDeviceId = id,
+                    dialog = AppDialog.Alert("添加成功", "设备 $id 已添加并选中，可直接连接。"),
+                )
+            }
+        }
+    }
+
+    /**
+     * 删除用户添加的设备（连接页「添加设备」弹窗内手动删除）。
+     * 删除后若该设备正被选中，自动改选列表中的第一台；正连接的设备须先断开连接。
+     */
+    fun removeDevice(deviceId: String) {
+        val id = deviceId.trim()
+        if (id.isEmpty()) return
+        if (_uiState.value.connection == ConnectionPhase.CONNECTED &&
+            _uiState.value.selectedDeviceId == id
+        ) {
+            rejectMotion("该设备已连接，请先断开连接后再删除")
+            return
+        }
+        viewModelScope.launch {
+            deviceRegistryRepository.remove(id)
+            val devices = loadDeviceList()
+            _uiState.update {
+                it.copy(
+                    deviceList = devices,
+                    selectedDeviceId = if (it.selectedDeviceId == id) {
+                        devices.firstOrNull()?.id ?: ""
+                    } else {
+                        it.selectedDeviceId
+                    },
+                    dialog = AppDialog.Alert(
+                        "设备已删除",
+                        "设备 $id 已从本机设备列表移除。如需恢复，重新输入编号或扫码添加即可。",
+                    ),
+                )
+            }
+        }
     }
 
     // ==================== M01 设备连接 ====================
@@ -148,11 +239,13 @@ class VehicleViewModel(
     /** 失联立即显示"已断开／状态未确认"并禁用运动操作（M01） */
     private fun onLinkLost() {
         val wasConnected = _uiState.value.connection == ConnectionPhase.CONNECTED
+        val taskWasRunning = lastTaskRunState == TaskRunState.RUNNING
         if (_uiState.value.holdingMove) {
             // 失联：清"按住中"，尝试停车（命令标 UNKNOWN，不排队不重发）
             _uiState.update { it.copy(holdingMove = false, holdingDir = null) }
         }
-        // 失联时清空未确认命令票据（离线命令禁排队）
+        // 失联时清空未确认命令票据（离线命令禁排队）；
+        // 断线时任务在跑则补拍结束快照，提示并入本弹窗（弹窗位只有一个，安全提示优先）
         _uiState.update {
             it.copy(
                 connection = ConnectionPhase.LOST,
@@ -165,13 +258,20 @@ class VehicleViewModel(
                     AppDialog.Warn(
                         "设备已断开",
                         "已断开／状态未确认。运动操作已禁用。\n\n" +
-                            "重连后仅重新读取设备状态，不会重发断线前的移动、布置或恢复命令。",
+                            "重连后仅重新读取设备状态，不会重发断线前的移动、布置或恢复命令。" +
+                            if (taskWasRunning) {
+                                "\n\n断线时任务仍在执行，已自动补拍一张任务结束快照。"
+                            } else "",
                     )
                 } else it.dialog,
             )
         }
-        // 若断线时有任务在跑，落一条"失联保护"记录
+        // 若断线时有任务在跑，落一条"失联保护"记录并补一张任务结束快照（回包已停，状态迁移到不了）
         recordTaskIfNeeded(WorkRecord.RESULT_LINK_LOSS, "失联保护停车（车端断网停车）")
+        if (taskWasRunning) {
+            lastTaskRunState = TaskRunState.CANCELED
+            saveSnapshot("任务结束（自动抓拍）", "任务失联保护停车自动抓拍")
+        }
     }
 
     // ==================== 设备状态回包处理（唯一事实源） ====================
@@ -185,6 +285,7 @@ class VehicleViewModel(
                 lastUpdateAt = System.currentTimeMillis(),
             )
         }
+        trackTaskAutoSnapshot(snapshot)
 
         // 停止确认（M08）：设备已反映停车 → 撤下"停止未确认"
         if (prevState.stopUnconfirmed &&
@@ -308,7 +409,8 @@ class VehicleViewModel(
                     "报告已完成",
                     "车端报告已达到目标位置（目标 ${snapshot.task.targetM} 米，编码器估算 ${snapshot.task.traveledM} 米）。\n\n" +
                         "请人工现场核对：实际位置、车辆朝向、警示灯光是否正常。\n" +
-                        "现场核验结果将与设备完成分开记录。",
+                        "现场核验结果将与设备完成分开记录。\n\n" +
+                        "已自动抓拍任务结束快照（含图片、时间与事件类型），可用于生成发给过往司机的预警信息。",
                 ),
             )
         }
@@ -517,9 +619,8 @@ class VehicleViewModel(
             return
         }
         val spec = draft.copy(
-            name = draft.name.ifBlank {
-                com.example.myapplication.core.util.TimeFormat.format("MMdd-HHmm", System.currentTimeMillis())
-            },
+            // 留空自动生成任务名（「自动布置」），避免出现「1014-0930」这类只有数字、含义不明的标题
+            name = draft.name.ifBlank { defaultTaskName(draft) },
         )
         _uiState.update { it.copy(draft = spec, activeSpec = spec) }
 
@@ -531,6 +632,10 @@ class VehicleViewModel(
             deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun)
         }
     }
+
+    /** 默认任务名（留空自动生成）：「自动布置」 */
+    private fun defaultTaskName(spec: TaskSpec): String =
+        if (spec.kind == TaskKind.FIXED_DISTANCE) "自动布置" else spec.kind.label
 
     /** 发布失败后「重新下发」：用同一份规格再发一次（走 taskStartEnabled 门） */
     fun retryPublish() {
@@ -551,13 +656,30 @@ class VehicleViewModel(
         sendCommand(CommandKind.SEGMENT_CONFIRM, trackTicket = false) { deviceRepository.confirmSegment() }
     }
 
-    /** 触发任务上传（服务器尚未接入 -> 占位实现） */
+    /** 手动提交上传（核验异常、上传失败重试时使用；核验通过走自动上传） */
     fun uploadActiveRecord() {
-        val id = activeRecordId ?: _uiState.value.pendingVerify?.recordId ?: return
+        val id = activeRecordId
+            ?: _uiState.value.pendingVerify?.recordId
+            ?: _uiState.value.uploadRecord?.id
+            ?: return
+        performUpload(id, auto = false)
+    }
+
+    /**
+     * 执行上传（服务器尚未接入 -> 占位实现）。
+     * [auto] = true 表示核验通过后的自动上传，完成提示与手动提交区分文案。
+     */
+    private fun performUpload(id: String, auto: Boolean) {
         viewModelScope.launch {
             workRecordRepository.setUploadState(id, WorkRecord.UPLOAD_PENDING)
             syncUploadRecord(id)
-            val record = workRecordRepository.records.first().firstOrNull { it.id == id } ?: return@launch
+            val record = workRecordRepository.records.first().firstOrNull { it.id == id }
+            if (record == null) {
+                _uiState.update {
+                    it.copy(dialog = AppDialog.Warn("上传未执行", "未找到对应作业记录，请稍后在记录页重试。"))
+                }
+                return@launch
+            }
             val result = taskUploadRepository.upload(record)
             result.onSuccess { r ->
                 workRecordRepository.setUploaded(id, r.serverId, r.uploadedAt)
@@ -565,9 +687,13 @@ class VehicleViewModel(
                 _uiState.update {
                     it.copy(
                         dialog = AppDialog.Alert(
-                            "已模拟上传",
-                            "任务记录已保存本机，并完成模拟上传（演示占位）。\n\n" +
-                                "占位单号：" + r.serverId + "\n未接入真实服务器，不构成正式上传。",
+                            if (auto) "核验通过 · 已自动上传" else "已模拟上传",
+                            buildString {
+                                if (auto) append("人工现场核验：通过。\n")
+                                append("任务记录已保存本机，并完成模拟上传（演示占位）。\n\n")
+                                append("占位单号：").append(r.serverId)
+                                append("\n未接入真实服务器，不构成正式上传。")
+                            },
                         ),
                     )
                 }
@@ -649,6 +775,19 @@ class VehicleViewModel(
 
     fun confirmVerify(pass: Boolean, note: String?) {
         val pending = _uiState.value.pendingVerify ?: return
+        val ticket = _uiState.value.activeTicket
+        _uiState.update {
+            it.copy(
+                activeTicket = ticket?.copy(phase = CommandPhase.VERIFIED, note = "人工核验：${if (pass) "通过" else "异常"}"),
+                pendingVerify = null,
+                // 核验通过 → 直接自动上传（结果由上传完成/失败弹窗提示，无需手动提交）；
+                // 核验异常 → 保留手动提交入口，此处仅提示已记录
+                dialog = if (pass) null else AppDialog.Alert(
+                    "核验已记录",
+                    "人工现场核验：发现异常。\n已记入作业记录，请现场处置后再继续作业。",
+                ),
+            )
+        }
         viewModelScope.launch {
             syncUploadRecord(pending.recordId)
             workRecordRepository.updateVerify(
@@ -656,26 +795,11 @@ class VehicleViewModel(
                 verifyResult = if (pass) WorkRecord.VERIFY_PASS else WorkRecord.VERIFY_FAIL,
                 verifyNote = note,
             )
-        }
-        val ticket = _uiState.value.activeTicket
-        if (ticket != null) {
-            _uiState.update {
-                it.copy(
-                    activeTicket = ticket.copy(phase = CommandPhase.VERIFIED, note = "人工核验：${if (pass) "通过" else "异常"}"),
-                    pendingVerify = null,
-                    dialog = AppDialog.Alert(
-                        "核验已记录",
-                        if (pass) {
-                            "人工现场核验：通过。\n设备完成与人工核验已分别记入作业记录（${WorkRecord.LOCAL_ONLY_NOTICE}）。"
-                        } else {
-                            "人工现场核验：发现异常。\n已记入作业记录，请现场处置后再继续作业。"
-                        },
-                    ),
-                )
-            }
-        } else {
-            _uiState.update {
-                it.copy(pendingVerify = null, dialog = AppDialog.Alert("核验已记录", "核验结果已记入作业记录（${WorkRecord.LOCAL_ONLY_NOTICE}）。"))
+            if (pass) {
+                // 先落核验结果再上传，保证上传载荷里带「核验通过」
+                performUpload(pending.recordId, auto = true)
+            } else {
+                syncUploadRecord(pending.recordId)
             }
         }
     }
@@ -689,29 +813,83 @@ class VehicleViewModel(
     }
 
     /**
-     * 抓拍快照（小车运行中）。
+     * 抓拍快照（小车运行中，**人工手动**）。
      * 快照含图片 + 时间 + 事件类型，用于后续发给过往司机的预警信息。
      */
     fun captureSnapshot(eventLabel: String) {
+        saveSnapshot(eventLabel, "人工抓拍（演示占位快照）")
+        _uiState.update {
+            it.copy(
+                dialog = AppDialog.Alert(
+                    "快照已保存",
+                    "已抓拍一张快照并保存本机。事件类型：" + eventLabel +
+                        "。该快照可与时间、事件类型一同用于预警信息；预警上传接口已预留，暂未启用。",
+                ),
+            )
+        }
+    }
+
+    /**
+     * 任务自动快照：**任务开始自动拍一张、任务结束自动拍一张**（以设备回报的任务状态迁移为准），
+     * 且**每次自动抓拍都弹窗一次**（任务开始 / 任务结束各一次）。
+     * 中间过程由人工自行决定拍不拍（[captureSnapshot]）。
+     *
+     * 注意：任务正常完成（DONE）时「结束快照」提示并入「报告已完成」弹窗（见 [onTaskDeviceDone]），
+     * 失联触发的结束快照并入「设备已断开」弹窗（见 [onLinkLost]）——同一时刻仅有一个弹窗位，
+     * 避免安全提示被覆盖。
+     */
+    private fun trackTaskAutoSnapshot(snapshot: DeviceSnapshot) {
+        val task = snapshot.task
+        val prev = lastTaskRunState
+        lastTaskRunState = task.state
+        if (prev == null) return
+        when {
+            task.state == TaskRunState.RUNNING && prev != TaskRunState.RUNNING -> {
+                saveSnapshot("任务开始（自动抓拍）", "任务启动自动抓拍")
+                notifyAutoSnapshot("任务开始", "任务执行中可随时用「捕捉快照」手动补拍。")
+            }
+
+            prev == TaskRunState.RUNNING && task.state != TaskRunState.RUNNING -> {
+                saveSnapshot("任务结束（自动抓拍）", "任务${task.state.label}自动抓拍")
+                if (task.state != TaskRunState.DONE) {
+                    notifyAutoSnapshot("任务结束", "任务最终状态：${task.state.label}。")
+                }
+            }
+        }
+    }
+
+    /** 自动抓拍后的弹窗提示（任务开始/结束各弹一次；同一时刻仅一个弹窗位，见 [trackTaskAutoSnapshot]） */
+    private fun notifyAutoSnapshot(phase: String, extra: String) {
+        _uiState.update {
+            it.copy(
+                dialog = AppDialog.Alert(
+                    "$phase · 已自动抓拍快照",
+                    buildString {
+                        append("系统已自动抓拍一张快照（$phase）。\n\n")
+                        append("快照包含图片、抓拍时间与事件类型，可用于生成发给过往司机的预警信息。")
+                        if (extra.isNotBlank()) {
+                            append("\n")
+                            append(extra)
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    /** 落一张快照到本机（自动/手动共用；自动快照不弹窗） */
+    private fun saveSnapshot(eventLabel: String, note: String) {
         viewModelScope.launch {
             val spec = _uiState.value.activeSpec
-            val snap = com.example.myapplication.core.model.media.TaskSnapshot(
-                capturedAt = System.currentTimeMillis(),
-                taskName = spec?.name ?: "布置任务",
-                eventLabel = eventLabel,
-                imageUri = null,           // 当前无摄像头，占位；接摄像头后存实际图片
-                note = "演示占位快照",
+            snapshotRepository.capture(
+                com.example.myapplication.core.model.media.TaskSnapshot(
+                    capturedAt = System.currentTimeMillis(),
+                    taskName = spec?.name ?: "布置任务",
+                    eventLabel = eventLabel,
+                    imageUri = null,           // 当前无摄像头，占位；接摄像头后存实际图片
+                    note = note,
+                ),
             )
-            snapshotRepository.capture(snap)
-            _uiState.update {
-                it.copy(
-                    dialog = AppDialog.Alert(
-                        "快照已保存",
-                        "已抓拍一张快照并保存本机。事件类型：" + eventLabel +
-                            "。该快照可与时间、事件类型一同用于预警信息；预警上传接口已预留，暂未启用。",
-                    ),
-                )
-            }
         }
     }
 
@@ -819,6 +997,8 @@ class VehicleViewModel(
         private const val POLL_INTERVAL_MS = 1000L
         /** 按住移动时的保持包间隔（须短于设备看门狗 800ms） */
         private const val MOVE_KEEPALIVE_MS = 300L
+        /** 添加设备编号最大长度 */
+        private const val MAX_DEVICE_ID_LEN = 32
 
         val Factory = viewModelFactory {
             initializer {
@@ -830,6 +1010,7 @@ class VehicleViewModel(
                     sl.settingsRepository,
                     sl.taskUploadRepository,
                     sl.snapshotRepository,
+                    sl.deviceRegistryRepository,
                 )
             }
         }

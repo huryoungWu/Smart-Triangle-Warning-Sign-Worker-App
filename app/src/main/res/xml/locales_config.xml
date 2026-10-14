@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  按应用语言（Android 13+）：声明本应用支持中文。
+  配合 MyAppApplication 启动时强制 zh-CN，系统权限弹窗
+  （如「While using the app / Only this time / Don't allow」）会跟随应用语言显示中文。
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="zh-CN" />
+</locale-config>

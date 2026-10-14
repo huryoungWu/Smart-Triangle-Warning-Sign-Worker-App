@@ -41,6 +41,20 @@ enum class CommandPhase(val label: String) {
     UNKNOWN("结果未知"),
     ;
 
+    /**
+     * 五层进度序号（进度条口径，各处统一）：
+     * 已发出 1 → 设备已接收 2 → 正在执行 3 → 设备报告完成 4 → 人工已核验 5；失败/未知为 0。
+     */
+    val progressStep: Int
+        get() = when (this) {
+            SENDING -> 1
+            ACCEPTED -> 2
+            EXECUTING -> 3
+            DEVICE_DONE -> 4
+            VERIFIED -> 5
+            FAILED, UNKNOWN -> 0
+        }
+
     /** 终态：可再次发起新任务（否则布置完就卡死） */
     val isTerminal: Boolean
         get() = this == DEVICE_DONE || this == VERIFIED || this == FAILED || this == UNKNOWN

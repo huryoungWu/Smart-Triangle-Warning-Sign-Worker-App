@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,7 +47,7 @@ import java.util.Locale
 /**
  * 前方道路风险提示（导航栏新增页）。
  *
- * - 半径可自行设置（1~20 公里）
+ * - 搜索范围固定 2 公里（无设置项）
  * - 高德地图显示用户位置与周围风险点位
  * - 地图下方按**距离从近到远**列出事故，点击进入详情（照片/视频/介绍）
  */
@@ -60,7 +59,7 @@ fun RiskScreen(
     val mapState by mapVm.uiState.collectAsStateWithLifecycle()
     val phoneFix by mapVm.phoneFix.collectAsStateWithLifecycle()
 
-    var radiusKm by remember { mutableStateOf(RiskRadius.DEFAULT_KM) }
+    val radiusKm = RiskRadius.DEFAULT_KM
     var accidents by remember { mutableStateOf<List<Accident>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
 
@@ -72,7 +71,7 @@ fun RiskScreen(
         com.example.myapplication.di.ServiceLocator.get(context).riskRepository
     }
 
-    LaunchedEffect(radiusKm, center) {
+    LaunchedEffect(center) {
         loading = true
         accidents = repo.getAccidents(center, radiusKm.toDouble())
             .sortedBy { it.distanceM }      // 从最近到最远
@@ -85,38 +84,6 @@ fun RiskScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // ── 半径设置 ──
-        item {
-            SectionCard(title = "搜索半径") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "周边 ${radiusKm} 公里",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        text = "${RiskRadius.MIN_KM} ~ ${RiskRadius.MAX_KM} 公里",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = NeutralGrey,
-                    )
-                }
-                Slider(
-                    value = radiusKm.toFloat(),
-                    onValueChange = { radiusKm = it.toInt().coerceIn(RiskRadius.MIN_KM, RiskRadius.MAX_KM) },
-                    valueRange = RiskRadius.MIN_KM.toFloat()..RiskRadius.MAX_KM.toFloat(),
-                    steps = RiskRadius.MAX_KM - RiskRadius.MIN_KM - 1,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    text = "拖动可调整搜索范围，地图与列表会同步刷新",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
-            }
-        }
-
         // ── 风险地图 ──
         item {
             SectionCard(title = "风险地图（周边 ${radiusKm} 公里）") {
@@ -163,7 +130,7 @@ fun RiskScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "周边 ${radiusKm} 公里内暂无风险事件\n可调大搜索半径再试",
+                        text = "周边 ${radiusKm} 公里内暂无风险事件",
                         style = MaterialTheme.typography.bodyMedium,
                         color = NeutralGrey,
                         modifier = Modifier.padding(16.dp),

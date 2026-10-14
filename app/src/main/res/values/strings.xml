@@ -1,4 +1,12 @@
 <resources>
     <string name="app_name">三角警示牌作业</string>
     <string name="safety_notice_scope">样机仅供有人看护的室内或封闭场地测试，不具备自动识别道路安全位置、障碍或来车的能力；布置前须人工现场确认。</string>
+
+    <!-- 扫码界面文案：重定义同名资源覆盖 zxing 扫码库内置英文串。
+         库仅自带简体/港台中文资源，英文系统下会回落英文（取景提示、相机异常弹窗等），
+         在此覆盖后，任何系统语言下扫码界面均显示中文。 -->
+    <string name="zxing_app_name">扫码相机</string>
+    <string name="zxing_button_ok">确定</string>
+    <string name="zxing_msg_default_status">请将设备二维码置于取景框内扫描</string>
+    <string name="zxing_msg_camera_framework_bug">相机出现问题，请重启设备后重试。</string>
 </resources>

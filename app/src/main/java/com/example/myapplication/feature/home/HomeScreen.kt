@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -31,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskRunState
@@ -41,24 +41,23 @@ import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
-import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
 import com.example.myapplication.ui.theme.WarnOrange
 import com.example.myapplication.ui.theme.WarnOrangeBg
+import com.example.myapplication.ui.theme.WarningRed
 
 /**
  * 开始作业页（主流程第二站）。
  *
  * 页面骨架与「发布任务」页一致：Scaffold + TopAppBar（标题 + ← 返回）+ 16dp 边距。
- * 内容：当前任务入口 → 两个作业入口 → 当前设备信息。
+ * 内容：当前设备 → 正在执行的任务（运行中才显示）→ 开始新任务入口。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     vm: VehicleViewModel,
     onOpenPublishFixed: () -> Unit,
-    onOpenPublishManual: () -> Unit,
     onBackToConnect: () -> Unit,
     onOpenExec: () -> Unit,
 ) {
@@ -90,7 +89,7 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = "选择作业类型后进入任务发布表单，填好路线点「发布」即开始执行",
+                text = "点击「开始新任务」进入任务发布表单，填好路线点「发布」即开始执行",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -143,66 +142,46 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                     )
-                    if (taskRunning) {
-                        Spacer(Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { task?.progress ?: 0f },
-                            modifier = Modifier.fillMaxWidth().height(6.dp),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "第 ${(task?.segmentIndex ?: 0) + 1}/${task?.segments?.size ?: spec.segments.size} 段",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = InfoBlue,
-                        )
-                    }
+                    // 进度与执行页「任务进度」同源：同一命令五层步骤与口径
+                    val phase = state.activeTicket?.phase
+                    val step = phase?.progressStep ?: 0
+                    val halted = phase == CommandPhase.FAILED || phase == CommandPhase.UNKNOWN
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = when {
+                            phase == null -> "待下发"
+                            halted -> "已中断：${phase.label}"
+                            else -> "第 $step/5 步 · ${phase.label}"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (halted) WarningRed else InfoBlue,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { step / 5f },
+                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        color = if (halted) WarningRed else MaterialTheme.colorScheme.primary,
+                    )
                     Spacer(Modifier.height(10.dp))
                     PrimaryActionButton(text = "进入任务执行", onClick = onOpenExec)
                 }
             }
 
-            // ── 两个作业入口 ──
-            SectionCard(title = "开始新任务") {
-                PrimaryActionButton(
-                    text = "手动遥控 · 分段确认",
-                    onClick = {
-                        vm.initDraft(TaskKind.MANUAL)
-                        onOpenPublishManual()
-                    },
-                    enabled = connected && state.taskStartEnabled,
-                )
-                Spacer(Modifier.height(4.dp))
+            // ── 开始新任务（单一入口，走定距布置 · 全自动驾驶流程）──
+            PrimaryActionButton(
+                text = "开始新任务",
+                onClick = {
+                    vm.initDraft(TaskKind.FIXED_DISTANCE)
+                    onOpenPublishFixed()
+                },
+                enabled = connected && state.taskStartEnabled,
+            )
+            if (connected && !state.taskStartEnabled) {
                 Text(
-                    text = "每段执行前需人工确认，段间可手动微调车辆位置",
+                    text = "当前状态不允许发布（急停锁定／任务运行中／命令未确认）",
                     style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
+                    color = WarnOrange,
                 )
-
-                Spacer(Modifier.height(12.dp))
-
-                PrimaryActionButton(
-                    text = "定距布置 · 全自动驾驶",
-                    onClick = {
-                        vm.initDraft(TaskKind.FIXED_DISTANCE)
-                        onOpenPublishFixed()
-                    },
-                    enabled = connected && state.taskStartEnabled,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "发布后各路段自动接续执行，无需逐段确认",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
-
-                if (connected && !state.taskStartEnabled) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "当前状态不允许发布（急停锁定／任务运行中／命令未确认）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = WarnOrange,
-                    )
-                }
             }
 
             Spacer(Modifier.height(24.dp))

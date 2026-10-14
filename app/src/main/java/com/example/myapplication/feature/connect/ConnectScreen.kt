@@ -14,10 +14,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.DropdownMenu
@@ -25,7 +29,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +50,7 @@ import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.permission.rememberCameraPermissionState
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.NeutralGreyBg
@@ -73,7 +80,36 @@ fun ConnectScreen(
 
     val devices = state.deviceList
     val selected = devices.firstOrNull { it.id == state.selectedDeviceId } ?: devices.firstOrNull()
+    // 用户添加的设备（本机登记，可在「添加设备」弹窗内手动删除）
+    val customDevices by vm.customDevices.collectAsStateWithLifecycle(initialValue = emptyList())
     var menuExpanded by remember { mutableStateOf(false) }
+
+    // ── 添加设备（手动编号 / 扫码）──
+    var showAddDevice by remember { mutableStateOf(false) }
+    var addByScan by remember { mutableStateOf(false) }
+    var newDeviceId by remember { mutableStateOf("") }
+    val cameraPermission = rememberCameraPermissionState()
+    val scanLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        com.journeyapps.barcodescanner.ScanContract(),
+    ) { result ->
+        val contents = result.contents?.trim()
+        if (!contents.isNullOrEmpty()) {
+            // 识别成功：扫码相机界面由扫码库自动关闭，这里同步收起「添加设备」弹窗，全流程自动退出
+            vm.addDevice(contents)
+            newDeviceId = ""
+            showAddDevice = false
+        }
+    }
+
+    // 打开扫码相机（识别成功后相机界面自动关闭、弹窗自动收起，无需手动退出）
+    fun launchScan() {
+        scanLauncher.launch(
+            com.journeyapps.barcodescanner.ScanOptions()
+                .setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+                .setBeepEnabled(false)
+                .setPrompt("将设备二维码对准取景框"),
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -181,6 +217,18 @@ fun ConnectScreen(
                 Spacer(Modifier.height(8.dp))
                 SafetyText("该设备当前不可用，请选择其他设备后再连接。")
             }
+
+            // 添加设备：设备编号 或 扫码
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = { showAddDevice = true },
+                enabled = !connected,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("添加设备（编号／扫码）")
+            }
         }
 
         Spacer(Modifier.height(28.dp))
@@ -202,6 +250,130 @@ fun ConnectScreen(
 
         Spacer(Modifier.height(24.dp))
     }
+    }
+
+    // ── 添加设备对话框：手动输入设备编号 / 扫码（二选一）──
+    if (showAddDevice) {
+        AlertDialog(
+            onDismissRequest = { showAddDevice = false },
+            title = { Text("添加设备") },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !addByScan,
+                            onClick = { addByScan = false },
+                            label = { Text("输入编号") },
+                        )
+                        FilterChip(
+                            selected = addByScan,
+                            onClick = { addByScan = true },
+                            label = { Text("扫码") },
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    if (addByScan) {
+                        Text(
+                            "用相机扫描设备机身上的二维码，识别后自动加入设备列表。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        PrimaryActionButton(
+                            text = "打开扫码相机",
+                            onClick = {
+                                if (cameraPermission.granted) {
+                                    launchScan()
+                                } else {
+                                    // 首次授权后无需再点一次：拿到相机权限即自动进入扫码相机
+                                    cameraPermission.onRequestResult = { ok -> if (ok) launchScan() }
+                                    cameraPermission.request()
+                                }
+                            },
+                        )
+                        if (!cameraPermission.granted) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "扫码需要相机权限；未授权时可切到「输入编号」手动添加。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = WarnOrange,
+                            )
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = newDeviceId,
+                            onValueChange = { newDeviceId = it },
+                            label = { Text("设备编号") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "输入设备铭牌上的编号，或用「扫码」方式读取。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    // 已添加的设备：手动编号/扫码登记在本机，可逐台手动删除
+                    if (customDevices.isNotEmpty()) {
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "已添加的设备（本机）",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        customDevices.forEach { dev ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        dev.id,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    Text(
+                                        "本机添加 · 可手动删除",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                TextButton(onClick = { vm.removeDevice(dev.id) }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = WarningRed,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("删除", color = WarningRed)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.addDevice(newDeviceId)
+                        newDeviceId = ""
+                        showAddDevice = false
+                    },
+                    enabled = newDeviceId.isNotBlank(),
+                ) { Text("添加") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDevice = false }) { Text("取消") }
+            },
+        )
     }
 }
 

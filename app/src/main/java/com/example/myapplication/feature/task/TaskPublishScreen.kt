@@ -50,8 +50,6 @@ import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.feature.vehicle.VehicleViewModel
-import com.example.myapplication.ui.theme.InfoBlue
-import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
@@ -62,7 +60,7 @@ import kotlin.math.abs
 /**
  * 任务发布表单（手动遥控 / 定距布置 共用）。
  *
- * 字段：任务类型（只读）→ 任务名 → **路线设计** → 备注 → 预检区 → 发布。
+ * 字段：任务名 → **路线设计** → 备注 → 预检区 → 发布。
  * **发布即代表任务开始**，点击后直接跳转执行页（执行页无启动按钮）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,31 +99,7 @@ fun TaskPublishScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // ① 任务类型（只读）
-            SectionCard(title = "任务类型") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = draft.kind.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    StatusChip(draft.mode.label, InfoBlue, InfoBlueBg)
-                }
-                Text(
-                    text = when (draft.mode) {
-                        com.example.myapplication.core.model.vehicle.TaskMode.AUTO ->
-                            "全自动驾驶：发布后各路段自动接续执行，无需逐段确认。"
-
-                        com.example.myapplication.core.model.vehicle.TaskMode.SEGMENT_CONFIRM ->
-                            "分段确认：每段执行前需人工确认，段间可手动微调车辆位置。"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            // ①.5 小车与作业人员位置（发布前确认现场）
+            // ① 小车与作业人员位置（发布前确认现场）
             com.example.myapplication.core.ui.map.MapPanel(
                 vm = vm,
                 mapVm = mapVm,

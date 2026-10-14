@@ -96,6 +96,8 @@ dependencies {
     // 高德 3D 地图 SDK 已内置定位 API（com.amap.api.location.*），
     // 不要再单独引 com.amap.api:location，否则两类重复导致 checkDuplicateClasses 失败。
     implementation(libs.amap.map3d)
+    // 二维码扫码（设备连接页「添加设备 · 扫码」）
+    implementation(libs.zxing.android.embedded)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

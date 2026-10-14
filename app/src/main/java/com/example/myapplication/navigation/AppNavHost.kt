@@ -117,15 +117,12 @@ fun AppNavHost() {
                 )
             }
 
-            // ② 开始作业页：只有两个入口
+            // ② 开始作业页：单一入口「开始新任务」（定距布置 · 全自动驾驶）
             composable(Routes.HOME) {
                 HomeScreen(
                     vm = vm,
                     onOpenPublishFixed = {
                         navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
-                    },
-                    onOpenPublishManual = {
-                        navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_MANUAL}")
                     },
                     onBackToConnect = {
                         navController.navigate(Routes.CONNECT) {
