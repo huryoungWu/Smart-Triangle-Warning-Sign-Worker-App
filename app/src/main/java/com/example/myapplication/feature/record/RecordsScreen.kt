@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.WorkRecord
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
@@ -35,8 +36,6 @@ import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
 import com.example.myapplication.ui.theme.WarningRed
 import com.example.myapplication.ui.theme.WarningRedBg
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -46,7 +45,6 @@ import java.util.Locale
 @Composable
 fun RecordsScreen(vm: VehicleViewModel) {
     val records by vm.records.collectAsStateWithLifecycle(initialValue = emptyList())
-    val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
 
     Column(
         modifier = Modifier
@@ -73,7 +71,7 @@ fun RecordsScreen(vm: VehicleViewModel) {
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(records, key = { it.id }) { record ->
-                    RecordCard(record, timeFormat.format(Date(record.startedAt)))
+                    RecordCard(record, TimeFormat.format("MM-dd HH:mm", record.startedAt))
                 }
             }
         }

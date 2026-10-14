@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.geo.MapRenderModel
 import com.example.myapplication.core.model.risk.Accident
@@ -42,8 +43,6 @@ import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.WarnOrange
 import com.example.myapplication.ui.theme.WarnOrangeBg
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -183,7 +182,6 @@ fun RiskScreen(
 
 @Composable
 private fun AccidentCard(accident: Accident, onClick: () -> Unit) {
-    val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -200,7 +198,7 @@ private fun AccidentCard(accident: Accident, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = "${accident.type.label} · ${timeFormat.format(Date(accident.occurredAt))}",
+                    text = "${accident.type.label} · ${TimeFormat.format("MM-dd HH:mm", accident.occurredAt)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

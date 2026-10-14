@@ -69,6 +69,7 @@ import kotlin.math.abs
 @Composable
 fun TaskPublishScreen(
     vm: VehicleViewModel,
+    mapVm: com.example.myapplication.feature.map.MapViewModel,
     kind: TaskKind,
     onBack: () -> Unit,
     onPublished: () -> Unit,
@@ -124,6 +125,15 @@ fun TaskPublishScreen(
                 )
             }
 
+            // ①.5 小车与作业人员位置（发布前确认现场）
+            com.example.myapplication.core.ui.map.MapPanel(
+                vm = vm,
+                mapVm = mapVm,
+                height = 220.dp,
+                title = "现场位置",
+                showLegend = false,
+            )
+
             // ② 任务名
             SectionCard(title = "任务信息") {
                 OutlinedTextField(
@@ -155,9 +165,8 @@ fun TaskPublishScreen(
                         onActionChange = { action ->
                             vm.updateDraft { s ->
                                 val defaults = when (action) {
-                                    SegmentAction.FWD, SegmentAction.BACK -> 20.0
+                                    SegmentAction.FWD -> 20.0
                                     SegmentAction.TURN -> 90.0
-                                    SegmentAction.WAIT -> 5.0
                                 }
                                 s.copy(
                                     segments = s.segments.mapIndexed { i, x ->
@@ -381,10 +390,7 @@ private fun SegmentCard(
                 },
                 label = { Text("参数（${segment.action.unit}）") },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = if (segment.action == SegmentAction.WAIT) KeyboardType.Number
-                    else KeyboardType.Decimal,
-                ),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(

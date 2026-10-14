@@ -12,10 +12,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.VehicleUiState
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -30,7 +29,6 @@ fun DeviceStatusStrip(
 ) {
     val snapshot = state.snapshot
     val stale = state.isStale()
-    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     Column(modifier = modifier.fillMaxWidth()) {
         FlowRow(
@@ -69,7 +67,7 @@ fun DeviceStatusStrip(
             )
             if (state.lastUpdateAt > 0) {
                 Text(
-                    text = "最后更新 ${timeFormat.format(Date(state.lastUpdateAt))}",
+                    text = "最后更新 ${TimeFormat.format("HH:mm:ss", state.lastUpdateAt)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

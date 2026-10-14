@@ -56,12 +56,17 @@ class VehicleViewModel(
     private val workRecordRepository: WorkRecordRepository,
     private val settingsRepository: SettingsRepository,
     private val taskUploadRepository: com.example.myapplication.core.data.upload.TaskUploadRepository,
+    private val snapshotRepository: com.example.myapplication.core.data.media.SnapshotRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(VehicleUiState())
     val uiState: StateFlow<VehicleUiState> = _uiState.asStateFlow()
 
     val records: Flow<List<WorkRecord>> = workRecordRepository.records
+
+    /** 已抓拍的任务快照 */
+    val snapshots: Flow<List<com.example.myapplication.core.model.media.TaskSnapshot>> =
+        snapshotRepository.snapshots
 
     private var pollJob: Job? = null
     private var keepaliveJob: Job? = null
@@ -300,7 +305,7 @@ class VehicleViewModel(
                     finishedAt = System.currentTimeMillis(),
                 ),
                 dialog = AppDialog.Alert(
-                    "设备报告已完成",
+                    "报告已完成",
                     "车端报告已达到目标位置（目标 ${snapshot.task.targetM} 米，编码器估算 ${snapshot.task.traveledM} 米）。\n\n" +
                         "请人工现场核对：实际位置、车辆朝向、警示灯光是否正常。\n" +
                         "现场核验结果将与设备完成分开记录。",
@@ -513,8 +518,7 @@ class VehicleViewModel(
         }
         val spec = draft.copy(
             name = draft.name.ifBlank {
-                "布置任务-" + java.text.SimpleDateFormat("MMdd-HHmm", java.util.Locale.getDefault())
-                    .format(java.util.Date())
+                com.example.myapplication.core.util.TimeFormat.format("MMdd-HHmm", System.currentTimeMillis())
             },
         )
         _uiState.update { it.copy(draft = spec, activeSpec = spec) }
@@ -684,6 +688,33 @@ class VehicleViewModel(
         _uiState.update { it.copy(uploadRecord = r) }
     }
 
+    /**
+     * 抓拍快照（小车运行中）。
+     * 快照含图片 + 时间 + 事件类型，用于后续发给过往司机的预警信息。
+     */
+    fun captureSnapshot(eventLabel: String) {
+        viewModelScope.launch {
+            val spec = _uiState.value.activeSpec
+            val snap = com.example.myapplication.core.model.media.TaskSnapshot(
+                capturedAt = System.currentTimeMillis(),
+                taskName = spec?.name ?: "布置任务",
+                eventLabel = eventLabel,
+                imageUri = null,           // 当前无摄像头，占位；接摄像头后存实际图片
+                note = "演示占位快照",
+            )
+            snapshotRepository.capture(snap)
+            _uiState.update {
+                it.copy(
+                    dialog = AppDialog.Alert(
+                        "快照已保存",
+                        "已抓拍一张快照并保存本机。事件类型：" + eventLabel +
+                            "。该快照可与时间、事件类型一同用于预警信息；预警上传接口已预留，暂未启用。",
+                    ),
+                )
+            }
+        }
+    }
+
     fun dismissDialog() {
         _uiState.update { it.copy(dialog = null) }
     }
@@ -793,7 +824,13 @@ class VehicleViewModel(
             initializer {
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MyAppApplication
                 val sl = app.serviceLocator
-                VehicleViewModel(sl.deviceRepository, sl.workRecordRepository, sl.settingsRepository, sl.taskUploadRepository)
+                VehicleViewModel(
+                    sl.deviceRepository,
+                    sl.workRecordRepository,
+                    sl.settingsRepository,
+                    sl.taskUploadRepository,
+                    sl.snapshotRepository,
+                )
             }
         }
     }

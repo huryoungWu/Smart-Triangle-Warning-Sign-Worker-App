@@ -186,6 +186,7 @@ fun AppNavHost() {
                 val kind = if (kindToken == Routes.KIND_MANUAL) TaskKind.MANUAL else TaskKind.FIXED_DISTANCE
                 TaskPublishScreen(
                     vm = vm,
+                    mapVm = mapVm,
                     kind = kind,
                     onBack = { navController.popBackStack() },
                     onPublished = {

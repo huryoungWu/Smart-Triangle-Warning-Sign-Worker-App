@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.SafetyText
@@ -32,8 +33,6 @@ import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.di.DeviceTransport
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.feature.vehicle.VehicleViewModel
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -49,7 +48,6 @@ fun DeviceInfoScreen(
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snapshot = state.snapshot
     val transport = ServiceLocator.get(androidx.compose.ui.platform.LocalContext.current).transport
-    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     Scaffold(
         topBar = {
@@ -78,7 +76,7 @@ fun DeviceInfoScreen(
                 InfoRow("通信模式", if (transport == DeviceTransport.FAKE) "模拟设备（演示）" else "真实设备（HTTP）")
                 InfoRow(
                     "最近状态更新",
-                    if (state.lastUpdateAt > 0) timeFormat.format(Date(state.lastUpdateAt)) else "-",
+                    if (state.lastUpdateAt > 0) TimeFormat.format("HH:mm:ss", state.lastUpdateAt) else "-",
                 )
             }
 

@@ -30,6 +30,14 @@ class ServiceLocator(context: Context) {
 
     val workRecordRepository = WorkRecordRepository(context)
 
+    /** 任务快照本地存储（小车运行中抓拍） */
+    val snapshotRepository: com.example.myapplication.core.data.media.SnapshotRepository =
+        com.example.myapplication.core.data.media.LocalSnapshotRepository(context)
+
+    /** 预警信息上传（**接口预留，暂不实现**） */
+    val warningUploadRepository: com.example.myapplication.core.data.warning.WarningUploadRepository =
+        com.example.myapplication.core.data.warning.StubWarningUploadRepository()
+
     /** 道路风险数据源（演示数据，接真实数据源时切 HttpRiskRepository） */
     val riskRepository: com.example.myapplication.core.data.risk.RiskRepository =
         com.example.myapplication.core.data.risk.FakeRiskRepository()

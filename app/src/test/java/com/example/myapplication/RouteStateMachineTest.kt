@@ -65,18 +65,6 @@ class RouteStateMachineTest {
         assertEquals(SegmentRunState.WAITING_CONFIRM, s2.task.segments[1].state)
     }
 
-    @Test
-    fun `wait segment counts down then completes`() = runBlocking {
-        val repo = FakeDeviceRepository()
-        repo.startRoute(
-            TaskKind.FIXED_DISTANCE, TaskMode.AUTO,
-            listOf(seg(SegmentAction.WAIT, 1.0)),
-            LightMode.OFF,
-        ).getOrThrow()
-        repo.tick(6)
-        val s = repo.fetchStatus().getOrThrow()
-        assertEquals(TaskRunState.DONE, s.task.state)
-    }
 
     @Test
     fun `turn segment changes heading but not distance`() = runBlocking {

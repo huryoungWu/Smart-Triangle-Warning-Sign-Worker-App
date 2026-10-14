@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.risk.Accident
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
@@ -45,8 +46,6 @@ import com.example.myapplication.ui.theme.WarnOrange
 import com.example.myapplication.ui.theme.WarnOrangeBg
 import com.example.myapplication.ui.theme.WarningRed
 import com.example.myapplication.ui.theme.WarningRedBg
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -60,7 +59,6 @@ fun AccidentDetailScreen(
     accident: Accident,
     onBack: () -> Unit,
 ) {
-    val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     Scaffold(
         topBar = {
@@ -98,7 +96,7 @@ fun AccidentDetailScreen(
                 )
             }
             Text(
-                text = "发生时间：${timeFormat.format(Date(accident.occurredAt))}",
+                text = "发生时间：${TimeFormat.format("yyyy-MM-dd HH:mm", accident.occurredAt)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -243,14 +243,8 @@ class FakeDeviceRepository : DeviceRepository {
         }
         segments.forEach { seg ->
             val ok = when (seg.action) {
-                SegmentAction.FWD, SegmentAction.BACK ->
-                    seg.value in MIN_M..MAX_M
-
-                SegmentAction.TURN ->
-                    abs(seg.value) in MIN_DEG..MAX_DEG
-
-                SegmentAction.WAIT ->
-                    seg.value in MIN_S.toDouble()..MAX_S.toDouble()
+                SegmentAction.FWD -> seg.value in MIN_M..MAX_M
+                SegmentAction.TURN -> abs(seg.value) in MIN_DEG..MAX_DEG
             }
             if (!ok) {
                 return@command CmdAck(false, reason = "segment_out_of_range：路段参数超出允许范围")
@@ -266,7 +260,7 @@ class FakeDeviceRepository : DeviceRepository {
         beginSegment(0, autoStart = mode == TaskMode.AUTO)
 
         val totalM = segments
-            .filter { it.action == SegmentAction.FWD || it.action == SegmentAction.BACK }
+            .filter { it.action == SegmentAction.FWD }
             .sumOf { it.value }
 
         task = TaskInfo(
@@ -450,7 +444,7 @@ class FakeDeviceRepository : DeviceRepository {
         }
         val seg = routeSegments[idx]
         when (seg.action) {
-            SegmentAction.FWD, SegmentAction.BACK -> {
+            SegmentAction.FWD -> {
                 val step = MOVE_SPEED_MPS * dtSec
                 val done = (seg.value * seg.progress) + step
                 val progress = (done / seg.value).toFloat().coerceAtMost(1f)
@@ -478,14 +472,6 @@ class FakeDeviceRepository : DeviceRepository {
                 if (progress >= 1f) completeSegment(idx)
             }
 
-            SegmentAction.WAIT -> {
-                segElapsedSec += dtSec
-                val progress = (segElapsedSec / seg.value).toFloat().coerceAtMost(1f)
-                routeSegments[idx] = seg.copy(progress = progress)
-                motion = MotionState.IDLE
-                odo = odo.copy(speedMps = 0.0)
-                if (progress >= 1f) completeSegment(idx)
-            }
         }
         task = task.copy(segments = routeSegments, headingDeg = headingDeg)
     }
@@ -502,7 +488,7 @@ class FakeDeviceRepository : DeviceRepository {
                 resultNote = "route_done",
                 segments = routeSegments,
                 traveledM = routeSegments
-                    .filter { it.action == SegmentAction.FWD || it.action == SegmentAction.BACK }
+                    .filter { it.action == SegmentAction.FWD }
                     .sumOf { it.value },
             )
             motion = MotionState.IDLE
@@ -599,7 +585,5 @@ class FakeDeviceRepository : DeviceRepository {
         private const val MAX_M = 50.0
         private const val MIN_DEG = 5.0
         private const val MAX_DEG = 180.0
-        private const val MIN_S = 1.0
-        private const val MAX_S = 60.0
     }
 }

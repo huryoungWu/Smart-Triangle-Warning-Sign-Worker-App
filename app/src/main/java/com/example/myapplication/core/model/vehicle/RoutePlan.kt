@@ -10,12 +10,10 @@ import kotlin.math.abs
  * 发布即代表任务开始（执行页无启动按钮）。
  */
 
-/** 路线段动作 */
+/** 路线段动作（仅「前进」与「转向」） */
 enum class SegmentAction(val label: String, val unit: String, val token: String) {
     FWD("前进", "米", "fwd"),
-    BACK("后退", "米", "back"),
     TURN("转向", "度", "turn"),
-    WAIT("等待", "秒", "wait"),
 }
 
 /**
@@ -29,11 +27,8 @@ data class RouteSegment(
 ) {
     fun summary(): String = when (action) {
         SegmentAction.FWD -> "向前 ${fmt(value)} 米"
-        SegmentAction.BACK -> "向后 ${fmt(value)} 米"
         SegmentAction.TURN ->
             if (value < 0) "左转 ${abs(value).toInt()}°" else "右转 ${value.toInt()}°"
-
-        SegmentAction.WAIT -> "等待 ${value.toInt()} 秒"
     }
 
     private fun fmt(v: Double): String =
@@ -46,8 +41,6 @@ object SegmentRange {
     const val MAX_M = 50.0
     const val MIN_DEG = 5.0
     const val MAX_DEG = 180.0
-    const val MIN_S = 1
-    const val MAX_S = 60
     const val MAX_SEGMENTS = 10
     const val MAX_TOTAL_M = 200.0
 }
@@ -82,16 +75,13 @@ data class SegmentState(
 ) {
     fun summary(): String = RouteSegment(action = action, value = value).summary()
 
-    /** 段内进度描述，如「12.0/20 米」「已转 35/90°」「2/5 秒」 */
+    /** 段内进度描述，如「12.0/20 米」「已转 35/90°」 */
     fun progressText(): String = when (action) {
-        SegmentAction.FWD, SegmentAction.BACK ->
+        SegmentAction.FWD ->
             "${"%.1f".format(value * progress)}/${"%.1f".format(value)} 米"
 
         SegmentAction.TURN ->
             "已转 ${(abs(value) * progress).toInt()}/${abs(value).toInt()}°"
-
-        SegmentAction.WAIT ->
-            "${(value * progress).toInt()}/${value.toInt()} 秒"
     }
 }
 
@@ -109,10 +99,10 @@ data class TaskSpec(
     /** 预检·人工现场确认（并入表单底部） */
     val precheck: PrecheckHuman = PrecheckHuman(),
 ) {
-    /** 全路线行驶合计（前进+后退） */
+    /** 全路线行驶合计（前进段之和） */
     val totalM: Double
         get() = segments
-            .filter { it.action == SegmentAction.FWD || it.action == SegmentAction.BACK }
+            .filter { it.action == SegmentAction.FWD }
             .sumOf { it.value }
 
     /** 校验规则（纯函数，可单测）。返回空表示通过 */
@@ -127,21 +117,15 @@ data class TaskSpec(
         segments.forEachIndexed { i, s ->
             val no = i + 1
             when (s.action) {
-                SegmentAction.FWD, SegmentAction.BACK -> {
+                SegmentAction.FWD -> {
                     if (s.value < SegmentRange.MIN_M || s.value > SegmentRange.MAX_M) {
-                        errors.add("第 $no 段：${s.action.label}距离须在 ${SegmentRange.MIN_M}~${SegmentRange.MAX_M} 米")
+                        errors.add("第 $no 段：前进距离须在 ${SegmentRange.MIN_M}~${SegmentRange.MAX_M} 米")
                     }
                 }
 
                 SegmentAction.TURN -> {
                     if (abs(s.value) < SegmentRange.MIN_DEG || abs(s.value) > SegmentRange.MAX_DEG) {
                         errors.add("第 $no 段：转向角度须在 ${SegmentRange.MIN_DEG.toInt()}~${SegmentRange.MAX_DEG.toInt()} 度")
-                    }
-                }
-
-                SegmentAction.WAIT -> {
-                    if (s.value < SegmentRange.MIN_S || s.value > SegmentRange.MAX_S) {
-                        errors.add("第 $no 段：等待时间须在 ${SegmentRange.MIN_S}~${SegmentRange.MAX_S} 秒")
                     }
                 }
             }
@@ -179,9 +163,9 @@ data class TaskSpec(
             kind = TaskKind.MANUAL,
             mode = TaskMode.SEGMENT_CONFIRM,
             segments = listOf(
-                RouteSegment(action = SegmentAction.FWD, value = 10.0),
+                RouteSegment(action = SegmentAction.FWD, value = 20.0),
                 RouteSegment(action = SegmentAction.TURN, value = 90.0),
-                RouteSegment(action = SegmentAction.FWD, value = 10.0),
+                RouteSegment(action = SegmentAction.FWD, value = 20.0),
             ),
         )
 

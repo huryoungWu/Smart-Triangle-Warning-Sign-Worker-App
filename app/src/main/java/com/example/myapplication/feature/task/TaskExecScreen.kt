@@ -1,5 +1,6 @@
 package com.example.myapplication.feature.task
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,13 +8,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -26,24 +33,27 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.SegmentRunState
 import com.example.myapplication.core.model.vehicle.TaskMode
 import com.example.myapplication.core.model.vehicle.TaskRunState
 import com.example.myapplication.core.model.vehicle.WorkRecord
-import com.example.myapplication.core.ui.CommandTimeline
 import com.example.myapplication.core.ui.ConfirmDialog
 import com.example.myapplication.core.ui.DangerActionButton
 import com.example.myapplication.core.ui.DeviceStatusStrip
@@ -56,6 +66,7 @@ import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
+import java.util.Locale
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -89,6 +100,7 @@ fun TaskExecScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     var showCancelConfirm by remember { mutableStateOf(false) }
     var showBackConfirm by remember { mutableStateOf(false) }
+    var showManualPad by remember { mutableStateOf(false) }
 
     // 手动干预的三重停车保障（离开页面/切后台）
     DisposableEffect(lifecycleOwner) {
@@ -147,52 +159,98 @@ fun TaskExecScreen(
             DeviceStatusStrip(state)
             MapPanel(vm = vm, mapVm = mapVm, height = 200.dp, title = "小车实时位置", showLegend = false)
 
-            // 任务状态头卡
-            SectionCard(title = "任务进度") {
-                val segIdx = task?.segmentIndex ?: 0
-                val total = task?.segments?.size ?: spec?.segments?.size ?: 0
-                val currentSeg = task?.segments?.getOrNull(segIdx)
-                Text(
-                    text = when {
-                        task == null -> "任务尚未下发"
-                        task.state == TaskRunState.RUNNING && total > 0 ->
-                            "正在执行第 ${segIdx + 1}/$total 段：${currentSeg?.summary() ?: ""}"
+            // ── 实时视频与快照捕捉 ──
+            SectionCard(title = "实时视频") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                listOf(Color(0xFF37474F), Color(0xFF263238)),
+                            ),
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(42.dp),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "实时视频（演示占位 · 未接入车载摄像头）",
+                            color = Color.White.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
 
-                        task.state == TaskRunState.DONE -> "全部路段执行完成"
-                        task.state == TaskRunState.FAILED -> "任务失败，已停止后续路段"
-                        task.state == TaskRunState.CANCELED -> "任务已取消"
-                        else -> "任务状态：${task.state.label}"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { task?.progress ?: 0f },
-                    modifier = Modifier.fillMaxWidth().height(10.dp),
+                Spacer(Modifier.height(10.dp))
+                PrimaryActionButton(
+                    text = "捕捉快照",
+                    onClick = { vm.captureSnapshot(currentEventLabel(task?.state)) },
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "行驶距离由车轮编码器估算，非地图定位",
+                    "抓拍的快照含图片、时间与事件类型，可用于发给过往司机的预警信息。",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
             }
 
-            // 分段进度列表
-            val segs = task?.segments ?: spec?.segments?.map {
-                com.example.myapplication.core.model.vehicle.SegmentState(action = it.action, value = it.value)
-            } ?: emptyList()
-            if (segs.isNotEmpty()) {
-                SectionCard(title = "路线分段") {
-                    SegmentProgressList(segments = segs)
+
+
+
+            // 任务进度（命令五层，以进度条呈现）
+            SectionCard(title = "任务进度") {
+                val phase = ticket?.phase
+                val step = when (phase) {
+                    com.example.myapplication.core.model.vehicle.CommandPhase.SENDING -> 1
+                    com.example.myapplication.core.model.vehicle.CommandPhase.ACCEPTED -> 2
+                    com.example.myapplication.core.model.vehicle.CommandPhase.EXECUTING -> 3
+                    com.example.myapplication.core.model.vehicle.CommandPhase.DEVICE_DONE -> 4
+                    com.example.myapplication.core.model.vehicle.CommandPhase.VERIFIED -> 5
+                    else -> 0
+                }
+                val halted = phase == com.example.myapplication.core.model.vehicle.CommandPhase.FAILED ||
+                    phase == com.example.myapplication.core.model.vehicle.CommandPhase.UNKNOWN
+
+                Text(
+                    text = when {
+                        halted -> "已中断：${phase.label}"
+                        phase == null -> "待下发"
+                        else -> "第 $step/5 步 · ${phase.label}"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (halted) WarningRed else MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { step / 5f },
+                    modifier = Modifier.fillMaxWidth().height(10.dp),
+                    color = if (halted) WarningRed else MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "已发出 → 设备已接收 → 正在执行 → 报告完成 → 人工核验",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+                if (ticket?.note != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = ticket.note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (halted) WarningRed else NeutralGrey,
+                    )
                 }
             }
 
-            // 命令五层
-            SectionCard(title = "命令状态") {
-                CommandTimeline(current = ticket?.phase, note = ticket?.note)
-            }
 
             // 失败熔断
             if (task?.state == TaskRunState.FAILED) {
@@ -243,48 +301,14 @@ fun TaskExecScreen(
                 DangerActionButton(text = "停止并取消任务", onClick = { showCancelConfirm = true })
             }
 
-            // 手动干预（遥控器）
-            if (task?.state == TaskRunState.RUNNING || task == null || task.state != TaskRunState.DONE) {
-                SectionCard(title = "手动干预") {
-                    val segRunning = task?.segments?.any { it.state == SegmentRunState.RUNNING } == true
-                    val autoMode = spec?.mode == TaskMode.AUTO
-                    val canManual = state.motionCommandsEnabled && !segRunning &&
-                        !(autoMode && task?.state == TaskRunState.RUNNING)
-
-                    RemoteControlPad(
-                        enabled = canManual,
-                        holdingDir = state.holdingDir,
-                        onHoldStart = vm::onHoldStart,
-                        onHoldEnd = vm::onHoldEnd,
-                        onStopClick = vm::stopNormal,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = when {
-                            autoMode && task?.state == TaskRunState.RUNNING ->
-                                "全自动驾驶执行中，禁止手动抢占。"
-                            segRunning -> "本段执行中，禁止抢占；段间可微调。"
-                            else -> "按住方向键微调车辆位置，松手停车；微调不会推进或取消任务。"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (canManual) NeutralGrey else WarnOrange,
-                    )
-                }
-            }
+            // 手动干预：屏幕按钮，点击后弹出临时窗口使用遥控器
+            SecondaryActionButton(
+                text = "打开手动干预",
+                onClick = { showManualPad = true },
+            )
 
             // 完成 → 核验 → 上传
             if (task?.state == TaskRunState.DONE) {
-                Card(colors = CardDefaults.cardColors(containerColor = SafeGreenBg)) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("设备报告已完成", color = SafeGreen, fontWeight = FontWeight.Bold)
-                        Text(
-                            "请人工现场核对实际位置、朝向与灯光。\n核验结果与设备完成分开记录。",
-                            color = SafeGreen,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
 
                 if (state.pendingVerify != null) {
                     Spacer(Modifier.height(4.dp))
@@ -364,6 +388,54 @@ fun TaskExecScreen(
         }
     }
 
+    // 手动干预临时窗口：点击按钮才弹出，关闭时自动停车
+    if (showManualPad) {
+        val snap = state.snapshot
+        val segRunning = snap?.task?.segments?.any { it.state == SegmentRunState.RUNNING } == true
+        val autoMode = state.activeSpec?.mode == TaskMode.AUTO
+        val canManual = state.motionCommandsEnabled && !segRunning &&
+            !(autoMode && snap?.task?.state == TaskRunState.RUNNING)
+
+        AlertDialog(
+            onDismissRequest = {
+                vm.onLeaveManual()
+                showManualPad = false
+            },
+            title = { Text("手动干预") },
+            text = {
+                Column {
+                    RemoteControlPad(
+                        enabled = canManual,
+                        holdingDir = state.holdingDir,
+                        onHoldStart = vm::onHoldStart,
+                        onHoldEnd = vm::onHoldEnd,
+                        onStopClick = vm::stopNormal,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = when {
+                            autoMode && snap?.task?.state == TaskRunState.RUNNING ->
+                                "全自动驾驶执行中，禁止手动抢占。"
+                            segRunning -> "本段执行中，禁止抢占；段间可微调。"
+                            else -> "按住方向键微调车辆位置，松手停车；微调不会推进或取消任务。"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (canManual) NeutralGrey else WarnOrange,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.onLeaveManual()
+                        showManualPad = false
+                    },
+                ) { Text("关闭") }
+            },
+        )
+    }
+
     if (showCancelConfirm) {
         ConfirmDialog(
             title = "停止并取消任务？",
@@ -391,4 +463,13 @@ fun TaskExecScreen(
             onDismiss = { showBackConfirm = false },
         )
     }
+}
+
+/** 当前事件类型（写入快照，用于预警信息） */
+private fun currentEventLabel(state: TaskRunState?): String = when (state) {
+    TaskRunState.RUNNING -> "任务执行中"
+    TaskRunState.DONE -> "设备已到位"
+    TaskRunState.FAILED -> "任务异常"
+    TaskRunState.CANCELED -> "任务已中止"
+    else -> "现场抓拍"
 }
