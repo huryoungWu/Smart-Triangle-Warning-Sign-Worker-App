@@ -132,18 +132,18 @@ data class WorkRecord(
     val verifyResult: String = VERIFY_NOT_DONE,
     val verifyNote: String? = null,
     val abnormalNote: String? = null,
-    // ── 任务规格与上传状态（服务器尚未接入）──
+    // ── 任务规格与上传状态（UPLOAD_MODE=HTTP 时上传服务端；STUB 时仅本机）──
     val name: String? = null,
     val mode: TaskMode? = null,
     /** 发布时的路线原样保存 */
     val route: List<RouteSegment> = emptyList(),
-    /** local=仅本机 / pending=待上传 / uploaded=已模拟上传 / failed=上传失败 */
+    /** local=仅本机 / pending=待上传 / uploaded=已上传（HTTP：服务端单号；STUB：模拟单号）/ failed=上传失败 */
     val uploadState: String = UPLOAD_LOCAL,
     val uploadedAt: Long? = null,
     val serverId: String? = null,
 ) {
     companion object {
-        /** M09：记录仅保存在本机手机，不得宣称已上传平台 */
+        /** 记录始终在本机手机留一份；STUB 模式下不得宣称已上传平台，HTTP 模式展示真实服务端单号 */
         const val LOCAL_ONLY_NOTICE = "仅本机保存"
 
         const val UPLOAD_LOCAL = "local"
@@ -151,10 +151,11 @@ data class WorkRecord(
         const val UPLOAD_UPLOADED = "uploaded"
         const val UPLOAD_FAILED = "failed"
 
-        fun uploadStateLabel(v: String): String = when (v) {
+        /** [serverUpload]=true（UPLOAD_MODE=HTTP）时展示"已上传服务端"；默认 false 保持 STUB 安全文案 */
+        fun uploadStateLabel(v: String, serverUpload: Boolean = false): String = when (v) {
             UPLOAD_LOCAL -> "仅本机保存"
             UPLOAD_PENDING -> "已保存本机 · 待上传"
-            UPLOAD_UPLOADED -> "已保存本机 · 已模拟上传"
+            UPLOAD_UPLOADED -> if (serverUpload) "已保存本机 · 已上传服务端" else "已保存本机 · 已模拟上传"
             UPLOAD_FAILED -> "上传失败 · 可重试"
             else -> v
         }

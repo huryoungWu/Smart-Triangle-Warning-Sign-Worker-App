@@ -64,7 +64,7 @@ class WorkRecordRepository(private val context: Context) {
         context.recordDataStore.edit { it[KEY_JSON] = toJson(next) }
     }
 
-    /** 标记模拟上传成功 */
+    /** 标记上传成功（HTTP：真实服务端单号；STUB：占位单号） */
     suspend fun setUploaded(id: String, serverId: String, uploadedAt: Long) {
         val current = records.first()
         val next = current.map {

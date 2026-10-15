@@ -45,10 +45,19 @@ android {
 
     buildTypes {
         debug {
-            // debug 保留全部 ABI（模拟器 x86_64 需要出图）
+            // 只保留 arm64-v8a：
+            // ① 高德 SDK 只提供 arm 架构 so（无 x86/x86_64）；
+            // ② Android 的 ABI 是「按 App 选定」——APK 里同时有 x86_64 时，系统会锁定
+            //    primaryCpuAbi=x86_64，加载器只搜 x86_64 目录，arm64 的 so 永远不被搜索
+            //    （真实报错：dlopen failed: library "libAMapSDK_MAP_*.so" not found → 地图黑屏）。
+            // 真机为 arm64 原生运行；Google Play x86_64 模拟器的 abilist 含 arm64-v8a，
+            // 经系统 ARM 翻译（libndk_translation）加载出图。
             val k = amapProp("AMAP_KEY_DEBUG").ifBlank { amapProp("AMAP_KEY") }
             manifestPlaceholders["AMAP_KEY"] = k.ifBlank { "REPLACE_WITH_YOUR_AMAP_KEY" }
             buildConfigField("boolean", "AMAP_KEY_CONFIGURED", k.isNotBlank().toString())
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
         }
         release {
             val k = amapProp("AMAP_KEY_RELEASE").ifBlank { amapProp("AMAP_KEY") }

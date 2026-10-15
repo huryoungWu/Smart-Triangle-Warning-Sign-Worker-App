@@ -13,7 +13,8 @@ data class UploadResult(val serverId: String, val uploadedAt: Long)
  * - [com.example.myapplication.core.data.upload.HttpTaskUploadRepository] 服务端 `POST /api/v1/tasks`（见 docs/后端接口设计文档.md 第 8 节）
  * 装配与切换见 [com.example.myapplication.di.ServiceLocator.UPLOAD_MODE]；上传载荷契约见 [com.example.myapplication.core.data.upload.TaskUploadJson]。
  *
- * ⚠️ 数据真实性：占位模式下界面**不得宣称「已上传平台」**，只说「已模拟上传」。
+ * ⚠️ 数据真实性：STUB 模式下界面**不得宣称「已上传平台」**，只说「已模拟上传」；
+ * HTTP 模式按真实上传展示服务端单号（界面文案按 [com.example.myapplication.di.UploadMode] 区分）。
  */
 interface TaskUploadRepository {
     suspend fun upload(record: WorkRecord): Result<UploadResult>

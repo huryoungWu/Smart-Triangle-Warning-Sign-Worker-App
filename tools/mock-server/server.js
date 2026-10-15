@@ -23,6 +23,8 @@
 const http = require('http');
 const os = require('os');
 const zlib = require('zlib');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = Number(process.env.PORT || process.argv[2] || 8080);
 
@@ -435,6 +437,62 @@ const workerRisks = [];
 /** 快照图片存储（内存）：文件名 → {buffer, contentType}，经 /media/{name} 回放 */
 const mediaStore = new Map();
 
+// ══════════════════════════ 快照/媒体「保留在服务器端」（磁盘持久化） ══════════════════════════
+// 设计：视频流仍由服务器**实时自动生成**（makeFrame，不落盘）；但每次上传快照时
+// 服务端从视频流截出的那一帧（以及快照登记记录）**落盘保存**，服务重启后仍可回放/查询。
+// 目录结构：tools/mock-server/data/media/{snap-id}.png  +  data/state.json（快照记录/风险登记/序号）
+
+const DATA_DIR = path.join(__dirname, 'data');
+const MEDIA_DIR = path.join(DATA_DIR, 'media');
+const STATE_FILE = path.join(DATA_DIR, 'state.json');
+
+/** 媒体落盘（尽力而为：失败不影响接口响应） */
+function persistMedia(name, buffer) {
+  try {
+    fs.writeFileSync(path.join(MEDIA_DIR, name), buffer);
+  } catch (e) {
+    console.warn(`  [持久化] 媒体写盘失败 ${name}: ${e.message}`);
+  }
+}
+
+/** 状态落盘：任务记录（/tasks 上传）+ 快照记录 + 其登记的风险事件 + 全局序号（保证重启后编号不重复） */
+function persistState() {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ snapshots, workerRisks, workRecords, bizSeq }));
+  } catch (e) {
+    console.warn(`  [持久化] 状态写盘失败: ${e.message}`);
+  }
+}
+
+/** 启动时恢复：内存表 ← 磁盘（无文件/损坏时静默按首次运行处理） */
+function restoreFromDisk() {
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  let mediaCount = 0;
+  for (const f of fs.readdirSync(MEDIA_DIR)) {
+    if (!/\.(png|jpg)$/i.test(f)) continue;
+    mediaStore.set(f, {
+      buffer: fs.readFileSync(path.join(MEDIA_DIR, f)),
+      contentType: /\.png$/i.test(f) ? 'image/png' : 'image/jpeg',
+    });
+    mediaCount++;
+  }
+  try {
+    const st = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    snapshots.push(...(st.snapshots || []));
+    workerRisks.push(...(st.workerRisks || []));
+    workRecords.push(...(st.workRecords || []));
+    bizSeq = Math.max(bizSeq, Number(st.bizSeq) || 1);
+  } catch {
+    /* 首次运行或文件损坏：忽略 */
+  }
+  if (mediaCount || snapshots.length || workRecords.length) {
+    console.log(
+      `  已从 data/ 恢复：任务记录 ${workRecords.length} 条、快照记录 ${snapshots.length} 条、媒体文件 ${mediaCount} 个`,
+    );
+  }
+}
+restoreFromDisk();
+
 // ══════════════════════════ 占位图片（运行时生成 PNG，避免二进制硬编码） ══════════════════════════
 
 const CRC_TABLE = (() => {
@@ -741,6 +799,7 @@ const server = http.createServer(async (req, res) => {
     };
     workRecords.push(rec);
     log(`[记录] u=${currentUser(req)} ${rec.deviceId} ${body.kind || '-'} ${body.deviceResult || '-'} 核验=${body.verifyResult || '-'} → ${rec.id}`);
+    persistState(); // 作业记录落盘 → 重启后仍可查询（GET /api/v1/tasks）
     return sendJson(res, 201, { id: rec.id, receivedAt: rec.receivedAt });
   }
   if (path === '/api/v1/tasks' && req.method === 'GET') {
@@ -772,6 +831,7 @@ const server = http.createServer(async (req, res) => {
     const frame = makeFrame(frameIndex());
     const fileName = `${snap.id}.png`;
     mediaStore.set(fileName, { buffer: frame, contentType: 'image/png' });
+    persistMedia(fileName, frame); // 截帧落盘 → 重启后经 /media/{name} 仍可回放
     const snapUrl = `${baseUrl(req)}/media/${fileName}`;
     // 统一：上传的快照在服务端登记为「风险事件」，风险页（GET /api/v1/risks）即可看到（见 docs 第 9/12 节）
     // 坐标：带 lat/lng 用真实坐标；未带（演示阶段 APP 不上报坐标）则查询时就近于查询点放置（Mock 演示行为）
@@ -798,6 +858,7 @@ const server = http.createServer(async (req, res) => {
         `（从视频流截帧 ${(frame.length / 1024).toFixed(0)}KB）` +
         `（已登记风险事件 ${risk.id}）`,
     );
+    persistState(); // 快照记录 + 风险登记落盘 → 重启后列表仍可见
     return sendJson(res, 201, { id: snap.id, url: snapUrl, placeholder: true, riskId: risk.id });
   }
   if (path === '/api/v1/snapshots' && req.method === 'GET') {

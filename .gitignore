@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Mock 服务端运行时数据（快照媒体 + 状态，见 tools/mock-server/server.js 持久化段）
+tools/mock-server/data/

@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.WorkRecord
+import com.example.myapplication.di.ServiceLocator
+import com.example.myapplication.di.UploadMode
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.SafetyNoticeBanner
@@ -40,11 +42,13 @@ import java.util.Locale
 
 /**
  * 作业记录（M09）：记录开始时间、目标距离、设备结果、人工核验、异常备注。
- * **必须标注"仅本机保存"，不得宣称已上传平台。**
+ * **数据真实性**：记录始终在本机留一份；UPLOAD_MODE=HTTP 时同时上传服务端并展示服务端单号，
+ * STUB 模式下标注"仅本机保存"，不得宣称已上传平台。
  */
 @Composable
 fun RecordsScreen(vm: VehicleViewModel) {
     val records by vm.records.collectAsStateWithLifecycle(initialValue = emptyList())
+    val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
 
     Column(
         modifier = Modifier
@@ -54,16 +58,23 @@ fun RecordsScreen(vm: VehicleViewModel) {
     ) {
         Text("作业记录", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
-        // M09：必须标注"仅本机保存"，不得宣称已上传平台
         SafetyNoticeBanner(
             variant = BannerVariant.INFO,
-            text = "记录保存在本机手机（${WorkRecord.LOCAL_ONLY_NOTICE}）；上传为演示占位，未接入真实服务器。",
+            text = if (serverUpload) {
+                "记录保存在本机手机，并上传服务端（POST /api/v1/tasks）；服务端单号见各条记录。"
+            } else {
+                "记录保存在本机手机（${WorkRecord.LOCAL_ONLY_NOTICE}）；上传为演示占位，未接入真实服务器。"
+            },
         )
 
         if (records.isEmpty()) {
             SectionCard(title = "暂无作业记录") {
                 Text(
-                    "完成一次定距布置或一键布置后，记录会自动保存到本机（${WorkRecord.LOCAL_ONLY_NOTICE}）。",
+                    if (serverUpload) {
+                        "完成一次定距布置或一键布置后，记录会自动保存到本机并上传服务端。"
+                    } else {
+                        "完成一次定距布置或一键布置后，记录会自动保存到本机（${WorkRecord.LOCAL_ONLY_NOTICE}）。"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -88,6 +99,7 @@ fun RecordsScreen(vm: VehicleViewModel) {
 
 @Composable
 private fun RecordCard(record: WorkRecord, timeText: String) {
+    val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -149,11 +161,15 @@ private fun RecordCard(record: WorkRecord, timeText: String) {
                     WorkRecord.UPLOAD_FAILED -> WarningRed to WarningRedBg
                     else -> com.example.myapplication.ui.theme.WarnOrange to com.example.myapplication.ui.theme.WarnOrangeBg
                 }
-                StatusChip(WorkRecord.uploadStateLabel(record.uploadState), ufg, ubg)
+                StatusChip(WorkRecord.uploadStateLabel(record.uploadState, serverUpload), ufg, ubg)
             }
             if (record.uploadState == WorkRecord.UPLOAD_UPLOADED) {
                 Text(
-                    "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器",
+                    if (serverUpload) {
+                        "服务端单号 ${record.serverId ?: "-"}（Mock 联调服务端）"
+                    } else {
+                        "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )

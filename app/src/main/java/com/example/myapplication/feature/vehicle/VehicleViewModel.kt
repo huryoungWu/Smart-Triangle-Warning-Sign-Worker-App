@@ -13,6 +13,9 @@ import com.example.myapplication.core.data.api.TaskUploadRepository
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.data.record.WorkRecordRepository
 import com.example.myapplication.core.model.AppDialog
+import com.example.myapplication.core.util.TimeFormat
+import com.example.myapplication.di.ServiceLocator
+import com.example.myapplication.di.UploadMode
 import com.example.myapplication.core.model.vehicle.CommandKind
 import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.CommandTicket
@@ -692,7 +695,8 @@ class VehicleViewModel(
     }
 
     /**
-     * 执行上传（服务器尚未接入 -> 占位实现）。
+     * 执行上传：`UPLOAD_MODE=HTTP`（TRANSPORT=SERVER）时 POST 服务端 `/api/v1/tasks`，
+     * STUB 时仅占位模拟。成功后服务端单号写回本机记录（记录页可见）。
      * [auto] = true 表示核验通过后的自动上传，完成提示与手动提交区分文案。
      */
     private fun performUpload(id: String, auto: Boolean) {
@@ -706,6 +710,7 @@ class VehicleViewModel(
                 }
                 return@launch
             }
+            val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
             val result = taskUploadRepository.upload(record)
             result.onSuccess { r ->
                 workRecordRepository.setUploaded(id, r.serverId, r.uploadedAt)
@@ -713,12 +718,23 @@ class VehicleViewModel(
                 _uiState.update {
                     it.copy(
                         dialog = AppDialog.Alert(
-                            if (auto) "核验通过 · 已自动上传" else "已模拟上传",
+                            when {
+                                auto && serverUpload -> "核验通过 · 已自动上传"
+                                auto -> "核验通过 · 已模拟上传"
+                                serverUpload -> "上传成功"
+                                else -> "已模拟上传"
+                            },
                             buildString {
                                 if (auto) append("人工现场核验：通过。\n")
-                                append("任务记录已保存本机，并完成模拟上传（演示占位）。\n\n")
-                                append("占位单号：").append(r.serverId)
-                                append("\n未接入真实服务器，不构成正式上传。")
+                                if (serverUpload) {
+                                    append("任务记录已保存本机，并上传服务端（POST /api/v1/tasks）。\n\n")
+                                    append("服务端单号：").append(r.serverId)
+                                    append("\n上传时间：").append(TimeFormat.format("HH:mm:ss", r.uploadedAt))
+                                } else {
+                                    append("任务记录已保存本机，并完成模拟上传（演示占位）。\n\n")
+                                    append("占位单号：").append(r.serverId)
+                                    append("\n未接入真实服务器，不构成正式上传。")
+                                }
                             },
                         ),
                     )

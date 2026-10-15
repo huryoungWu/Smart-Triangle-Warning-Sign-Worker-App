@@ -68,6 +68,7 @@ import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.di.DeviceTransport
 import com.example.myapplication.di.ServiceLocator
+import com.example.myapplication.di.UploadMode
 import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import java.util.Locale
@@ -351,12 +352,13 @@ fun TaskExecScreen(
                     // 上传卡（核验通过后自动上传，不再需要手动「提交上传」）
                     val record = state.uploadRecord
                     val autoUploaded = record?.verifyResult == WorkRecord.VERIFY_PASS
+                    val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
                     // 上传成功后不再保留「任务上传」模块（成功反馈由上传完成弹窗给出）；
                     // 未上传/上传失败时保留卡片，供重试。
                     if (record?.uploadState != WorkRecord.UPLOAD_UPLOADED) {
                         SectionCard(title = "任务上传") {
                             StatusChip(
-                                text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL),
+                                text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL, serverUpload),
                                 fg = when (record?.uploadState) {
                                     WorkRecord.UPLOAD_UPLOADED -> SafeGreen
                                     WorkRecord.UPLOAD_FAILED -> WarningRed
@@ -372,12 +374,25 @@ fun TaskExecScreen(
                             Text(
                                 text = when {
                                     record?.uploadState == WorkRecord.UPLOAD_UPLOADED ->
-                                        "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
+                                        if (serverUpload) {
+                                            "服务端单号 ${record.serverId ?: "-"}。"
+                                        } else {
+                                            "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
+                                        }
                                     record?.uploadState == WorkRecord.UPLOAD_FAILED ->
                                         "上传失败，记录已保存本机，可重试。"
                                     autoUploaded ->
-                                        "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
-                                    else -> "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
+                                        if (serverUpload) {
+                                            "核验已通过，记录正在自动上传服务端…"
+                                        } else {
+                                            "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
+                                        }
+                                    else ->
+                                        if (serverUpload) {
+                                            "记录已保存本机，等待上传服务端。"
+                                        } else {
+                                            "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
+                                        }
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -386,7 +401,13 @@ fun TaskExecScreen(
                             // 核验通过 → 已自动上传，无需按钮；上传失败仍可重试；核验异常保留手动提交
                             if (!autoUploaded || record?.uploadState == WorkRecord.UPLOAD_FAILED) {
                                 PrimaryActionButton(
-                                    text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) "重试上传" else "提交上传（演示）",
+                                    text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) {
+                                        "重试上传"
+                                    } else if (serverUpload) {
+                                        "提交上传"
+                                    } else {
+                                        "提交上传（演示）"
+                                    },
                                     onClick = vm::uploadActiveRecord,
                                     enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
                                 )
