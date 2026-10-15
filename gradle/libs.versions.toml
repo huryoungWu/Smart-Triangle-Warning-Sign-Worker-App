@@ -13,6 +13,7 @@ datastore = "1.1.7"
 amap3dmap = "10.0.600"
 amapLocation = "6.4.9"
 zxingEmbedded = "4.3.0"
+media3 = "1.8.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,6 +41,9 @@ amap-map3d = { group = "com.amap.api", name = "3dmap", version.ref = "amap3dmap"
 # amap-location = { group = "com.amap.api", name = "location", version.ref = "amapLocation" }
 # 二维码扫码（添加设备 · 扫码方式）；含相机取景 + 运行时相机权限申请
 zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxingEmbedded" }
+# 编码视频流播放（HLS / HTTP-FLV / MP4 → ExoPlayer）；MJPEG 仍走自研 MjpegStreamView
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

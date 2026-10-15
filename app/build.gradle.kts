@@ -107,6 +107,9 @@ dependencies {
     implementation(libs.amap.map3d)
     // 二维码扫码（设备连接页「添加设备 · 扫码」）
     implementation(libs.zxing.android.embedded)
+    // 编码视频流（HLS / HTTP-FLV / MP4）→ VideoStreamView 的 ExoPlayer 路径；MJPEG 不依赖它
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
