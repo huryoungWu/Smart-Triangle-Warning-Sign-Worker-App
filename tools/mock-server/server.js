@@ -30,6 +30,12 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = Number(process.env.PORT || process.argv[2] || 8080);
+/** 监听网卡：默认全部（0.0.0.0 + ::），即局域网/公网可直接访问；限制只监听内网时设 HOST */
+const HOST = process.env.HOST || undefined;
+/** 请求体上限（字节）：超过回 413，见 readBody() */
+const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 2 * 1024 * 1024);
+/** CORS 允许来源：默认全开（联调方便）；公网部署建议收敛成具体来源 */
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 // ══════════════════════════ 小车状态机（对应 FakeDeviceRepository） ══════════════════════════
 
@@ -695,18 +701,42 @@ function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': CORS_ORIGIN,
   });
   res.end(body);
 }
 const sendError = (res, code, errCode, message, detail) =>
   sendJson(res, code, { error: { code: errCode, message, ...(detail ? { detail } : {}) } });
 
+/**
+ * 读完请求体（带上限）。
+ *
+ * 上限是必要的：原先无限制地把所有 chunk `Buffer.concat` 进内存，服务端一旦暴露到
+ * 公网/局域网，一个超大 body 就能把它打爆。超限时 **pause 而不是 destroy** ——
+ * destroy 会让客户端看到连接被重置而不是 413，且可能与已写出的响应竞态。
+ */
 function readBody(req) {
   return new Promise((resolve) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
+    let size = 0;
+    let settled = false;
+    const settle = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    req.on('data', (c) => {
+      if (settled) return;
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        settle({ tooLarge: true });
+        req.pause();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => settle({ raw: Buffer.concat(chunks) }));
+    req.on('error', () => settle({ raw: Buffer.alloc(0) }));
   });
 }
 
@@ -779,9 +809,26 @@ function baseUrl(req) {
 // ══════════════════════════ 路由 ══════════════════════════
 
 const server = http.createServer(async (req, res) => {
+  // CORS 预检必须在**读 body 之前**短路：原先全文件没有 OPTIONS 分支，
+  // 预检请求会一路掉到末尾的 404。APP 走原生 HttpURLConnection 不受影响，
+  // 但用浏览器/网页工具联调时会被挡在预检上。
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': CORS_ORIGIN,
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key',
+      'Access-Control-Max-Age': '86400',
+    });
+    return res.end();
+  }
+
   const url = new URL(req.url, `http://x`);
   const path = url.pathname;
-  const raw = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : Buffer.alloc(0);
+  const read = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : { raw: Buffer.alloc(0) };
+  if (read.tooLarge) {
+    return sendError(res, 413, 'payload_too_large', `请求体超过上限 ${MAX_BODY_BYTES} 字节`);
+  }
+  const raw = read.raw;
   const isJson = (req.headers['content-type'] || '').includes('json');
   let body = {};
   if (raw.length && isJson) {
@@ -832,7 +879,7 @@ const server = http.createServer(async (req, res) => {
     const m = /^Bearer\s+(.+)$/i.exec(req.headers['authorization'] || '');
     if (m) tokens.delete(m[1]);
     log(`[登出] ${m ? 'token 已失效' : '（无 token）'}`);
-    res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(204, { 'Access-Control-Allow-Origin': CORS_ORIGIN });
     return res.end();
   }
 
@@ -859,7 +906,7 @@ const server = http.createServer(async (req, res) => {
     if (!d.custom) return sendError(res, 400, 'cannot_unbind_builtin', '内置演示设备不可删除');
     devices.delete(id);
     log(`[设备] u=${currentUser(req)} 解绑 ${id}`);
-    res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(204, { 'Access-Control-Allow-Origin': CORS_ORIGIN });
     return res.end();
   }
   // ── 连接设备（连接即绑定）：username / password / device_code / binding_code / device_type ──
@@ -1122,12 +1169,12 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/v1/device/video/snapshot.jpg' && req.method === 'GET') {
     const dev = url.searchParams.get('deviceId') || 'TC-001';
     const png = makeFrame(frameIndex(), 320, 180, dev); // 该设备当前帧（时间驱动，与观看端一致）
-    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': CORS_ORIGIN });
     return res.end(png);
   }
   if (path === '/api/v1/device/video/stream' && req.method === 'GET') {
     const dev = url.searchParams.get('deviceId') || 'TC-001';
-    res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Access-Control-Allow-Origin': CORS_ORIGIN });
     log(`[视频流] 客户端接入 deviceId=${dev}（10fps 动画帧）`);
     const timer = setInterval(() => {
       const png = makeFrame(frameIndex(), 320, 180, dev); // 10fps；帧内容由时间驱动
@@ -1145,13 +1192,13 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         'Content-Type': stored.contentType,
         'Content-Length': stored.buffer.length,
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': CORS_ORIGIN,
       });
       return res.end(stored.buffer);
     }
     if (path.endsWith('.jpg') || path.endsWith('.png')) {
       const png = makeFrame(0);
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': CORS_ORIGIN });
       return res.end(png);
     }
     return sendError(res, 404, 'not_found', 'Mock 未提供该媒体文件（占位）');
@@ -1161,17 +1208,37 @@ const server = http.createServer(async (req, res) => {
   sendError(res, 404, 'not_found', `未知接口：${req.method} ${path}`);
 });
 
-server.listen(PORT, () => {
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`\n  端口 ${PORT} 已被占用：换端口启动（node server.js 8081）或先停掉占用的进程。\n`);
+    process.exit(1);
+  }
+  throw e;
+});
+
+server.listen(PORT, HOST, () => {
   console.log('');
   console.log('  三角警示牌 Mock 服务端已启动（Ctrl+C 停止）');
   console.log(`  本机访问:   http://127.0.0.1:${PORT}`);
+  const lan = [];
+  const global6 = [];
   for (const infos of Object.values(os.networkInterfaces())) {
     for (const info of infos || []) {
-      if (info.family === 'IPv4' && !info.internal) {
-        console.log(`  局域网访问: http://${info.address}:${PORT}   ← 真机同 Wi-Fi 时用这个地址`);
+      if (info.internal) continue;
+      if (info.family === 'IPv4') {
+        lan.push(`http://${info.address}:${PORT}`);
+      } else if (info.family === 'IPv6') {
+        // fe80:: 链路本地地址对客户端没用，只报全局地址（公网/局域网可达的那种）
+        if (/^fe80:/i.test(info.address)) continue;
+        global6.push(`http://[${info.address}]:${PORT}`);
       }
     }
   }
+  for (const u of lan) console.log(`  局域网访问: ${u}   ← 真机同 Wi-Fi / 同热点时用这个地址`);
+  for (const u of global6) console.log(`  IPv6 访问:  ${u}   ← 带方括号；设备需有 IPv6 且链路可达`);
   console.log('  自检:       http://127.0.0.1:' + PORT + '/  （浏览器打开可见设备列表）');
+  console.log('');
+  console.log('  ⚠ 本服务端无鉴权（无 token 时按默认用户 demo 处理）、无 IP 白名单、无限流。');
+  console.log('    局域网联调可直接用；暴露到公网前请先加访问控制（见 README「公网部署」）。');
   console.log('');
 });
