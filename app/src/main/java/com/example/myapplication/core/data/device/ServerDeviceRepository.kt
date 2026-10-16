@@ -1,6 +1,7 @@
 package com.example.myapplication.core.data.device
 
 import com.example.myapplication.core.data.api.CmdAck
+import com.example.myapplication.core.data.api.DeviceConnectRequest
 import com.example.myapplication.core.data.api.DeviceRepository
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
 import com.example.myapplication.core.model.vehicle.DeviceSummary
@@ -77,6 +78,30 @@ class ServerDeviceRepository(
         }.getOrElse { emptyList() }
     }
 
+    /**
+     * 连接设备（连接即绑定）：`POST /api/v1/devices/bind`，5 个字段
+     * `username` / `password` / `device_code` / `binding_code` / `device_type`（见 docs 第 4.2 节）。
+     *
+     * 失败时抛出**服务端可读原因**（如「绑定码不能为空」「该设备已被其他账号绑定」），
+     * 由连接页原样展示；成功后才由 ViewModel 启动 1Hz 状态轮询。
+     */
+    override suspend fun connect(request: DeviceConnectRequest): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject()
+                .put("device_code", request.deviceCode)
+                .put("binding_code", request.bindingCode)
+                .put("device_type", request.deviceType)
+            // 未登录（跳过登录）时省略账号密码：Mock 按默认账号处理，正式服务端由 Bearer 鉴权兜底
+            request.username?.takeIf { it.isNotBlank() }?.let { body.put("username", it) }
+            request.password?.takeIf { it.isNotBlank() }?.let { body.put("password", it) }
+            val device = JSONObject(request("POST", "$baseUrl/api/v1/devices/bind", body.toString()))
+                .optJSONObject("device")
+            // 以服务端返回的设备编号为准（编号可能有规范化），保证后续状态查询/命令对应同一台设备
+            val boundId = device?.optString("deviceId")?.takeIf { it.isNotBlank() }
+            if (boundId != null) selectedDeviceId = boundId
+        }
+    }
+
     override suspend fun fetchStatus(): Result<DeviceSnapshot> = withContext(Dispatchers.IO) {
         runCatching {
             val anchor = if (phoneLat.isFinite() && phoneLng.isFinite()) {
@@ -120,19 +145,21 @@ class ServerDeviceRepository(
         mode: TaskMode,
         segments: List<RouteSegment>,
         light: LightMode,
+        lane: Int?,
     ): Result<CmdAck> {
         val segArr = JSONArray()
         segments.forEach { seg ->
             segArr.put(JSONObject().put("action", seg.action.token).put("value", seg.value))
         }
-        return postCommand(
-            JSONObject()
-                .put("type", "task_start")
-                .put("kind", kind.token)
-                .put("mode", mode.token)
-                .put("light", light.token)
-                .put("segments", segArr),
-        )
+        val body = JSONObject()
+            .put("type", "task_start")
+            .put("kind", kind.token)
+            .put("mode", mode.token)
+            .put("light", light.token)
+            .put("segments", segArr)
+        // 作业车道（第几车道）：未填写则整字段省略（服务端按未标注处理）
+        lane?.let { body.put("lane", it) }
+        return postCommand(body)
     }
 
     override suspend fun confirmSegment(): Result<CmdAck> =
@@ -172,7 +199,8 @@ class ServerDeviceRepository(
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (code !in 200..299) {
-                throw IOException("服务端返回 HTTP $code：$text")
+                // 服务端错误体 {"error":{"message":...}} 优先取可读文案（连接失败/命令拒绝均原样展示给用户）
+                throw IOException(serverErrorMessage(code, text))
             }
             return text
         } catch (e: SocketTimeoutException) {
@@ -181,6 +209,12 @@ class ServerDeviceRepository(
             conn.disconnect()
         }
     }
+
+    /** 错误体可读文案（无统一信封时回落到原始报文） */
+    private fun serverErrorMessage(code: Int, text: String): String =
+        runCatching { JSONObject(text).optJSONObject("error")?.optString("message") }
+            .getOrNull()?.takeIf { it.isNotBlank() }
+            ?: "服务端返回 HTTP $code：$text"
 
     private val MoveDir.dirToken: String
         get() = when (this) {

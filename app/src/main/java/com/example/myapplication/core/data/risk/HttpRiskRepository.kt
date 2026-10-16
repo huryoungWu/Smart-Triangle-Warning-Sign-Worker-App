@@ -57,6 +57,8 @@ class HttpRiskRepository(
                         lng = lng,
                         occurredAt = o.optLong("occurredAt"),
                         description = o.optString("description"),
+                        // 占用车道（第几车道）：缺字段/null/0 一律视作未标注
+                        lane = o.optInt("lane", 0).takeIf { it > 0 },
                         hasPhoto = o.optBoolean("hasPhoto", false),
                         hasVideo = o.optBoolean("hasVideo", false),
                         photoUrls = o.optJSONArray("photoUrls")?.let { arr ->
@@ -66,7 +68,13 @@ class HttpRiskRepository(
                                 }
                             }
                         } ?: emptyList(),
-                        videoUrl = o.optString("videoUrl", null)?.takeIf { it.isNotBlank() },
+                        // 注意：JSON null 必须判 isNull —— optString 对 null 值会返回字符串 "null"，
+                        // 会被当成有效地址去拉流（曾导致「无视频」的事故显示「视频流不可用」）
+                        videoUrl = if (o.isNull("videoUrl")) {
+                            null
+                        } else {
+                            o.optString("videoUrl", null)?.takeIf { it.isNotBlank() }
+                        },
                     ),
                 )
             }

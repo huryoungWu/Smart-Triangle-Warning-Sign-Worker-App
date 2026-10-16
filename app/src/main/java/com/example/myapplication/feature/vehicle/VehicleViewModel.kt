@@ -67,6 +67,8 @@ class VehicleViewModel(
     /** 快照上传（SERVER 模式启用；演示模式为 null，仅存本机） */
     private val snapshotUploadRepository: SnapshotUploadRepository?,
     private val deviceRegistryRepository: com.example.myapplication.core.data.device.DeviceRegistryRepository,
+    /** 登录会话：连接设备时把**登录账号与密码**随绑定请求上报（见 [connect]） */
+    private val authRepository: com.example.myapplication.core.data.api.AuthRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(VehicleUiState())
@@ -221,11 +223,26 @@ class VehicleViewModel(
 
     // ==================== M01 设备连接 ====================
 
-    /** 连接设备：只有收到有效状态才显示"已连接"（M01） */
-    fun connect() {
+    /**
+     * 连接设备（M01）：**先带绑定码连接（连接即绑定）**，成功后才开始 1Hz 状态轮询。
+     *
+     * 连接请求 5 个字段：登录账号/密码（[authRepository] 登录后带入，未登录省略）+ 设备编号
+     * （[VehicleUiState.selectedDeviceId]）+ [bindingCode]（用户输入）+ 设备类型（默认 `triangle`）。
+     * 连接失败（绑定码错误/已被绑定/设备不存在）保持未连接并原样展示服务端原因。
+     */
+    fun connect(bindingCode: String) {
         if (pollJob?.isActive == true) return
-        // 把所选设备 id 下发到设备层（Fake / 服务端实现据此回对应设备信息与路由命令）
         val selectedId = _uiState.value.selectedDeviceId
+        if (selectedId.isBlank()) {
+            rejectMotion("请先选择要连接的设备")
+            return
+        }
+        val code = bindingCode.trim()
+        if (code.isEmpty()) {
+            rejectMotion("请输入绑定码（设备铭牌上的绑定码），才能连接设备")
+            return
+        }
+        // 把所选设备 id 下发到设备层（Fake / 服务端实现据此回对应设备信息与路由命令）
         (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let {
             it.selectedDeviceId = selectedId
         }
@@ -234,6 +251,30 @@ class VehicleViewModel(
         }
         _uiState.update { it.copy(connection = ConnectionPhase.CONNECTING) }
         pollJob = viewModelScope.launch {
+            val credentials = authRepository.currentCredentials
+            val connected = deviceRepository.connect(
+                com.example.myapplication.core.data.api.DeviceConnectRequest(
+                    username = credentials?.username,
+                    password = credentials?.password,
+                    deviceCode = selectedId,
+                    bindingCode = code,
+                    deviceType = com.example.myapplication.core.model.vehicle.DeviceType.TRIANGLE,
+                ),
+            )
+            if (connected.isFailure) {
+                val reason = connected.exceptionOrNull()?.message ?: "网络异常"
+                _uiState.update {
+                    it.copy(
+                        connection = ConnectionPhase.DISCONNECTED,
+                        dialog = AppDialog.Warn(
+                            "连接失败",
+                            "设备 $selectedId 连接失败：$reason\n\n" +
+                                "请核对设备编号与绑定码（设备铭牌上）后重试；若设备已被其他账号绑定，请先在设备台账中确认归属。",
+                        ),
+                    )
+                }
+                return@launch
+            }
             while (isActive) {
                 val result = deviceRepository.fetchStatus()
                 result.onSuccess { snapshot ->
@@ -418,6 +459,7 @@ class VehicleViewModel(
                     verifyResult = WorkRecord.VERIFY_NOT_DONE,
                     name = activeSpecRef?.name,
                     mode = activeSpecRef?.mode,
+                    lane = activeSpecRef?.lane,
                     route = activeSpecRef?.segments?.map {
                         RouteSegment(action = it.action, value = it.value)
                     } ?: emptyList(),
@@ -469,6 +511,8 @@ class VehicleViewModel(
                     deviceResult = result,
                     deviceResultNote = note,
                     verifyResult = WorkRecord.VERIFY_NOT_DONE,
+                    // 作业车道：与发布时一致（异常结束时同样留痕，便于记录页/事故核对）
+                    lane = activeSpecRef?.lane,
                 ),
             )
         }
@@ -658,7 +702,7 @@ class VehicleViewModel(
         activeSpecRef = spec
 
         sendCommand(CommandKind.TASK_START, trackTicket = true) {
-            deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun)
+            deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun, spec.lane)
         }
     }
 
@@ -676,7 +720,7 @@ class VehicleViewModel(
         activeRecordId = UUID.randomUUID().toString()
         activeRecordStartedAt = System.currentTimeMillis()
         sendCommand(CommandKind.TASK_START, trackTicket = true) {
-            deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun)
+            deviceRepository.startRoute(spec.kind, spec.mode, spec.segments, spec.lightOnRun, spec.lane)
         }
     }
 
@@ -932,6 +976,7 @@ class VehicleViewModel(
             val snapshot = com.example.myapplication.core.model.media.TaskSnapshot(
                 capturedAt = System.currentTimeMillis(),
                 taskName = spec?.name ?: "布置任务",
+                lane = spec?.lane,         // 作业车道：服务端登记风险事件时带上
                 eventLabel = eventLabel,
                 imageUri = null,           // 当前无摄像头，占位；接摄像头后存实际图片
                 note = note,
@@ -1062,6 +1107,7 @@ class VehicleViewModel(
                     sl.snapshotRepository,
                     sl.snapshotUploadRepository,
                     sl.deviceRegistryRepository,
+                    sl.authRepository,
                 )
             }
         }

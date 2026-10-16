@@ -98,6 +98,7 @@ class WorkRecordRepository(private val context: Context) {
                     .put("abnormalNote", r.abnormalNote)
                     .put("name", r.name)
                     .put("mode", r.mode?.name)
+                    .put("lane", r.lane ?: 0)          // 0 = 未填写/未标注
                     .put("route", org.json.JSONArray().apply {
                         r.route.forEach { seg ->
                             put(
@@ -159,6 +160,7 @@ class WorkRecordRepository(private val context: Context) {
                             mode = o.optString("mode", null)
                                 ?.takeIf { it.isNotBlank() }
                                 ?.let { runCatching { TaskMode.valueOf(it) }.getOrNull() },
+                            lane = o.optInt("lane", 0).takeIf { it > 0 },
                             route = parseRoute(o.optJSONArray("route")),
                             uploadState = o.optString("uploadState", WorkRecord.UPLOAD_LOCAL),
                             uploadedAt = o.optLong("uploadedAt", 0L).takeIf { it > 0 },

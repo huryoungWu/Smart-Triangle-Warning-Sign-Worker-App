@@ -13,7 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -28,9 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,10 +37,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.model.vehicle.LaneRange
 import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.SegmentAction
 import com.example.myapplication.core.model.vehicle.SegmentRange
 import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
@@ -76,212 +75,229 @@ fun TaskPublishScreen(
     val draft = state.draft
     val errors = draft.validate()
     val deviceOk = state.deviceConditions().all { it.second }
+    // 作业车道未填写或越界（必填项，随任务下发/上传）
+    val laneInvalid = draft.lane == null || draft.lane !in LaneRange.MIN..LaneRange.MAX
 
     LaunchedEffect(kind) { vm.initDraft(kind) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("发布任务") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PageTitle("发布任务", onBack = onBack)
+
+        // ① 小车与作业人员位置（发布前确认现场）
+        com.example.myapplication.core.ui.map.MapPanel(
+            vm = vm,
+            mapVm = mapVm,
+            height = 220.dp,
+            title = "现场位置",
+            showLegend = false,
+        )
+
+        // ② 任务名 + 作业车道
+        SectionCard(title = "任务信息") {
+            OutlinedTextField(
+                value = draft.name,
+                onValueChange = { vm.updateDraft { s -> s.copy(name = it) } },
+                label = { Text("任务名（留空自动生成）") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            // 作业车道（第几车道，1~8）：**必填**，随任务下发/上传，风险事件同步标注
+            OutlinedTextField(
+                value = draft.lane?.toString() ?: "",
+                onValueChange = { text ->
+                    val digits = text.filter { it.isDigit() }.take(2)
+                    vm.updateDraft { s -> s.copy(lane = digits.toIntOrNull()) }
                 },
+                label = { Text("作业车道（第几车道）") },
+                placeholder = { Text("${LaneRange.MIN}~${LaneRange.MAX}") },
+                singleLine = true,
+                isError = laneInvalid,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
             )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // ① 小车与作业人员位置（发布前确认现场）
-            com.example.myapplication.core.ui.map.MapPanel(
-                vm = vm,
-                mapVm = mapVm,
-                height = 220.dp,
-                title = "现场位置",
-                showLegend = false,
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "填写 ${LaneRange.MIN}~${LaneRange.MAX} 的整数（如 2 = 第 2 车道）；发布任务必填，随任务一并上报。",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (laneInvalid) WarningRed else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = draft.note,
+                onValueChange = { vm.updateDraft { s -> s.copy(note = it) } },
+                label = { Text("备注（可选）") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
-            // ② 任务名
-            SectionCard(title = "任务信息") {
-                OutlinedTextField(
-                    value = draft.name,
-                    onValueChange = { vm.updateDraft { s -> s.copy(name = it) } },
-                    label = { Text("任务名（留空自动生成）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = draft.note,
-                    onValueChange = { vm.updateDraft { s -> s.copy(note = it) } },
-                    label = { Text("备注（可选）") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+        // ③ 路线设计（核心）
+        SectionCard(title = "路线设计（${draft.segments.size} 段 · 行驶合计 ${"%.1f".format(draft.totalM)} 米）") {
+            SafetyText("路线各段将按顺序执行；每段动作与参数如下。")
 
-            // ③ 路线设计（核心）
-            SectionCard(title = "路线设计（${draft.segments.size} 段 · 行驶合计 ${"%.1f".format(draft.totalM)} 米）") {
-                SafetyText("路线各段将按顺序执行；每段动作与参数如下。")
-
-                draft.segments.forEachIndexed { index, seg ->
-                    SegmentCard(
-                        index = index,
-                        segment = seg,
-                        isFirst = index == 0,
-                        isLast = index == draft.segments.lastIndex,
-                        onActionChange = { action ->
-                            vm.updateDraft { s ->
-                                val defaults = when (action) {
-                                    SegmentAction.FWD -> 20.0
-                                    SegmentAction.TURN -> 90.0
-                                }
-                                s.copy(
-                                    segments = s.segments.mapIndexed { i, x ->
-                                        if (i == index) x.copy(action = action, value = defaults) else x
-                                    },
-                                )
-                            }
-                        },
-                        onValueChange = { v ->
-                            vm.updateDraft { s ->
-                                s.copy(segments = s.segments.mapIndexed { i, x ->
-                                    if (i == index) x.copy(value = v) else x
-                                })
-                            }
-                        },
-                        onMoveUp = {
-                            vm.updateDraft { s ->
-                                val list = s.segments.toMutableList()
-                                if (index > 0) {
-                                    val t = list[index - 1]
-                                    list[index - 1] = list[index]
-                                    list[index] = t
-                                }
-                                s.copy(segments = list)
-                            }
-                        },
-                        onMoveDown = {
-                            vm.updateDraft { s ->
-                                val list = s.segments.toMutableList()
-                                if (index < list.size - 1) {
-                                    val t = list[index + 1]
-                                    list[index + 1] = list[index]
-                                    list[index] = t
-                                }
-                                s.copy(segments = list)
-                            }
-                        },
-                        onDelete = {
-                            vm.updateDraft { s ->
-                                s.copy(segments = s.segments.filterIndexed { i, _ -> i != index })
-                            }
-                        },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                SecondaryActionButton(
-                    text = "添加路段",
-                    onClick = {
+            draft.segments.forEachIndexed { index, seg ->
+                SegmentCard(
+                    index = index,
+                    segment = seg,
+                    isFirst = index == 0,
+                    isLast = index == draft.segments.lastIndex,
+                    onActionChange = { action ->
                         vm.updateDraft { s ->
-                            s.copy(segments = s.segments + RouteSegment(action = SegmentAction.FWD, value = 20.0))
-                        }
-                    },
-                    enabled = draft.segments.size < SegmentRange.MAX_SEGMENTS,
-                )
-                if (draft.segments.size >= SegmentRange.MAX_SEGMENTS) {
-                    Text(
-                        "最多 ${SegmentRange.MAX_SEGMENTS} 段",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = NeutralGrey,
-                    )
-                }
-
-                if (errors.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Card(colors = CardDefaults.cardColors(containerColor = WarningRedBg)) {
-                        Column(Modifier.padding(10.dp)) {
-                            errors.forEach {
-                                Text("• $it", color = WarningRed, style = MaterialTheme.typography.labelSmall)
+                            val defaults = when (action) {
+                                SegmentAction.FWD -> 20.0
+                                SegmentAction.TURN -> 90.0
                             }
+                            s.copy(
+                                segments = s.segments.mapIndexed { i, x ->
+                                    if (i == index) x.copy(action = action, value = defaults) else x
+                                },
+                            )
                         }
-                    }
-                }
-            }
-
-            // ⑤ 预检区（原独立预检页并入）
-            SectionCard(title = "布置前预检") {
-                SafetyText("系统不检测障碍物与道路安全，以下为人工现场确认。")
-                Spacer(Modifier.height(8.dp))
-                PrecheckRow(
-                    com.example.myapplication.core.model.vehicle.PrecheckHuman.CONFIRM_ITEM,
-                    draft.precheck.confirmed,
-                ) {
-                    vm.togglePrecheck { it.copy(confirmed = !it.confirmed) }
-                }
-                if (!draft.precheck.allChecked) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "请勾选现场安全确认后才能发布",
-                        color = WarningRed,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-
-                Spacer(Modifier.height(12.dp))
-                Text("设备条件（自动判定）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                state.deviceConditions().forEach { (label, ok) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    ) {
-                        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                        if (ok) StatusChip("满足", SafeGreen, SafeGreenBg)
-                        else StatusChip("不满足", WarningRed, WarningRedBg)
-                    }
-                }
-                if (!deviceOk) {
-                    Text(
-                        "不满足原因：${state.deviceConditionFailureReasons().joinToString("；")}",
-                        color = WarningRed,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-
-            }
-
-            // ⑥ 发布
-            val canPublish = errors.isEmpty() && draft.precheck.allChecked && deviceOk && state.taskStartEnabled
-            PrimaryActionButton(
-                text = "发布任务（立即执行）",
-                onClick = {
-                    vm.publishDraft()
-                    onPublished()
-                },
-                enabled = canPublish,
-            )
-            if (!canPublish) {
-                Text(
-                    text = when {
-                        errors.isNotEmpty() -> "请先修正路线设计中的错误"
-                        !draft.precheck.allChecked -> "请完成预检勾选"
-                        !deviceOk -> "设备条件未满足，无法发布"
-                        else -> "当前状态不允许发布（急停锁定／任务运行中／命令未确认）"
                     },
+                    onValueChange = { v ->
+                        vm.updateDraft { s ->
+                            s.copy(segments = s.segments.mapIndexed { i, x ->
+                                if (i == index) x.copy(value = v) else x
+                            })
+                        }
+                    },
+                    onMoveUp = {
+                        vm.updateDraft { s ->
+                            val list = s.segments.toMutableList()
+                            if (index > 0) {
+                                val t = list[index - 1]
+                                list[index - 1] = list[index]
+                                list[index] = t
+                            }
+                            s.copy(segments = list)
+                        }
+                    },
+                    onMoveDown = {
+                        vm.updateDraft { s ->
+                            val list = s.segments.toMutableList()
+                            if (index < list.size - 1) {
+                                val t = list[index + 1]
+                                list[index + 1] = list[index]
+                                list[index] = t
+                            }
+                            s.copy(segments = list)
+                        }
+                    },
+                    onDelete = {
+                        vm.updateDraft { s ->
+                            s.copy(segments = s.segments.filterIndexed { i, _ -> i != index })
+                        }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            SecondaryActionButton(
+                text = "添加路段",
+                onClick = {
+                    vm.updateDraft { s ->
+                        s.copy(segments = s.segments + RouteSegment(action = SegmentAction.FWD, value = 20.0))
+                    }
+                },
+                enabled = draft.segments.size < SegmentRange.MAX_SEGMENTS,
+            )
+            if (draft.segments.size >= SegmentRange.MAX_SEGMENTS) {
+                Text(
+                    "最多 ${SegmentRange.MAX_SEGMENTS} 段",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+            }
+
+        }
+
+        // ⑤ 预检区（原独立预检页并入）
+        SectionCard(title = "布置前预检") {
+            SafetyText("系统不检测障碍物与道路安全，以下为人工现场确认。")
+            Spacer(Modifier.height(8.dp))
+            PrecheckRow(
+                com.example.myapplication.core.model.vehicle.PrecheckHuman.CONFIRM_ITEM,
+                draft.precheck.confirmed,
+            ) {
+                vm.togglePrecheck { it.copy(confirmed = !it.confirmed) }
+            }
+            if (!draft.precheck.allChecked) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "请勾选现场安全确认后才能发布",
                     color = WarningRed,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(12.dp))
+            Text("设备条件（自动判定）", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            state.deviceConditions().forEach { (label, ok) ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                ) {
+                    Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    if (ok) StatusChip("满足", SafeGreen, SafeGreenBg)
+                    else StatusChip("不满足", WarningRed, WarningRedBg)
+                }
+            }
+            if (!deviceOk) {
+                Text(
+                    "不满足原因：${state.deviceConditionFailureReasons().joinToString("；")}",
+                    color = WarningRed,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+
         }
+
+        // ⑥ 发布（表单校验错误统一在发布按钮上方列出：任务信息 / 路线设计）
+        val canPublish = errors.isEmpty() && draft.precheck.allChecked && deviceOk && state.taskStartEnabled
+        if (errors.isNotEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = WarningRedBg)) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(
+                        "请先修正以下错误项",
+                        color = WarningRed,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    errors.forEach {
+                        Text("• $it", color = WarningRed, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+        PrimaryActionButton(
+            text = "发布任务（立即执行）",
+            onClick = {
+                vm.publishDraft()
+                onPublished()
+            },
+            enabled = canPublish,
+        )
+        if (!canPublish) {
+            Text(
+                text = when {
+                    errors.isNotEmpty() -> "请先修正表单中的错误项"
+                    !draft.precheck.allChecked -> "请完成预检勾选"
+                    !deviceOk -> "设备条件未满足，无法发布"
+                    else -> "当前状态不允许发布（急停锁定／任务运行中／命令未确认）"
+                },
+                color = WarningRed,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
     }
 }
 

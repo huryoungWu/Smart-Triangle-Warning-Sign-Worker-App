@@ -29,6 +29,13 @@ data class Accident(
     val lng: Double,
     val occurredAt: Long,
     val description: String,
+    /**
+     * 事故/风险占用车道（第几车道，1~8）；
+     * null = 数据源未标注 —— **风险列表不展示该条目**（列表每行都要有「第 N 车道」，见
+     * [com.example.myapplication.core.model.risk.applyRiskView]）。
+     * 作业人员上报的风险事件取发布任务时的作业车道。
+     */
+    val lane: Int? = null,
     /** 是否有现场照片（演示：占位图） */
     val hasPhoto: Boolean = true,
     /** 是否有现场视频（演示：占位播放器） */
@@ -40,6 +47,10 @@ data class Accident(
 ) {
     val distanceText: String
         get() = if (distanceM < 1000) "${distanceM.toInt()} 米" else String.format("%.1f 公里", distanceM / 1000)
+
+    /** 「第 N 车道」文案；未标注时为 null（界面不显示该项） */
+    val laneText: String?
+        get() = lane?.let { "第 $it 车道" }
 }
 
 /** 风险提示页的搜索距离半径（公里）：固定 2 公里，不做设置项 */

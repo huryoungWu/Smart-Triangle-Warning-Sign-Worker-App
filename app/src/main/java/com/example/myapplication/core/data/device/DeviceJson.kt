@@ -45,6 +45,8 @@ object DeviceJson {
                 resultNote = taskObj?.optString("resultNote", null),
                 segments = parseSegments(taskObj?.optJSONArray("segments")),
                 headingDeg = taskObj?.optDouble("heading", 0.0) ?: 0.0,
+                // 作业车道（第几车道）：缺字段/null 一律视作未标注
+                lane = taskObj?.takeIf { !it.isNull("lane") }?.optInt("lane", 0)?.takeIf { it > 0 },
             ),
             odo = OdoInfo(
                 leftPulse = odoObj?.optLong("leftPulse", 0L) ?: 0L,

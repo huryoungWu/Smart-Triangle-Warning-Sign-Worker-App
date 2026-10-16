@@ -38,6 +38,15 @@ class HttpDeviceRepository(
         )
     }
 
+    /**
+     * 连接设备：**直连真机（旧方案）无账号/绑定码概念**（手机已在 TriangleCar 热点内），
+     * 直接成功；连接判定仍以能否读到 `/status` 为准（见 [fetchStatus]）。
+     * 走服务端的三层架构下由 [ServerDeviceRepository.connect] 上报 5 个字段。
+     */
+    override suspend fun connect(
+        request: com.example.myapplication.core.data.api.DeviceConnectRequest,
+    ): Result<Unit> = Result.success(Unit)
+
     override suspend fun fetchStatus(): Result<DeviceSnapshot> = withContext(Dispatchers.IO) {
         runCatching { DeviceJson.parseStatus(request("GET", "$baseUrl/status", body = null)) }
     }
@@ -65,6 +74,7 @@ class HttpDeviceRepository(
         mode: TaskMode,
         segments: List<RouteSegment>,
         light: LightMode,
+        lane: Int?,
     ): Result<CmdAck> {
         val segArr = org.json.JSONArray()
         segments.forEach { seg ->
@@ -74,14 +84,15 @@ class HttpDeviceRepository(
                     .put("value", seg.value),
             )
         }
-        return postCmd(
-            JSONObject()
-                .put("type", "task_start")
-                .put("kind", kind.token)
-                .put("mode", mode.token)
-                .put("light", light.token)
-                .put("segments", segArr),
-        )
+        val body = JSONObject()
+            .put("type", "task_start")
+            .put("kind", kind.token)
+            .put("mode", mode.token)
+            .put("light", light.token)
+            .put("segments", segArr)
+        // 作业车道（第几车道）：未填写则整字段省略
+        lane?.let { body.put("lane", it) }
+        return postCmd(body)
     }
 
     override suspend fun confirmSegment(): Result<CmdAck> =

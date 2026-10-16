@@ -31,6 +31,7 @@ import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
@@ -80,7 +81,7 @@ fun SettingsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        PageTitle("设置")
 
 
 

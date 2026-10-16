@@ -54,6 +54,10 @@ fun AMapCanvas(
     onMapReady: (AMap) -> Unit,
     modifier: Modifier = Modifier,
     extraMarkers: List<MapPin> = emptyList(),
+    /** 是否用**五角星**标出「我的位置」（作业人员位置）；风险页需要，作业页默认不显示 */
+    showPhoneMarker: Boolean = false,
+    /** 相机缩放级别：作业页 17（近景），风险页放大到能覆盖 2 公里半径的点位 */
+    cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -96,7 +100,7 @@ fun AMapCanvas(
         factory = { _ -> mapView },   // factory 收到 Context，返回已 remember 的 MapView
         update = { _ ->
             val aMap = aMapHolder.value ?: mapView.map.also { aMapHolder.value = it; onMapReady(it) }
-            renderMap(aMap, model, markers, polylines, cameraDone, extraMarkers)
+            renderMap(aMap, model, markers, polylines, cameraDone, extraMarkers, showPhoneMarker, cameraZoom)
         },
     )
 }
@@ -108,6 +112,8 @@ private fun renderMap(
     polylines: MutableMap<String, Polyline>,
     cameraDone: androidx.compose.runtime.MutableState<Boolean>,
     extraMarkers: List<MapPin> = emptyList(),
+    showPhoneMarker: Boolean = false,
+    cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
 ) {
     // ── 额外通用标记（事故点位等）──
     val extraIds = extraMarkers.map { it.id }.toSet()
@@ -118,6 +124,18 @@ private fun renderMap(
             aMap, markers, "extra:" + pin.id, pin.point,
             pin.title, pin.snippet, pin.colorArgb,
         )
+    }
+
+    // ---- 「我的位置」五角星（风险页：风险点位中要有自己所在位置的点位）----
+    val phone = model.phone
+    if (showPhoneMarker && phone != null) {
+        putMarker(
+            aMap, markers, KEY_PHONE_SELF, phone,
+            "我的位置", "作业人员当前定位（手机）", COLOR_PHONE_SELF,
+            icon = PHONE_STAR_BITMAP,
+        )
+    } else {
+        markers.remove(KEY_PHONE_SELF)?.remove()
     }
 
     // ---- 小车（GPS）橙点：车端上报，已转 GCJ-02 ----
@@ -167,7 +185,7 @@ private fun renderMap(
         else -> null
     }
     if (target != null) {
-        aMap.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(target.lat, target.lng), 17f))
+        aMap.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(target.lat, target.lng), cameraZoom))
         cameraDone.value = true
     }
 }
@@ -180,6 +198,8 @@ private fun putMarker(
     title: String,
     snippet: String,
     color: Int,
+    /** 自定义图标（默认位置球）；仅在**新建**标记时生效 */
+    icon: Bitmap? = null,
 ) {
     val latLng = LatLng(point.lat, point.lng)
     val existing = markers[key]
@@ -193,9 +213,47 @@ private fun putMarker(
                 .position(latLng)
                 .title(title)
                 .snippet(snippet)
-                .icon(BitmapDescriptorFactory.fromBitmap(circleBitmap(color))),
+                .icon(BitmapDescriptorFactory.fromBitmap(icon ?: circleBitmap(color))),
         )
     }
+}
+
+/** 五角星位图：「我的位置」（作业人员自身位置），与小车球/事故点位区分 */
+private fun starBitmap(color: Int): Bitmap {
+    val size = 64
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    val center = size / 2f
+    val outer = size / 2f - 4f
+    val inner = outer * 0.42f
+    val path = android.graphics.Path()
+    for (i in 0 until 10) {
+        val radius = if (i % 2 == 0) outer else inner
+        // 起始角 -90°：第一个尖角朝上
+        val angle = Math.toRadians(-90.0 + i * 36.0)
+        val x = center + (radius * Math.cos(angle)).toFloat()
+        val y = center + (radius * Math.sin(angle)).toFloat()
+        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    canvas.drawPath(
+        path,
+        Paint().apply {
+            this.color = color
+            isAntiAlias = true
+            style = Paint.Style.FILL
+        },
+    )
+    canvas.drawPath(
+        path,
+        Paint().apply {
+            this.color = android.graphics.Color.WHITE
+            isAntiAlias = true
+            style = Paint.Style.STROKE
+            strokeWidth = 4f
+        },
+    )
+    return bmp
 }
 
 private fun updateTrail(
@@ -249,6 +307,14 @@ private const val KEY_VEHICLE_GPS = "vehicle_gps"
 private const val KEY_VEHICLE_EST = "vehicle_est"
 private const val KEY_GPS_TRAIL = "gps_trail"
 private const val KEY_EST_LINE = "est_line"
+private const val KEY_PHONE_SELF = "phone_self"
 private val COLOR_VEHICLE_GPS = android.graphics.Color.parseColor("#E65100")
 private val COLOR_ESTIMATE = android.graphics.Color.parseColor("#757575")
 private val COLOR_ESTIMATE_LINE = android.graphics.Color.parseColor("#9E9E9E")
+private val COLOR_PHONE_SELF = android.graphics.Color.parseColor("#1565C0")
+
+/** 默认相机缩放级别（作业页近景） */
+const val DEFAULT_CAMERA_ZOOM = 17f
+
+/** 「我的位置」五角星位图（只建一次） */
+private val PHONE_STAR_BITMAP: Bitmap by lazy { starBitmap(COLOR_PHONE_SELF) }

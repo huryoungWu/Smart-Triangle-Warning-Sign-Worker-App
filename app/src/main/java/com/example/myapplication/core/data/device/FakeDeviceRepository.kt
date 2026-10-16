@@ -1,6 +1,7 @@
 package com.example.myapplication.core.data.device
 
 import com.example.myapplication.core.data.api.CmdAck
+import com.example.myapplication.core.data.api.DeviceConnectRequest
 import com.example.myapplication.core.data.api.DeviceRepository
 import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.GeoPoint
@@ -131,6 +132,22 @@ class FakeDeviceRepository : DeviceRepository {
 
     // ══════════════ 查询 ══════════════
 
+    /**
+     * 连接设备（连接即绑定）：模拟服务端的绑定码校验 —— **绑定码必填**（空 → 失败），
+     * 非空即通过（与服务端 Mock 的宽松口径一致，便于演示模式跑通全流程）。
+     */
+    override suspend fun connect(request: DeviceConnectRequest): Result<Unit> = mutex.withLock {
+        if (fault is FakeFault.LinkLoss) {
+            return Result.failure(IOException("无法连接设备（模拟失联）"))
+        }
+        if (request.bindingCode.isBlank()) {
+            return Result.failure(IOException("绑定码不能为空，请输入设备铭牌上的绑定码"))
+        }
+        delay(NETWORK_DELAY_MS * 4)   // 模拟一次绑定请求往返
+        selectedDeviceId = request.deviceCode
+        Result.success(Unit)
+    }
+
     override suspend fun fetchStatus(): Result<DeviceSnapshot> = mutex.withLock {
         if (fault is FakeFault.LinkLoss) {
             return Result.failure(IOException("无法连接设备（模拟失联）"))
@@ -230,6 +247,7 @@ class FakeDeviceRepository : DeviceRepository {
         mode: TaskMode,
         segments: List<RouteSegment>,
         light: LightMode,
+        lane: Int?,
     ): Result<CmdAck> = command {
         if (estopLocked || this.mode == VehicleMode.SAFE_STOP) {
             return@command CmdAck(false, reason = "estop_locked：急停锁定中，禁止启动任务")
@@ -276,6 +294,7 @@ class FakeDeviceRepository : DeviceRepository {
             resultNote = null,
             segments = routeSegments,
             headingDeg = headingDeg,
+            lane = lane,          // 作业车道随任务保存，/status 回显（与真机/服务端口径一致）
         )
         this.mode = if (mode == TaskMode.AUTO) VehicleMode.AUTO else VehicleMode.STANDBY
         motion = MotionState.IDLE

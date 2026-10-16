@@ -16,17 +16,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,9 +31,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.risk.Accident
-import com.example.myapplication.core.ui.MjpegStreamView
 import com.example.myapplication.core.ui.RemoteImage
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
@@ -51,9 +46,9 @@ import com.example.myapplication.ui.theme.WarningRedBg
 import java.util.Locale
 
 /**
- * 事故详情页：事故照片、事故视频、介绍。
+ * 事故详情页：事故照片、事故介绍、事故位置（**不含视频模块**，按需求移除）。
  *
- * ⚠️ 照片/视频为**演示占位**（无真实事故数据源），接通真实数据源后替换为实际媒体。
+ * ⚠️ 照片为**演示占位**（无真实事故数据源），接通真实数据源后替换为实际媒体。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,122 +57,95 @@ fun AccidentDetailScreen(
     onBack: () -> Unit,
 ) {
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("事故详情") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PageTitle("事故详情", onBack = onBack)
+
+        // 标题与标签
+        Text(
+            text = accident.title,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusChip(accident.type.label, WarningRed, WarningRedBg)
+            Spacer(Modifier.width(8.dp))
+            StatusChip(
+                text = "距您 ${accident.distanceText}",
+                fg = if (accident.distanceM < 1000) WarnOrange else MaterialTheme.colorScheme.primary,
+                bg = if (accident.distanceM < 1000) WarnOrangeBg else MaterialTheme.colorScheme.primaryContainer,
             )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // 标题与标签
-            Text(
-                text = accident.title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusChip(accident.type.label, WarningRed, WarningRedBg)
-                Spacer(Modifier.width(8.dp))
-                StatusChip(
-                    text = "距您 ${accident.distanceText}",
-                    fg = if (accident.distanceM < 1000) WarnOrange else MaterialTheme.colorScheme.primary,
-                    bg = if (accident.distanceM < 1000) WarnOrangeBg else MaterialTheme.colorScheme.primaryContainer,
-                )
-            }
-            Text(
-                text = "发生时间：${TimeFormat.format("yyyy-MM-dd HH:mm", accident.occurredAt)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            // ── 事故照片（服务端有真实图片地址时直接加载；无地址则回退占位）──
-            SectionCard(title = "事故照片") {
-                val photo = accident.photoUrls.firstOrNull()
-                when {
-                    photo != null -> RemoteImage(
-                        url = photo,
-                        contentDescription = "事故现场照片",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                    )
-
-                    accident.hasPhoto -> MediaPlaceholder(
-                        title = "事故现场照片",
-                        subtitle = "演示占位 · 未接入真实事故数据源",
-                        icon = Icons.Default.Warning,
-                        height = 180.dp,
-                    )
-
-                    else -> Text("暂无现场照片", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            // ── 事故视频（联调阶段播放事发设备的视频流，videoUrl 已带 deviceId）──
-            SectionCard(title = "事故视频") {
-                val video = accident.videoUrl
-                when {
-                    video != null -> MjpegStreamView(
-                        url = video,
-                        contentDescription = "事故视频",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                    )
-
-                    accident.hasVideo -> MediaPlaceholder(
-                        title = "点击查看视频",
-                        subtitle = "演示占位 · 未接入真实事故数据源",
-                        icon = Icons.Default.PlayArrow,
-                        height = 180.dp,
-                    )
-
-                    else -> Text("暂无现场视频", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            // ── 介绍 ──
-            SectionCard(title = "事故介绍") {
-                Text(
-                    text = accident.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            // ── 位置 ──
-            SectionCard(title = "事故位置") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = WarningRed)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = String.format("纬度 %.5f · 经度 %.5f", accident.lat, accident.lng),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                SafetyText("坐标为高德地图坐标系（GCJ-02），可直接用于导航。")
-            }
-
-            Spacer(Modifier.height(8.dp))
-            SafetyText("请谨慎驾驶，注意观察现场情况；以上信息仅供参考，以现场实际为准。")
-
-            Spacer(Modifier.height(24.dp))
         }
+        Text(
+            text = "发生时间：${TimeFormat.format("yyyy-MM-dd HH:mm", accident.occurredAt)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // 占用车道（第几车道）：数据源未标注时不显示
+        accident.laneText?.let { lane ->
+            Text(
+                text = "占用车道：$lane",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = WarnOrange,
+            )
+        }
+
+        // ── 事故照片（服务端有真实图片地址时直接加载；无地址则回退占位）──
+        SectionCard(title = "事故照片") {
+            val photo = accident.photoUrls.firstOrNull()
+            when {
+                photo != null -> RemoteImage(
+                    url = photo,
+                    contentDescription = "事故现场照片",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                )
+
+                accident.hasPhoto -> MediaPlaceholder(
+                    title = "事故现场照片",
+                    subtitle = "演示占位 · 未接入真实事故数据源",
+                    icon = Icons.Default.Warning,
+                    height = 180.dp,
+                )
+
+                else -> Text("暂无现场照片", color = NeutralGrey, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        // ── 介绍 ──
+        SectionCard(title = "事故介绍") {
+            Text(
+                text = accident.description,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+
+        // ── 位置 ──
+        SectionCard(title = "事故位置") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.LocationOn, contentDescription = null, tint = WarningRed)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = String.format("纬度 %.5f · 经度 %.5f", accident.lat, accident.lng),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            SafetyText("坐标为高德地图坐标系（GCJ-02），可直接用于导航。")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        SafetyText("请谨慎驾驶，注意观察现场情况；以上信息仅供参考，以现场实际为准。")
+
+        Spacer(Modifier.height(24.dp))
     }
 }
 

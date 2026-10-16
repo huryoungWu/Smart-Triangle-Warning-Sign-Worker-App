@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -28,9 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -49,8 +46,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.CommandPhase
+import com.example.myapplication.core.model.vehicle.LaneRange
 import com.example.myapplication.core.model.vehicle.SegmentRunState
 import com.example.myapplication.core.model.vehicle.TaskMode
 import com.example.myapplication.core.model.vehicle.TaskRunState
@@ -117,329 +116,307 @@ fun TaskExecScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(spec?.name ?: "任务执行", style = MaterialTheme.typography.titleMedium)
-                        if (spec != null) {
-                            Text(
-                                spec.mode.label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            if (task?.state == TaskRunState.RUNNING) showBackConfirm = true
-                            else onBack()
-                        },
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onOpenMap) {
-                        Icon(
-                            Icons.Default.Place,
-                            contentDescription = "地图",
-                        )
-                    }
-                },
-            )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PageTitle(
+        text = spec?.name ?: "任务执行",
+        subtitle = spec?.let { "${it.mode.label} · ${it.laneLabel()}" },
+        onBack = { if (task?.state == TaskRunState.RUNNING) showBackConfirm = true else onBack() },
+        trailing = {
+            IconButton(onClick = onOpenMap) {
+                Icon(Icons.Default.Place, contentDescription = "地图")
+            }
         },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            DeviceStatusStrip(state)
-            MapPanel(vm = vm, mapVm = mapVm, height = 200.dp, title = "小车实时位置", showLegend = false)
+        )
 
-            // ── 实时视频与快照捕捉 ──
-            SectionCard(title = "实时视频") {
-                val context = LocalContext.current
-                val sl = remember { ServiceLocator.get(context) }
-                // 联调模式：播放服务端**该设备的**视频流（按 deviceId 各一路；快照即从该流截帧）
-                val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
-                    "${ServiceLocator.SERVER_BASE_URL}/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
-                } else {
-                    null
-                }
-                if (streamUrl != null) {
-                    MjpegStreamView(
-                        url = streamUrl,
-                        contentDescription = "实时视频",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "服务端视频流（演示动画帧 · ${state.selectedDeviceId} 专属一路）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = NeutralGrey,
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    listOf(Color(0xFF37474F), Color(0xFF263238)),
-                                ),
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(42.dp),
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "实时视频（演示占位 · 未接入车载摄像头）",
-                                color = Color.White.copy(alpha = 0.8f),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    }
-                }
+        DeviceStatusStrip(state)
+        MapPanel(vm = vm, mapVm = mapVm, height = 200.dp, title = "小车实时位置", showLegend = false)
 
-                Spacer(Modifier.height(10.dp))
-                PrimaryActionButton(
-                    text = "捕捉快照",
-                    onClick = { vm.captureSnapshot(currentEventLabel(task?.state)) },
+        // ── 实时视频与快照捕捉 ──
+        SectionCard(title = "实时视频") {
+            val context = LocalContext.current
+            val sl = remember { ServiceLocator.get(context) }
+            // 联调模式：播放服务端**该设备的**视频流（按 deviceId 各一路；快照即从该流截帧）
+            val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
+                "${ServiceLocator.SERVER_BASE_URL}/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
+            } else {
+                null
+            }
+            if (streamUrl != null) {
+                MjpegStreamView(
+                    url = streamUrl,
+                    contentDescription = "实时视频",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(12.dp)),
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "任务开始、结束会自动各抓拍一张并弹窗提示；执行中间可自行补拍（可拍可不拍）。" +
-                        "快照上传后将在「风险」页作为作业人员上报展示，用于提醒过往司机。",
+                    "服务端视频流（演示动画帧 · ${state.selectedDeviceId} 专属一路）",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
-            }
-
-
-
-
-            // 任务进度（命令五层，以进度条呈现；口径与首页「正在执行的任务」一致）
-            SectionCard(title = "任务进度") {
-                val phase = ticket?.phase
-                val step = phase?.progressStep ?: 0
-                val halted = phase == CommandPhase.FAILED || phase == CommandPhase.UNKNOWN
-
-                Text(
-                    text = when {
-                        halted -> "已中断：${phase.label}"
-                        phase == null -> "待下发"
-                        else -> "第 $step/5 步 · ${phase.label}"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (halted) WarningRed else MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { step / 5f },
-                    modifier = Modifier.fillMaxWidth().height(10.dp),
-                    color = if (halted) WarningRed else MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "已发出 → 设备已接收 → 正在执行 → 报告完成 → 人工核验",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
-                if (ticket?.note != null) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = ticket.note,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (halted) WarningRed else NeutralGrey,
-                    )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                listOf(Color(0xFF37474F), Color(0xFF263238)),
+                            ),
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(42.dp),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "实时视频（演示占位 · 未接入车载摄像头）",
+                            color = Color.White.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
             }
 
+            Spacer(Modifier.height(10.dp))
+            PrimaryActionButton(
+                text = "捕捉快照",
+                onClick = { vm.captureSnapshot(currentEventLabel(task?.state)) },
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "任务开始、结束会自动各抓拍一张并弹窗提示；执行中间可自行补拍（可拍可不拍）。" +
+                    "快照上传后将在「风险」页作为作业人员上报展示，用于提醒过往司机。",
+                style = MaterialTheme.typography.labelSmall,
+                color = NeutralGrey,
+            )
+        }
 
-            // 失败熔断
-            if (task?.state == TaskRunState.FAILED) {
+
+
+
+        // 任务进度（命令五层，以进度条呈现；口径与首页「正在执行的任务」一致）
+        SectionCard(title = "任务进度") {
+            val phase = ticket?.phase
+            val step = phase?.progressStep ?: 0
+            val halted = phase == CommandPhase.FAILED || phase == CommandPhase.UNKNOWN
+
+            Text(
+                text = when {
+                    halted -> "已中断：${phase.label}"
+                    phase == null -> "待下发"
+                    else -> "第 $step/5 步 · ${phase.label}"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (halted) WarningRed else MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { step / 5f },
+                modifier = Modifier.fillMaxWidth().height(10.dp),
+                color = if (halted) WarningRed else MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "已发出 → 设备已接收 → 正在执行 → 报告完成 → 人工核验",
+                style = MaterialTheme.typography.labelSmall,
+                color = NeutralGrey,
+            )
+            if (ticket?.note != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = ticket.note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (halted) WarningRed else NeutralGrey,
+                )
+            }
+        }
+
+
+        // 失败熔断
+        if (task?.state == TaskRunState.FAILED) {
+            Card(colors = CardDefaults.cardColors(containerColor = WarningRedBg)) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("任务失败，已熔断", color = WarningRed, fontWeight = FontWeight.Bold)
+                    Text(
+                        "失败原因：${task.resultNote ?: "设备报告任务未完成"}\n" +
+                            "不会继续后续路段，剩余段已标「未执行」。",
+                        color = WarningRed,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+
+        // 下发失败 → 重新下发（不是"启动"，语义是重试发布命令）
+        if (task == null || task.state == TaskRunState.IDLE) {
+            if (ticket?.phase == CommandPhase.FAILED || ticket?.phase == CommandPhase.UNKNOWN) {
                 Card(colors = CardDefaults.cardColors(containerColor = WarningRedBg)) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("任务失败，已熔断", color = WarningRed, fontWeight = FontWeight.Bold)
+                        Text("任务下发失败", color = WarningRed, fontWeight = FontWeight.Bold)
                         Text(
-                            "失败原因：${task.resultNote ?: "设备报告任务未完成"}\n" +
-                                "不会继续后续路段，剩余段已标「未执行」。",
+                            ticket.note ?: "命令未被设备接受",
                             color = WarningRed,
                             style = MaterialTheme.typography.bodySmall,
                         )
-                    }
-                }
-            }
-
-            // 下发失败 → 重新下发（不是"启动"，语义是重试发布命令）
-            if (task == null || task.state == TaskRunState.IDLE) {
-                if (ticket?.phase == CommandPhase.FAILED || ticket?.phase == CommandPhase.UNKNOWN) {
-                    Card(colors = CardDefaults.cardColors(containerColor = WarningRedBg)) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text("任务下发失败", color = WarningRed, fontWeight = FontWeight.Bold)
-                            Text(
-                                ticket.note ?: "命令未被设备接受",
-                                color = WarningRed,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            PrimaryActionButton(text = "重新下发", onClick = vm::retryPublish)
-                            Spacer(Modifier.height(6.dp))
-                            SecondaryActionButton(text = "返回首页", onClick = onBack)
-                        }
-                    }
-                }
-            }
-
-            // 操作区（按状态切换）
-            if (task?.state == TaskRunState.RUNNING) {
-                val waiting = task.waitingConfirm
-                if (spec?.mode == TaskMode.SEGMENT_CONFIRM && waiting) {
-                    val seg = task.segments.firstOrNull { it.state == SegmentRunState.WAITING_CONFIRM }
-                    PrimaryActionButton(
-                        text = "执行本段（${seg?.summary() ?: ""}）",
-                        onClick = vm::confirmCurrentSegment,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                DangerActionButton(text = "停止并取消任务", onClick = { showCancelConfirm = true })
-            }
-
-            // 手动干预：屏幕按钮，点击后弹出临时窗口使用遥控器
-            SecondaryActionButton(
-                text = "打开手动干预",
-                onClick = { showManualPad = true },
-            )
-
-            // 完成 → 核验 → 上传
-            if (task?.state == TaskRunState.DONE) {
-
-                if (state.pendingVerify != null) {
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PrimaryActionButton(
-                            text = "核验通过",
-                            onClick = { vm.confirmVerify(true, "位置/朝向/灯光正常") },
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        DangerActionButton(
-                            text = "发现异常",
-                            onClick = { vm.confirmVerify(false, "现场异常，需处置") },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                } else {
-                    // 上传卡（核验通过后自动上传，不再需要手动「提交上传」）
-                    val record = state.uploadRecord
-                    val autoUploaded = record?.verifyResult == WorkRecord.VERIFY_PASS
-                    val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
-                    // 上传成功后不再保留「任务上传」模块（成功反馈由上传完成弹窗给出）；
-                    // 未上传/上传失败时保留卡片，供重试。
-                    if (record?.uploadState != WorkRecord.UPLOAD_UPLOADED) {
-                        SectionCard(title = "任务上传") {
-                            StatusChip(
-                                text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL, serverUpload),
-                                fg = when (record?.uploadState) {
-                                    WorkRecord.UPLOAD_UPLOADED -> SafeGreen
-                                    WorkRecord.UPLOAD_FAILED -> WarningRed
-                                    else -> WarnOrange
-                                },
-                                bg = when (record?.uploadState) {
-                                    WorkRecord.UPLOAD_UPLOADED -> SafeGreenBg
-                                    WorkRecord.UPLOAD_FAILED -> WarningRedBg
-                                    else -> WarnOrangeBg
-                                },
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = when {
-                                    record?.uploadState == WorkRecord.UPLOAD_UPLOADED ->
-                                        if (serverUpload) {
-                                            "服务端单号 ${record.serverId ?: "-"}。"
-                                        } else {
-                                            "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
-                                        }
-                                    record?.uploadState == WorkRecord.UPLOAD_FAILED ->
-                                        "上传失败，记录已保存本机，可重试。"
-                                    autoUploaded ->
-                                        if (serverUpload) {
-                                            "核验已通过，记录正在自动上传服务端…"
-                                        } else {
-                                            "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
-                                        }
-                                    else ->
-                                        if (serverUpload) {
-                                            "记录已保存本机，等待上传服务端。"
-                                        } else {
-                                            "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
-                                        }
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            // 核验通过 → 已自动上传，无需按钮；上传失败仍可重试；核验异常保留手动提交
-                            if (!autoUploaded || record?.uploadState == WorkRecord.UPLOAD_FAILED) {
-                                PrimaryActionButton(
-                                    text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) {
-                                        "重试上传"
-                                    } else if (serverUpload) {
-                                        "提交上传"
-                                    } else {
-                                        "提交上传（演示）"
-                                    },
-                                    onClick = vm::uploadActiveRecord,
-                                    enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                SecondaryActionButton(text = "稍后上传", onClick = onBack)
-                            }
-                        }
-                    }
-
-                    // 任务完成总结
-                    SectionCard(title = "任务完成") {
-                        Text("任务名：${spec?.name ?: "-"}", style = MaterialTheme.typography.bodyMedium)
-                        Text("路线：${spec?.routeSummary() ?: "-"}", style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            "行驶合计 ${"%.1f".format(task.traveledM)} 米",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        if ((snapshot?.odo?.traveledM ?: 0.0) > 0.01) {
-                            PrimaryActionButton(text = "回收小车（回到我这里）", onClick = vm::startRecoverTask)
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        SecondaryActionButton(text = "返回首页", onClick = onBack)
+                        Spacer(Modifier.height(8.dp))
+                        PrimaryActionButton(text = "重新下发", onClick = vm::retryPublish)
                         Spacer(Modifier.height(6.dp))
-                        SecondaryActionButton(text = "再次发布本路线", onClick = onRepublish)
+                        SecondaryActionButton(text = "返回首页", onClick = onBack)
                     }
                 }
             }
-
-            SafetyText("如需紧急停车请使用遥控器中央「停止」或直接断电；车身实体急停不由 APP 软件按钮替代。")
-            Spacer(Modifier.height(24.dp))
         }
+
+        // 操作区（按状态切换）
+        if (task?.state == TaskRunState.RUNNING) {
+            val waiting = task.waitingConfirm
+            if (spec?.mode == TaskMode.SEGMENT_CONFIRM && waiting) {
+                val seg = task.segments.firstOrNull { it.state == SegmentRunState.WAITING_CONFIRM }
+                PrimaryActionButton(
+                    text = "执行本段（${seg?.summary() ?: ""}）",
+                    onClick = vm::confirmCurrentSegment,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            DangerActionButton(text = "停止并取消任务", onClick = { showCancelConfirm = true })
+        }
+
+        // 手动干预：屏幕按钮，点击后弹出临时窗口使用遥控器
+        SecondaryActionButton(
+            text = "打开手动干预",
+            onClick = { showManualPad = true },
+        )
+
+        // 完成 → 核验 → 上传
+        if (task?.state == TaskRunState.DONE) {
+
+            if (state.pendingVerify != null) {
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PrimaryActionButton(
+                        text = "核验通过",
+                        onClick = { vm.confirmVerify(true, "位置/朝向/灯光正常") },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    DangerActionButton(
+                        text = "发现异常",
+                        onClick = { vm.confirmVerify(false, "现场异常，需处置") },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            } else {
+                // 上传卡（核验通过后自动上传，不再需要手动「提交上传」）
+                val record = state.uploadRecord
+                val autoUploaded = record?.verifyResult == WorkRecord.VERIFY_PASS
+                val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
+                // 上传成功后不再保留「任务上传」模块（成功反馈由上传完成弹窗给出）；
+                // 未上传/上传失败时保留卡片，供重试。
+                if (record?.uploadState != WorkRecord.UPLOAD_UPLOADED) {
+                    SectionCard(title = "任务上传") {
+                        StatusChip(
+                            text = WorkRecord.uploadStateLabel(record?.uploadState ?: WorkRecord.UPLOAD_LOCAL, serverUpload),
+                            fg = when (record?.uploadState) {
+                                WorkRecord.UPLOAD_UPLOADED -> SafeGreen
+                                WorkRecord.UPLOAD_FAILED -> WarningRed
+                                else -> WarnOrange
+                            },
+                            bg = when (record?.uploadState) {
+                                WorkRecord.UPLOAD_UPLOADED -> SafeGreenBg
+                                WorkRecord.UPLOAD_FAILED -> WarningRedBg
+                                else -> WarnOrangeBg
+                            },
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = when {
+                                record?.uploadState == WorkRecord.UPLOAD_UPLOADED ->
+                                    if (serverUpload) {
+                                        "服务端单号 ${record.serverId ?: "-"}。"
+                                    } else {
+                                        "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
+                                    }
+                                record?.uploadState == WorkRecord.UPLOAD_FAILED ->
+                                    "上传失败，记录已保存本机，可重试。"
+                                autoUploaded ->
+                                    if (serverUpload) {
+                                        "核验已通过，记录正在自动上传服务端…"
+                                    } else {
+                                        "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
+                                    }
+                                else ->
+                                    if (serverUpload) {
+                                        "记录已保存本机，等待上传服务端。"
+                                    } else {
+                                        "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
+                                    }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        // 核验通过 → 已自动上传，无需按钮；上传失败仍可重试；核验异常保留手动提交
+                        if (!autoUploaded || record?.uploadState == WorkRecord.UPLOAD_FAILED) {
+                            PrimaryActionButton(
+                                text = if (record?.uploadState == WorkRecord.UPLOAD_FAILED) {
+                                    "重试上传"
+                                } else if (serverUpload) {
+                                    "提交上传"
+                                } else {
+                                    "提交上传（演示）"
+                                },
+                                onClick = vm::uploadActiveRecord,
+                                enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            SecondaryActionButton(text = "稍后上传", onClick = onBack)
+                        }
+                    }
+                }
+
+                // 任务完成总结
+                SectionCard(title = "任务完成") {
+                    Text("任务名：${spec?.name ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                    // 作业车道：以设备回显为准（task.lane），旧固件无回显时回落发布规格
+                    Text(
+                        "作业车道：${task.lane?.let { LaneRange.label(it) } ?: spec?.laneLabel() ?: "-"}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text("路线：${spec?.routeSummary() ?: "-"}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "行驶合计 ${"%.1f".format(task.traveledM)} 米",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if ((snapshot?.odo?.traveledM ?: 0.0) > 0.01) {
+                        PrimaryActionButton(text = "回收小车（回到我这里）", onClick = vm::startRecoverTask)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    SecondaryActionButton(text = "返回首页", onClick = onBack)
+                    Spacer(Modifier.height(6.dp))
+                    SecondaryActionButton(text = "再次发布本路线", onClick = onRepublish)
+                }
+            }
+        }
+
+        SafetyText("如需紧急停车请使用遥控器中央「停止」或直接断电；车身实体急停不由 APP 软件按钮替代。")
+        Spacer(Modifier.height(24.dp))
     }
 
     // 手动干预临时窗口：点击按钮才弹出，关闭时自动停车

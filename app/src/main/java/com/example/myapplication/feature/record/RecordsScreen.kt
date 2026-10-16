@@ -22,11 +22,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.util.TimeFormat
+import com.example.myapplication.core.model.vehicle.LaneRange
 import com.example.myapplication.core.model.vehicle.WorkRecord
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.di.UploadMode
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.SafetyNoticeBanner
 import com.example.myapplication.core.ui.BannerVariant
 import com.example.myapplication.core.ui.SectionCard
@@ -56,7 +58,7 @@ fun RecordsScreen(vm: VehicleViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("作业记录", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        PageTitle("作业记录")
 
         SafetyNoticeBanner(
             variant = BannerVariant.INFO,
@@ -104,7 +106,12 @@ private fun RecordCard(record: WorkRecord, timeText: String) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "${record.kind.label} · ${record.targetM} 米",
+                    buildString {
+                        append(record.kind.label)
+                        // 作业车道（第几车道）：发布时必填，旧记录可能无此字段
+                        record.lane?.let { append(" · ${LaneRange.label(it)}") }
+                        append(" · ${record.targetM} 米")
+                    },
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )

@@ -28,6 +28,7 @@ object TaskUploadJson {
             .put("name", record.name)
             .put("kind", record.kind.token)
             .put("mode", record.mode?.token)
+            .put("lane", record.lane)              // 作业车道（第几车道）；null 时字段省略
             .put("startedAt", record.startedAt)
             .put("finishedAt", record.finishedAt)
             .put("segments", segArr)

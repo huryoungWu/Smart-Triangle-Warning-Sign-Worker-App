@@ -17,6 +17,23 @@ data class CmdAck(
 )
 
 /**
+ * 设备连接请求（连接页「连接设备」）——连接即绑定，5 个字段缺一不可
+ * （`POST /api/v1/devices/bind`，见 docs/后端接口设计文档.md 第 4.2 节）：
+ *
+ * - [username] / [password]：**登录后带入**（跳过登录时为 null，字段省略；正式服务端由 Bearer 鉴权兜底）
+ * - [deviceCode]：设备编号（对应请求字段 `device_code`，连接页下拉选中的设备）
+ * - [bindingCode]：绑定码（对应请求字段 `binding_code`，**由用户输入**，设备铭牌上的绑定码）
+ * - [deviceType]：设备类型（对应请求字段 `device_type`），默认 [com.example.myapplication.core.model.vehicle.DeviceType.TRIANGLE]
+ */
+data class DeviceConnectRequest(
+    val username: String?,
+    val password: String?,
+    val deviceCode: String,
+    val bindingCode: String,
+    val deviceType: String = com.example.myapplication.core.model.vehicle.DeviceType.TRIANGLE,
+)
+
+/**
  * 三角警示牌小车通信接口（M01）——**手机对外（设备/服务端）的唯一通道契约**。
  * 仓库只负责一次请求-应答；轮询、连接态、命令分层票据全在 VehicleViewModel（便于单测）。
  *
@@ -35,6 +52,15 @@ data class CmdAck(
 interface DeviceRepository {
     /** 可选设备列表（连接页下拉选择用） */
     suspend fun listDevices(): List<DeviceSummary>
+
+    /**
+     * 连接设备（连接即绑定）：账号 + 设备编号 + **用户输入的绑定码** + 设备类型。
+     *
+     * 成功后才开始 1Hz 状态轮询；失败（绑定码为空/错误、设备已被绑定、设备不存在）返回
+     * `Result.failure`，携带可读原因，界面原样展示、保持未连接。
+     * 直连真机（旧方案）无绑定码概念，实现为直接成功。
+     */
+    suspend fun connect(request: DeviceConnectRequest): Result<Unit>
 
     /** GET /status —— 唯一事实源，仅收到有效状态才算"已连接" */
     suspend fun fetchStatus(): Result<DeviceSnapshot>
@@ -57,12 +83,15 @@ interface DeviceRepository {
     /**
      * POST /cmd {type:task_start, segments:[...]} —— **整条路线一次性下发**。
      * 车端离线执行整条路线（失联语义正确），段间衔接由车端闭环。
+     *
+     * [lane]：作业车道（第几车道，1~8）；随命令下发并在 `/status` 的 `task.lane` 回显。
      */
     suspend fun startRoute(
         kind: TaskKind,
         mode: TaskMode,
         segments: List<RouteSegment>,
         light: LightMode,
+        lane: Int? = null,
     ): Result<CmdAck>
 
     /** POST /cmd {type:segment_confirm} —— 分段确认模式：确认执行当前段 */

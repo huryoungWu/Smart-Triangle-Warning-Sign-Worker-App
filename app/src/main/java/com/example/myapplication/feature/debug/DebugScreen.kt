@@ -11,17 +11,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +32,7 @@ import com.example.myapplication.core.model.vehicle.TaskRunState
 import com.example.myapplication.core.ui.DeviceStatusStrip
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
@@ -66,82 +61,70 @@ fun DebugScreen(
     val odo = state.snapshot?.odo
     val running = state.snapshot?.task?.state == TaskRunState.RUNNING
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("调试数据") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            DeviceStatusStrip(state)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PageTitle("调试数据", onBack = onBack)
 
-            SectionCard(title = "实时数据（车轮编码器）") {
-                if (state.isStale()) {
-                    StatusChip("非实时", WarnOrange, WarnOrangeBg)
-                    Spacer(Modifier.height(8.dp))
-                }
-                StatRow {
-                    StatTextTileRow("左轮脉冲", odo?.leftPulse?.toString() ?: "-", InfoBlue)
-                    StatTextTileRow("右轮脉冲", odo?.rightPulse?.toString() ?: "-", InfoBlue)
-                }
-                StatRow {
-                    StatTextTileRow("行程", "${"%.2f".format(odo?.traveledM ?: 0.0)} m", InfoBlue)
-                    StatTextTileRow("速度", "${"%.2f".format(odo?.speedMps ?: 0.0)} m/s", NeutralGrey)
-                }
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Text("行程差", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Text(
-                        text = "${odo?.diffPulse ?: 0} pulse",
-                        color = if ((odo?.diffPulse ?: 0) > 50) WarningRed else NeutralGrey,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
+        DeviceStatusStrip(state)
+
+        SectionCard(title = "实时数据（车轮编码器）") {
+            if (state.isStale()) {
+                StatusChip("非实时", WarnOrange, WarnOrangeBg)
                 Spacer(Modifier.height(8.dp))
-                SafetyText("行程由车轮编码器估算，不代表地图定位、障碍检测或道路安全评分。")
             }
-
-            SectionCard(title = "计数维护") {
-                PrimaryActionButton(
-                    text = "计数清零",
-                    onClick = vm::resetOdo,
-                    enabled = !running && state.snapshot != null,
-                )
-                if (running) {
-                    Text(
-                        "自动运动中禁止计数清零",
-                        color = WarningRed,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
+            StatRow {
+                StatTextTileRow("左轮脉冲", odo?.leftPulse?.toString() ?: "-", InfoBlue)
+                StatTextTileRow("右轮脉冲", odo?.rightPulse?.toString() ?: "-", InfoBlue)
             }
-
-            // Fake 异常注入（仅模拟设备模式显示）
-            FakeFaultPanel(vm)
-
-            SectionCard(title = "传感器原始数据（C 阶段）") {
-                LockedFeatureCard(
-                    title = "倾倒／障碍／边缘传感器",
-                    reason = LOCKED_FEATURE_NOTICE,
-                    onClick = { vm.showInfo("传感器原始数据", LOCKED_FEATURE_NOTICE) },
+            StatRow {
+                StatTextTileRow("行程", "${"%.2f".format(odo?.traveledM ?: 0.0)} m", InfoBlue)
+                StatTextTileRow("速度", "${"%.2f".format(odo?.speedMps ?: 0.0)} m/s", NeutralGrey)
+            }
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Text("行程差", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text(
+                    text = "${odo?.diffPulse ?: 0} pulse",
+                    color = if ((odo?.diffPulse ?: 0) > 50) WarningRed else NeutralGrey,
+                    fontWeight = FontWeight.Bold,
                 )
             }
-
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(8.dp))
+            SafetyText("行程由车轮编码器估算，不代表地图定位、障碍检测或道路安全评分。")
         }
+
+        SectionCard(title = "计数维护") {
+            PrimaryActionButton(
+                text = "计数清零",
+                onClick = vm::resetOdo,
+                enabled = !running && state.snapshot != null,
+            )
+            if (running) {
+                Text(
+                    "自动运动中禁止计数清零",
+                    color = WarningRed,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+
+        // Fake 异常注入（仅模拟设备模式显示）
+        FakeFaultPanel(vm)
+
+        SectionCard(title = "传感器原始数据（C 阶段）") {
+            LockedFeatureCard(
+                title = "倾倒／障碍／边缘传感器",
+                reason = LOCKED_FEATURE_NOTICE,
+                onClick = { vm.showInfo("传感器原始数据", LOCKED_FEATURE_NOTICE) },
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
     }
 }
 

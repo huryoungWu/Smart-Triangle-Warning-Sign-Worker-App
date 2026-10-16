@@ -14,6 +14,8 @@ data class TaskSnapshot(
     val capturedAt: Long,
     /** 所属任务名 */
     val taskName: String,
+    /** 作业车道（第几车道）；随所属任务带入，用于风险事件标注 */
+    val lane: Int? = null,
     /** 事件类型：任务执行中 / 设备已到位 / 异常急停 …… */
     val eventLabel: String,
     /** 图片（当前为占位；接摄像头后为实际图片路径/URI） */
@@ -31,6 +33,8 @@ data class WarningPayload(
     val eventLabel: String,
     val title: String,
     val description: String,
+    /** 作业车道（第几车道）；随快照/任务带入 */
+    val lane: Int? = null,
     val lat: Double? = null,
     val lng: Double? = null,
 )

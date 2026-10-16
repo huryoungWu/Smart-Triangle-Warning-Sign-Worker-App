@@ -22,8 +22,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -46,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.ui.AppIcons
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
@@ -66,6 +65,10 @@ import com.example.myapplication.ui.theme.WarningRedBg
  *
  * 默认**断开状态**；需从下拉菜单**选择自己的设备**（可能一台或多台），
  * 每台显示状态：是否开始、是否可用、电量。只有连接成功后才能进入「开始作业」页。
+ *
+ * **连接即绑定**：点击「连接设备」时会一并上报登录账号/密码（登录后自动带入）、设备编号
+ * （`device_code`）、**用户输入的绑定码**（`binding_code`）与设备类型（`device_type`，
+ * 默认常量 `triangle`）；绑定码为空时按钮置灰，校验失败保持未连接并原样提示原因。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,6 +86,9 @@ fun ConnectScreen(
     // 用户添加的设备（本机登记，可在「添加设备」弹窗内手动删除）
     val customDevices by vm.customDevices.collectAsStateWithLifecycle(initialValue = emptyList())
     var menuExpanded by remember { mutableStateOf(false) }
+
+    // 绑定码（binding_code）：连接设备的必填项，由用户输入（设备铭牌上）
+    var bindingCode by remember { mutableStateOf("") }
 
     // ── 添加设备（手动编号 / 扫码）──
     var showAddDevice by remember { mutableStateOf(false) }
@@ -111,19 +117,15 @@ fun ConnectScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("设备连接") })
-        },
-    ) { padding ->
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(padding)
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        PageTitle("设备连接")
+
         Text(
             "请选择设备并连接，连接成功后开始作业",
             style = MaterialTheme.typography.bodyMedium,
@@ -187,6 +189,23 @@ fun ConnectScreen(
                 )
             }
 
+            // 绑定码（binding_code）：**连接设备必需**，由用户输入（设备铭牌上）
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(
+                value = bindingCode,
+                onValueChange = { bindingCode = it },
+                label = { Text("绑定码") },
+                singleLine = true,
+                enabled = !connected,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "请输入设备铭牌上的绑定码；连接时与登录账号、设备编号一并校验。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
             Spacer(Modifier.height(14.dp))
             if (connected) {
                 OutlinedButton(
@@ -199,8 +218,8 @@ fun ConnectScreen(
                 }
             } else {
                 Button(
-                    onClick = vm::connect,
-                    enabled = !connecting && selected != null,
+                    onClick = { vm.connect(bindingCode) },
+                    enabled = !connecting && selected != null && bindingCode.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(
@@ -211,6 +230,15 @@ fun ConnectScreen(
                     Spacer(Modifier.width(8.dp))
                     Text(if (connecting) "连接中…" else "连接设备")
                 }
+            }
+
+            if (!connected && bindingCode.isBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "请先输入绑定码，再连接设备",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = WarnOrange,
+                )
             }
 
             if (selected?.available == false) {
@@ -249,7 +277,6 @@ fun ConnectScreen(
         }
 
         Spacer(Modifier.height(24.dp))
-    }
     }
 
     // ── 添加设备对话框：手动输入设备编号 / 扫码（二选一）──
@@ -386,15 +413,15 @@ private fun DeviceStatusRow(label: String, ok: Boolean, text: String) {
             .padding(vertical = 3.dp),
     ) {
         Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
+        label,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.weight(1f),
         )
         StatusChip(
-            text = text,
-            fg = if (ok) SafeGreen else WarnOrange,
-            bg = if (ok) SafeGreenBg else WarnOrangeBg,
+        text = text,
+        fg = if (ok) SafeGreen else WarnOrange,
+        bg = if (ok) SafeGreenBg else WarnOrangeBg,
         )
     }
 }

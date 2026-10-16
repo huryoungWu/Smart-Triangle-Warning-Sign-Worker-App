@@ -8,8 +8,11 @@
  * 实现《docs/后端接口设计文档.md》的全部接口形状：
  *  - 认证：POST /api/v1/auth/login|refresh|logout、GET /api/v1/auth/profile（Mock 不强制鉴权，带 token 也接受）
  *  - 设备：GET /api/v1/devices、POST /api/v1/devices/bind、DELETE /api/v1/devices/:id/bind、GET /api/v1/devices/:id
- *  - 状态：GET /api/v1/device/status?deviceId=   （1Hz 轮询；字段与 APP DeviceJson 解析口径一致）
- *  - 命令：POST /api/v1/device/command           （内置小车状态机模拟：分段路线 / 急停 / 取消 / 回收 …）
+ *          （bind = 连接设备：username/password/device_code/binding_code/device_type；
+ *           绑定码仅校验「非空」—— 宽松模式，正式服务端必须比对设备登记信息）
+ *  - 状态：GET /api/v1/device/status?deviceId=   （1Hz 轮询；字段与 APP DeviceJson 解析口径一致，含 task.lane 回显）
+ *  - 命令：POST /api/v1/device/command           （内置小车状态机模拟：分段路线 / 急停 / 取消 / 回收 …；
+ *                                                  task_start 带作业车道 lane 1~8）
  *  - 业务：POST/GET /api/v1/tasks、POST/GET /api/v1/snapshots、POST /api/v1/warnings、
  *          GET /api/v1/risks、GET /api/v1/app/version、POST /api/v1/feedback
  *  - 视频：GET /api/v1/device/video/snapshot.jpg、GET /api/v1/device/video/stream?deviceId=（按设备各一路占位帧，非真实摄像头）
@@ -34,6 +37,17 @@ const SPEED = { move: 0.25, recover: 0.5, turnDps: 60 }; // 米/秒、度/秒（
 const LIMIT = { segMax: 10, mMin: 1, mMax: 50, degMin: 5, degMax: 180, totalMax: 200 };
 const WATCHDOG_MS = 800;
 
+/** 设备类型（连接设备时上报的 device_type）：当前唯一取值，APP 端为默认常量 */
+const DEVICE_TYPE_TRIANGLE = 'triangle';
+/** 作业车道（第几车道）取值范围：与 APP TaskSpec / LaneRange 一致 */
+const LANE_MIN = 1;
+const LANE_MAX = 8;
+const normalizeLane = (v) => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= LANE_MIN && n <= LANE_MAX ? n : NaN; // NaN = 非法
+};
+
 let seq = 1;
 const nid = (p) => `${p}-${(seq++).toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
@@ -47,9 +61,13 @@ function newDevice(id, name, opts = {}) {
     estopLocked: false,
     stopSource: 'none',
     light: 'off',
-    task: { id: null, kind: null, source: 'app', targetM: 0, traveledM: 0, state: 'idle', stage: null, resultNote: null, heading: 0, segments: [] },
+    task: { id: null, kind: null, source: 'app', targetM: 0, traveledM: 0, state: 'idle', stage: null, resultNote: null, heading: 0, lane: null, segments: [] },
     odo: { leftPulse: 0, rightPulse: 0, traveledM: 0, speedMps: 0, diffPulse: 0 },
     batteryPercent: opts.battery ?? null,   // null = 无来源
+    /** 设备类型（连接时上报）；连接过的设备记住最后一次的类型 */
+    deviceType: opts.deviceType || DEVICE_TYPE_TRIANGLE,
+    /** 设备绑定码（连接时用户输入的 binding_code，Mock 仅记录不比对 —— 宽松模式） */
+    bindingCode: null,
     custom: !!opts.custom,
     /** 绑定归属：设备信息按登录用户获取（见 docs 第 4 节） */
     owner: opts.owner || DEFAULT_USER,
@@ -343,6 +361,10 @@ function startTask(dev, body) {
   if (dev.estopLocked || dev.mode === 'safe_stop') return { accepted: false, reason: 'estop_locked' };
   if (dev.task.state === 'running') return { accepted: false, reason: 'task_running' };
 
+  // 作业车道（第几车道，1~8）：发布任务时必填；非法值整条命令拒绝
+  const lane = normalizeLane(body.lane);
+  if (Number.isNaN(lane)) return { accepted: false, reason: 'param_out_of_range' };
+
   let segments = body.segments;
   if (!segments || segments.length === 0) {
     // 形态1：单段快捷（定距布置）
@@ -372,6 +394,7 @@ function startTask(dev, body) {
     stage: null,
     resultNote: null,
     heading: dev.task.heading,
+    lane,   // 作业车道：随任务保存并在 /status 的 task.lane 回显
     segments: segments.map((s) => ({ action: s.action, value: Number(s.value), state: 'pending', progress: 0 })),
   };
   if (body.light) dev.light = body.light;
@@ -387,6 +410,7 @@ function statusJson(dev, anchor = null) {
   // 省略空值字段（与 APP DeviceJson 解析口径一致：缺字段回落安全默认）
   if (t.stage) task.stage = t.stage;
   if (t.resultNote) task.resultNote = t.resultNote;
+  if (t.lane) task.lane = t.lane;      // 作业车道（第几车道）：无则整字段省略
   if (!t.id) delete task.id;
   if (!t.kind) delete task.kind;
   const out = {
@@ -686,6 +710,34 @@ function readBody(req) {
   });
 }
 
+/**
+ * 乱码守卫：文本里出现**替换字符 U+FFFD** = 请求体不是合法 UTF-8
+ * （典型场景：Windows 控制台用 GBK 发中文，curl -d 时中文被转成 GBK 字节）。
+ * 这种数据一旦入库，界面上就是「�」（且无法还原），故一律拒绝并给出正确姿势。
+ */
+function hasInvalidUtf8(value) {
+  if (typeof value === 'string') return value.includes('�');
+  if (Array.isArray(value)) return value.some(hasInvalidUtf8);
+  if (value && typeof value === 'object') return Object.values(value).some(hasInvalidUtf8);
+  return false;
+}
+
+const UTF8_HINT =
+  '请求体不是合法 UTF-8（检测到乱码字节）：中文请改用 --data-binary @payload.json 传 UTF-8 文件，' +
+  '或让 APP/客户端直接发 UTF-8 请求体';
+
+/**
+ * 媒体地址归一化（对外仍返回绝对地址，契约不变）：
+ * - 相对路径（新数据存储形态，如 `/media/snap-0001.png`）→ 补全为**当前请求的 origin**
+ * - 历史遗留的绝对地址 → 只重写 origin
+ * 这样换端口 / 换访问地址（127.0.0.1 ↔ 局域网 IP ↔ adb reverse）后，旧数据里的图片依然能加载。
+ */
+function absolutizeMediaUrl(url, base) {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url.replace(/^https?:\/\/[^/]+/i, base);
+  return base + (url.startsWith('/') ? url : `/${url}`);
+}
+
 /** multipart 解析（二进制安全）：文本字段 + image 文件。返回 { fields, image }，image 为 {buffer, contentType}|null */
 function parseMultipart(req, raw) {
   const m = /boundary=(.+?)(;|$)/.exec(req.headers['content-type'] || '');
@@ -734,6 +786,8 @@ const server = http.createServer(async (req, res) => {
   let body = {};
   if (raw.length && isJson) {
     try { body = JSON.parse(raw.toString('utf8')); } catch { return sendError(res, 400, 'bad_request', 'JSON 解析失败'); }
+    // 乱码守卫：非法 UTF-8（Windows 控制台 GBK 中文）→ 拒绝入库，避免脏数据污染列表
+    if (hasInvalidUtf8(body)) return sendError(res, 400, 'bad_request', UTF8_HINT);
   }
 
   const log = (extra) => console.log(`${new Date().toLocaleTimeString('zh-CN')}  ${req.method} ${path}${url.search}  ${extra || ''}`);
@@ -791,7 +845,7 @@ const server = http.createServer(async (req, res) => {
       devices: mine.map((d) => ({
         deviceId: d.id, name: d.name, bound: true, online: true,
         started: d.started, available: d.available, batteryPercent: d.batteryPercent,
-        fw: d.fw, lastSeenAt: Date.now(),
+        deviceType: d.deviceType, fw: d.fw, lastSeenAt: Date.now(),
       })),
     });
   }
@@ -808,24 +862,40 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
     return res.end();
   }
+  // ── 连接设备（连接即绑定）：username / password / device_code / binding_code / device_type ──
+  // device_code 为准（兼容旧字段 deviceId）；binding_code 必填（Mock 宽松：非空即通过，
+  // 正式服务端必须与设备登记信息比对并返回 400 invalid_binding_code）
   if (path === '/api/v1/devices/bind' && req.method === 'POST') {
-    const id = String(body.deviceId || '').trim();
-    if (!id || id.length > 32) return sendError(res, 400, 'bad_request', '设备编号不能为空且不超过 32 字符');
-    const user = currentUser(req);
+    const id = String(body.device_code || body.deviceId || '').trim();
+    const bindingCode = String(body.binding_code || '').trim();
+    const deviceType = String(body.device_type || DEVICE_TYPE_TRIANGLE).trim();
+    if (!id || id.length > 32) {
+      return sendError(res, 400, 'bad_request', '设备编号（device_code）不能为空且不超过 32 字符');
+    }
+    if (!bindingCode) {
+      return sendError(res, 400, 'bad_request', '绑定码（binding_code）不能为空，请输入设备铭牌上的绑定码');
+    }
+    const user = currentUser(req);            // 有 token 以 token 为准；无 token 按默认用户（宽松）
+    const loginName = String(body.username || user); // 登录账号（APP 登录后带入，仅记日志）
     const exists = devices.get(id);
     if (exists && exists.owner !== user) {
       return sendError(res, 409, 'already_bound', '该设备已被其他账号绑定');
     }
     const d = getDevice(id, user); // 未知编号自动注册到当前用户（Mock 便利行为，正式服务端应按 doc 返回 404）
     d.owner = user;
-    log(`[设备] u=${user} 绑定 ${id}（${d.custom ? '自动注册为自定义设备' : '内置设备'}）`);
-    return sendJson(res, 201, { device: { deviceId: d.id, name: d.name, bound: true } });
+    d.deviceType = deviceType;
+    d.bindingCode = bindingCode;
+    log(
+      `[设备] u=${user} 连接/绑定 ${id}（${d.custom ? '自动注册为自定义设备' : '内置设备'}）` +
+        ` 账号=${loginName} 绑定码=已提供 类型=${deviceType}`,
+    );
+    return sendJson(res, 201, { device: { deviceId: d.id, name: d.name, bound: true, deviceType: d.deviceType } });
   }
   let mDev = /^\/api\/v1\/devices\/([^/]+)$/.exec(path);
   if (mDev && req.method === 'GET') {
     const d = getDevice(decodeURIComponent(mDev[1]), currentUser(req));
     return sendJson(res, 200, {
-      deviceId: d.id, name: d.name, fw: d.fw, sn: 'ESP32-MOCK', boundAt: Date.now() - 86400000,
+      deviceId: d.id, name: d.name, deviceType: d.deviceType, fw: d.fw, sn: 'ESP32-MOCK', boundAt: Date.now() - 86400000,
       lastSeenAt: Date.now(), online: true,
       capabilities: { gps: EMIT_GPS, camera: true, battery: d.batteryPercent !== null, tilt: false, obstacle: false },
     });
@@ -849,7 +919,7 @@ const server = http.createServer(async (req, res) => {
     if (!id) return sendError(res, 400, 'bad_request', '缺少 deviceId');
     const d = getDevice(id);
     const r = applyCommand(d, body);
-    log(`[cmd] u=${currentUser(req)} ${id} ${body.type}${body.dir ? '/' + body.dir : ''}${body.mode ? '/' + body.mode : ''}${body.segments ? ` (${body.segments.length} 段)` : ''} → ${r.accepted ? 'accepted' : 'rejected: ' + r.reason}`);
+    log(`[cmd] u=${currentUser(req)} ${id} ${body.type}${body.dir ? '/' + body.dir : ''}${body.mode ? '/' + body.mode : ''}${body.segments ? ` (${body.segments.length} 段)` : ''}${body.lane ? ` 车道=${body.lane}` : ''} → ${r.accepted ? 'accepted' : 'rejected: ' + r.reason}`);
     return sendJson(res, 200, r.accepted ? { accepted: true, cmdId: nid('c') } : { accepted: false, reason: r.reason });
   }
 
@@ -869,7 +939,7 @@ const server = http.createServer(async (req, res) => {
       receivedAt: Date.now(),
     };
     workRecords.push(rec);
-    log(`[记录] u=${currentUser(req)} ${rec.deviceId} ${body.kind || '-'} ${body.deviceResult || '-'} 核验=${body.verifyResult || '-'} → ${rec.id}`);
+    log(`[记录] u=${currentUser(req)} ${rec.deviceId} ${body.kind || '-'} 车道=${body.lane ?? '-'} ${body.deviceResult || '-'} 核验=${body.verifyResult || '-'} → ${rec.id}`);
     persistState(); // 作业记录落盘 → 重启后仍可查询（GET /api/v1/tasks）
     return sendJson(res, 201, { id: rec.id, receivedAt: rec.receivedAt });
   }
@@ -887,10 +957,14 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/v1/snapshots' && req.method === 'POST') {
     const parsed = isJson ? { fields: body, image: null } : parseMultipart(req, raw);
     const fields = parsed.fields;
+    if (hasInvalidUtf8(fields)) return sendError(res, 400, 'bad_request', UTF8_HINT);
+    const lane = normalizeLane(fields.lane);
     const snap = {
       id: `snap-${String(bizSeq++).padStart(4, '0')}`,
       deviceId: fields.deviceId || 'TC-001',
       taskName: fields.taskName || '',
+      // 作业车道（第几车道）：随所属任务上报，登记到风险事件
+      lane: Number.isInteger(lane) ? lane : null,
       eventLabel: fields.eventLabel || '现场抓拍',
       capturedAt: Number(fields.capturedAt) || Date.now(),
       note: fields.note || '',
@@ -903,7 +977,9 @@ const server = http.createServer(async (req, res) => {
     const fileName = `${snap.id}.png`;
     mediaStore.set(fileName, { buffer: frame, contentType: 'image/png' });
     persistMedia(fileName, frame); // 截帧落盘 → 重启后经 /media/{name} 仍可回放
-    const snapUrl = `${baseUrl(req)}/media/${fileName}`;
+    // 入库用**相对路径**（换端口/换访问地址后仍能加载）；响应里给绝对地址（契约不变）
+    const mediaPath = `/media/${fileName}`;
+    const snapUrl = `${baseUrl(req)}${mediaPath}`;
     // 统一：上传的快照在服务端登记为「风险事件」，风险页（GET /api/v1/risks）即可看到（见 docs 第 9/12 节）
     // 坐标：带 lat/lng 用真实坐标；未带（演示阶段 APP 不上报坐标）则查询时就近于查询点放置（Mock 演示行为）
     const lat = Number(fields.lat);
@@ -917,15 +993,16 @@ const server = http.createServer(async (req, res) => {
       lng: at ? at.lng : null,
       occurredAt: snap.capturedAt,
       description: `${snap.taskName || '作业任务'}（${snap.note || '自动抓拍'}）`,
+      lane: snap.lane,   // 作业车道（第几车道）：风险页/事故详情展示
       hasPhoto: true,
       hasVideo: false,
-      photoUrls: [snapUrl],
+      photoUrls: [mediaPath],   // 相对路径入库；/risks 查询时按当前 origin 拼绝对地址
       videoUrl: null,
       source: 'worker', // worker=作业人员上传 / external=外部数据源
     };
     workerRisks.push(risk);
     log(
-      `[快照] u=${currentUser(req)} ${snap.deviceId} ${snap.eventLabel} → ${snap.id}` +
+      `[快照] u=${currentUser(req)} ${snap.deviceId} ${snap.eventLabel} 车道=${snap.lane ?? '-'} → ${snap.id}` +
         `（从视频流截帧 ${(frame.length / 1024).toFixed(0)}KB）` +
         `（已登记风险事件 ${risk.id}）`,
     );
@@ -938,8 +1015,15 @@ const server = http.createServer(async (req, res) => {
 
   // ── 预警信息 ──
   if (path === '/api/v1/warnings' && req.method === 'POST') {
-    const w = { id: `warn-${String(bizSeq++).padStart(4, '0')}`, publishedAt: Date.now(), channels: ['nav_event'] };
-    log(`[预警] ${body.eventLabel || '-'}「${body.title || '-'}」→ ${w.id}`);
+    const lane = normalizeLane(body.lane);
+    const w = {
+      id: `warn-${String(bizSeq++).padStart(4, '0')}`,
+      publishedAt: Date.now(),
+      channels: ['nav_event'],
+      // 作业车道（第几车道）：随预警信息下发（发给过往司机），未带则 null
+      lane: Number.isInteger(lane) ? lane : null,
+    };
+    log(`[预警] ${body.eventLabel || '-'}「${body.title || '-'}」车道=${w.lane ?? '-'} → ${w.id}`);
     return sendJson(res, 201, w);
   }
 
@@ -948,15 +1032,32 @@ const server = http.createServer(async (req, res) => {
     const lat = Number(url.searchParams.get('lat') || 39.9928);
     const lng = Number(url.searchParams.get('lng') || 116.4004);
     const radiusKm = Number(url.searchParams.get('radiusKm') || 2);
+    // lane = 事故/风险占用车道（第几车道，1~8）：演示数据**每条必带**（风险列表要显示「第 N 车道」）
+    // minutesAgo/daysAgo = 演示发生时间：今天 6 条（默认「今天」筛选下可见）+ 历史 2 条（切「全部」可见）
+    // 距离均 ≤ 2 公里（风险页搜索半径），方位各不相同，便于验证「近→远 / 新→旧」排序
     const seeds = [
-      { m: 400, heading: 25, type: 'breakdown', title: '小车抛锚占用最右车道', desc: '一辆白色小轿车因发动机故障停在最右车道，未设置警示标志，后方车辆请注意避让。', photo: false, video: true, dev: 'TC-001' },
-      { m: 1100, heading: 140, type: 'rear_end', title: '两车追尾，占用左侧两车道', desc: '高峰时段两辆小客车发生追尾，双方驾驶员无受伤，车辆停在左侧两条车道，正在等待拖车。', photo: true, video: true, dev: 'TC-002' },
-      { m: 1600, heading: 210, type: 'construction', title: '路面养护施工，单向半幅封闭', desc: '路面沥青摊铺作业，施工区域长约 300 米，已布设锥桶与警示灯，请提前变道。', photo: true, video: false, dev: 'TC-001' },
-      { m: 1900, heading: 75, type: 'rollover', title: '货车侧翻，货物散落', desc: '一辆轻型货车因雨天路滑发生侧翻，货物散落占用两条车道，现场正在清理。', photo: true, video: true, dev: 'TC-002' },
-      { m: 2200, heading: 300, type: 'debris', title: '车道内有散落物', desc: '前方车道内有较大面积散落物（疑似轮胎碎片），请减速通过并注意避让。', photo: false, video: false, dev: 'TC-001' },
-      { m: 2600, heading: 340, type: 'other', title: '前方长下坡，事故多发路段', desc: '该路段为长下坡弯道，历史事故多发，请控制车速、保持车距。', photo: true, video: false, dev: 'TC-002' },
+      { m: 350, heading: 25, type: 'breakdown', title: '小车抛锚占用第 4 车道', desc: '一辆白色小轿车因发动机故障停在第 4 车道，未设置警示标志，后方车辆请注意避让。', photo: false, video: true, dev: 'TC-001', lane: 4, minutesAgo: 8, daysAgo: 0 },
+      { m: 700, heading: 140, type: 'rear_end', title: '两车追尾，占用第 1、2 车道', desc: '高峰时段两辆小客车发生追尾，双方驾驶员无受伤，车辆停在第 1、2 车道，正在等待拖车。', photo: true, video: true, dev: 'TC-002', lane: 1, minutesAgo: 26, daysAgo: 0 },
+      { m: 1100, heading: 210, type: 'construction', title: '路面养护施工，占用第 2 车道', desc: '路面沥青摊铺作业，施工区域长约 300 米、占用第 2 车道，已布设锥桶与警示灯，请提前变道。', photo: true, video: false, dev: 'TC-001', lane: 2, minutesAgo: 55, daysAgo: 0 },
+      { m: 1400, heading: 75, type: 'rollover', title: '货车侧翻，占用第 2、3 车道', desc: '一辆轻型货车因雨天路滑发生侧翻，货物散落占用第 2、3 车道，现场正在清理。', photo: true, video: true, dev: 'TC-002', lane: 2, minutesAgo: 92, daysAgo: 0 },
+      { m: 1700, heading: 300, type: 'debris', title: '第 3 车道内有散落物', desc: '第 3 车道内有较大面积散落物（疑似轮胎碎片），请减速通过并注意避让。', photo: false, video: false, dev: 'TC-001', lane: 3, minutesAgo: 130, daysAgo: 0 },
+      { m: 1950, heading: 340, type: 'other', title: '路面油污，占用第 3 车道', desc: '前方路面有车辆漏油，油污带长约 50 米、占用第 3 车道，路面湿滑，请减速慢行、避免急刹。', photo: true, video: false, dev: 'TC-002', lane: 3, minutesAgo: 165, daysAgo: 0 },
+      // ── 历史数据（默认「今天」筛选下不显示，切「全部」可见）──
+      { m: 600, heading: 95, type: 'construction', title: '夜间施工围挡未撤，占用第 2 车道', desc: '施工围挡与锥桶未及时撤除，占用第 2 车道，请提前变道绕行。', photo: true, video: false, dev: 'TC-001', lane: 2, minutesAgo: 540, daysAgo: 1 },
+      { m: 1500, heading: 190, type: 'rear_end', title: '早高峰追尾事故，占用第 1 车道', desc: '早高峰时段两车追尾，车辆停在第 1 车道等待处理，后方车辆请注意避让。', photo: true, video: false, dev: 'TC-002', lane: 1, minutesAgo: 420, daysAgo: 3 },
     ];
     const now = Date.now();
+    // 北京时间当天 0 点（「今天」的时间基准；与 APP 端 TimeFormat 一致）
+    const SH_OFFSET_MS = 8 * 60 * 60 * 1000;
+    const shNow = new Date(now + SH_OFFSET_MS);
+    const todayStart = Date.UTC(shNow.getUTCFullYear(), shNow.getUTCMonth(), shNow.getUTCDate()) - SH_OFFSET_MS;
+    const occurredAtOf = (s, i) => {
+      const back = now - s.minutesAgo * 60 * 1000 - s.daysAgo * 24 * 60 * 60 * 1000;
+      // 今天的条目若倒推跨过零点，贴回当天 0 点之后（保证仍属「今天」筛选）
+      return s.daysAgo === 0 && back < todayStart
+        ? Math.min(todayStart + (i + 1) * 60 * 1000, now)
+        : back;
+    };
     const base = baseUrl(req);
     const risks = seeds
       .filter((s) => s.m <= radiusKm * 1000)
@@ -970,8 +1071,9 @@ const server = http.createServer(async (req, res) => {
           type: s.type,
           lat: +(lat + dLat).toFixed(6),
           lng: +(lng + dLng).toFixed(6),
-          occurredAt: now - s.m * 360,
+          occurredAt: occurredAtOf(s, i),
           description: s.desc,
+          lane: s.lane ?? null,   // 占用车道（第几车道）；演示数据每条必带
           hasPhoto: s.photo,
           hasVideo: s.video,
           photoUrls: s.photo ? [`${base}/media/acc-${1000 + i}-1.png`] : [],
@@ -1000,7 +1102,9 @@ const server = http.createServer(async (req, res) => {
         const dLng = (m * Math.sin(rad)) / (111320 * Math.cos((lat * Math.PI) / 180));
         return { ...r, lat: +(lat + dLat).toFixed(6), lng: +(lng + dLng).toFixed(6) };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      // 图片地址按**当前请求**的 origin 输出（新数据是相对路径；历史绝对地址只重写 origin）
+      .map((r) => ({ ...r, photoUrls: (r.photoUrls || []).map((u) => absolutizeMediaUrl(u, base)) }));
     if (uploaded.length) log(`（含作业人员上传 ${uploaded.length} 条）`);
     return sendJson(res, 200, { risks: [...uploaded, ...risks] });
   }

@@ -35,6 +35,15 @@ data class RouteSegment(
         if (v == v.toInt().toDouble()) v.toInt().toString() else String.format("%.1f", v)
 }
 
+/** 作业车道范围（第几车道，1~8）：发布任务时必填 */
+object LaneRange {
+    const val MIN = 1
+    const val MAX = 8
+
+    /** 「第 N 车道」统一文案 */
+    fun label(lane: Int): String = "第 $lane 车道"
+}
+
 /** 段参数范围（表单校验与设备校验同一套规则） */
 object SegmentRange {
     const val MIN_M = 1.0
@@ -92,6 +101,8 @@ data class TaskSpec(
     val kind: TaskKind,
     val mode: TaskMode,
     val name: String = "",
+    /** 作业车道（第几车道，[LaneRange] 1~8）；null = 表单未填写（必填项） */
+    val lane: Int? = null,
     val segments: List<RouteSegment> = emptyList(),
     /** 任务期间灯光（灯光与运动分离，任务结束不自动改灯） */
     val lightOnRun: LightMode = LightMode.BLINK,
@@ -105,9 +116,18 @@ data class TaskSpec(
             .filter { it.action == SegmentAction.FWD }
             .sumOf { it.value }
 
+    /** 「第 N 车道」展示文案；未填写时为「未填写」 */
+    fun laneLabel(): String = lane?.let { LaneRange.label(it) } ?: "未填写"
+
     /** 校验规则（纯函数，可单测）。返回空表示通过 */
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
+        val laneNo = lane
+        if (laneNo == null) {
+            errors.add("请填写作业车道（第几车道，${LaneRange.MIN}~${LaneRange.MAX}）")
+        } else if (laneNo < LaneRange.MIN || laneNo > LaneRange.MAX) {
+            errors.add("作业车道须在 ${LaneRange.MIN}~${LaneRange.MAX} 之间")
+        }
         if (segments.isEmpty()) {
             errors.add("路线不能为空，请至少添加一个路段")
         }

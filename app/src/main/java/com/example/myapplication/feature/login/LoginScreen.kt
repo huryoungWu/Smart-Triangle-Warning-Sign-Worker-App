@@ -12,10 +12,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.di.DeviceTransport
@@ -62,109 +61,104 @@ fun LoginScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("登录") })
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Spacer(Modifier.height(8.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PageTitle("登录")
+
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "智能三角警示牌作业",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = "请登录后继续作业",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        if (serverMode) {
+            StatusChip("已接入服务端登录 · 设备按账号获取", InfoBlue, InfoBlueBg)
+        } else {
+            StatusChip("演示状态 · 未接入账号系统", InfoBlue, InfoBlueBg)
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = username,
+            onValueChange = { username = it },
+            label = { Text("用户名") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("密码") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        if (error != null) {
             Text(
-                text = "智能三角警示牌作业",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = "请登录后继续作业",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            if (serverMode) {
-                StatusChip("已接入服务端登录 · 设备按账号获取", InfoBlue, InfoBlueBg)
-            } else {
-                StatusChip("演示状态 · 未接入账号系统", InfoBlue, InfoBlueBg)
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("用户名") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("密码") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            if (error != null) {
-                Text(
-                    text = error!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = WarningRed,
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            PrimaryActionButton(
-                text = if (loading) "登录中…" else "登录",
-                onClick = {
-                    error = null
-                    loading = true
-                    scope.launch {
-                        auth.login(username.trim(), password)
-                            .onSuccess {
-                                loading = false
-                                onLoggedIn()
-                            }
-                            .onFailure { e ->
-                                loading = false
-                                error = "登录失败：${e.message ?: "网络异常"}"
-                            }
-                    }
-                },
-                enabled = !loading && username.isNotBlank() && password.isNotBlank(),
-            )
-
-            TextButton(
-                onClick = onSkip,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("跳过登录（演示模式）")
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = if (serverMode) {
-                    "调试默认账号：demo / 123456（已预填，Mock 服务端内置）。\n" +
-                        "设备信息按登录账号获取；跳过登录时服务端按默认账号处理。\n" +
-                        "当前服务端：${ServiceLocator.SERVER_BASE_URL}"
-                } else {
-                    "当前为演示模式（模拟设备），无需真实账号；\n" +
-                        "切到联调模式（TRANSPORT = SERVER）后启用服务端登录。"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = error!!,
+                style = MaterialTheme.typography.bodySmall,
+                color = WarningRed,
             )
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        PrimaryActionButton(
+            text = if (loading) "登录中…" else "登录",
+            onClick = {
+                error = null
+                loading = true
+                scope.launch {
+                    auth.login(username.trim(), password)
+                        .onSuccess {
+                            loading = false
+                            onLoggedIn()
+                        }
+                        .onFailure { e ->
+                            loading = false
+                            error = "登录失败：${e.message ?: "网络异常"}"
+                        }
+                }
+            },
+            enabled = !loading && username.isNotBlank() && password.isNotBlank(),
+        )
+
+        TextButton(
+            onClick = onSkip,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("跳过登录（演示模式）")
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = if (serverMode) {
+                "调试默认账号：demo / 123456（已预填，Mock 服务端内置）。\n" +
+                    "设备信息按登录账号获取；跳过登录时服务端按默认账号处理。\n" +
+                    "当前服务端：${ServiceLocator.SERVER_BASE_URL}"
+            } else {
+                "当前为演示模式（模拟设备），无需真实账号；\n" +
+                    "切到联调模式（TRANSPORT = SERVER）后启用服务端登录。"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

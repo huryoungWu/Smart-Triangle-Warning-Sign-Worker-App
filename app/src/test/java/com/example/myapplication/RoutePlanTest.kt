@@ -12,9 +12,13 @@ import org.junit.Test
 /** 任务规格校验规则（发布表单的门） */
 class RoutePlanTest {
 
-    private fun spec(vararg segs: RouteSegment) = TaskSpec(
+    /** 默认带合法作业车道（第 2 车道），专注于路线校验的用例直接用 */
+    private fun spec(vararg segs: RouteSegment) = specWithLane(2, *segs)
+
+    private fun specWithLane(lane: Int?, vararg segs: RouteSegment) = TaskSpec(
         kind = TaskKind.FIXED_DISTANCE,
         mode = TaskMode.AUTO,
+        lane = lane,
         segments = segs.toList(),
     )
 
@@ -59,6 +63,30 @@ class RoutePlanTest {
         val segs = List(5) { RouteSegment(action = SegmentAction.FWD, value = 45.0) }
         val errors = spec(*segs.toTypedArray()).validate()
         assertTrue(errors.any { it.contains("超过上限") })
+    }
+
+    @Test
+    fun `missing lane is rejected`() {
+        val errors = specWithLane(null, RouteSegment(action = SegmentAction.FWD, value = 20.0)).validate()
+        assertTrue(errors.any { it.contains("作业车道") })
+    }
+
+    @Test
+    fun `lane out of range is rejected`() {
+        val errors = specWithLane(9, RouteSegment(action = SegmentAction.FWD, value = 20.0)).validate()
+        assertTrue(errors.any { it.contains("作业车道") })
+    }
+
+    @Test
+    fun `lane within range passes`() {
+        val errors = specWithLane(8, RouteSegment(action = SegmentAction.FWD, value = 20.0)).validate()
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
+    fun `lane label reads naturally`() {
+        assertEquals("第 3 车道", specWithLane(3).laneLabel())
+        assertEquals("未填写", specWithLane(null).laneLabel())
     }
 
     @Test

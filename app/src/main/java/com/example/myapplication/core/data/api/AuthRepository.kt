@@ -3,6 +3,13 @@ package com.example.myapplication.core.data.api
 /** 登录用户（契约数据类） */
 data class AuthUser(val id: String, val name: String, val role: String? = null, val phone: String? = null)
 
+/**
+ * 登录凭据（账号 + 密码）。
+ * **仅随「连接设备」请求上报**（`POST /api/v1/devices/bind`，见 docs/后端接口设计文档.md 第 4.2 节），
+ * 不做本地持久化：应用重启需重新登录。
+ */
+data class AuthCredentials(val username: String, val password: String)
+
 /** 登录会话（契约数据类） */
 data class AuthSession(val token: String, val refreshToken: String? = null, val user: AuthUser)
 
@@ -22,6 +29,12 @@ interface AuthRepository {
 
     /** 当前登录用户（未登录为 null） */
     val currentUser: AuthUser?
+
+    /**
+     * 当前登录凭据（未登录 / 跳过登录为 null）。
+     * 连接设备时与设备编号、绑定码一并上报（服务端据此校验账号与设备的绑定关系）。
+     */
+    val currentCredentials: AuthCredentials?
 
     suspend fun login(username: String, password: String): Result<AuthSession>
 

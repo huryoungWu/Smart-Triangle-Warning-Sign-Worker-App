@@ -86,6 +86,14 @@ object DistanceRange {
     const val DEFAULT_M = 30
 }
 
+/**
+ * 设备类型（连接设备时随请求上报的 `device_type`）。
+ * 当前只有三角警示牌小车一种，**默认值常量**，不做界面选择项。
+ */
+object DeviceType {
+    const val TRIANGLE = "triangle"
+}
+
 enum class TaskKind(val label: String, val token: String) {
     FIXED_DISTANCE("定距布置", "fixed_distance"),
     MANUAL("手动遥控", "manual"),

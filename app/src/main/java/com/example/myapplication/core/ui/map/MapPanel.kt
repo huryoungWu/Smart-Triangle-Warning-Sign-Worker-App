@@ -51,6 +51,11 @@ fun MapPanel(
     showLegend: Boolean = true,
     showFollowSwitch: Boolean = false,
     extraMarkers: List<MapPin> = emptyList(),
+    /** 用五角星标出「我的位置」（风险页需要；作业页保持只有小车点位） */
+    showPhoneMarker: Boolean = false,
+    /** 是否显示小车位置来源免责横幅（常驻红色感叹号提示）；风险页按需求移除 */
+    showDisclaimer: Boolean = true,
+    cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
 ) {
     val mapState by mapVm.uiState.collectAsStateWithLifecycle()
     val vehicleState by vm.uiState.collectAsStateWithLifecycle()
@@ -97,6 +102,8 @@ fun MapPanel(
                 model = renderModel,
                 onMapReady = { },
                 extraMarkers = extraMarkers,
+                showPhoneMarker = showPhoneMarker,
+                cameraZoom = cameraZoom,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(height),
@@ -117,11 +124,13 @@ fun MapPanel(
                 MapLegend(vehicleHasGps = renderModel.vehicleHasGps)
             }
 
-            Spacer(Modifier.height(6.dp))
-            VehiclePositionDisclaimer(
-                vehicleHasGps = renderModel.vehicleHasGps,
-                stale = vehicleState.isStale(),
-            )
+            if (showDisclaimer) {
+                Spacer(Modifier.height(6.dp))
+                VehiclePositionDisclaimer(
+                    vehicleHasGps = renderModel.vehicleHasGps,
+                    stale = vehicleState.isStale(),
+                )
+            }
         }
     }
 }

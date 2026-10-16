@@ -80,6 +80,8 @@ data class TaskInfo(
     val segments: List<SegmentState> = emptyList(),
     /** 当前航向（度），转向段推进可见 */
     val headingDeg: Double = 0.0,
+    /** 作业车道（第几车道）：设备回显发布时下发的 `lane`；无则 null（旧固件/未下发） */
+    val lane: Int? = null,
 ) {
     /** 当前段下标（RUNNING/WAITING_CONFIRM），无则已完成段数 */
     val segmentIndex: Int
@@ -135,6 +137,8 @@ data class WorkRecord(
     // ── 任务规格与上传状态（UPLOAD_MODE=HTTP 时上传服务端；STUB 时仅本机）──
     val name: String? = null,
     val mode: TaskMode? = null,
+    /** 发布时的作业车道（第几车道）；旧记录无此字段为 null */
+    val lane: Int? = null,
     /** 发布时的路线原样保存 */
     val route: List<RouteSegment> = emptyList(),
     /** local=仅本机 / pending=待上传 / uploaded=已上传（HTTP：服务端单号；STUB：模拟单号）/ failed=上传失败 */

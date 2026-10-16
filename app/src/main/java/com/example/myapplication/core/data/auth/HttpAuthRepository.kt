@@ -1,6 +1,7 @@
 package com.example.myapplication.core.data.auth
 
 import com.example.myapplication.BuildConfig
+import com.example.myapplication.core.data.api.AuthCredentials
 import com.example.myapplication.core.data.api.AuthRepository
 import com.example.myapplication.core.data.api.AuthSession
 import com.example.myapplication.core.data.api.AuthUser
@@ -34,6 +35,11 @@ class HttpAuthRepository(
     override var currentUser: AuthUser? = null
         private set
 
+    /** 登录凭据（内存保留，供「连接设备」随绑定请求上报）；登出/登录失败即清空 */
+    @Volatile
+    override var currentCredentials: AuthCredentials? = null
+        private set
+
     override suspend fun login(username: String, password: String): Result<AuthSession> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -57,10 +63,12 @@ class HttpAuthRepository(
                 )
                 currentToken = session.token
                 currentUser = session.user
+                currentCredentials = AuthCredentials(username, password)
                 session
             }.onFailure {
                 currentToken = null
                 currentUser = null
+                currentCredentials = null
             }
         }
 
@@ -68,6 +76,7 @@ class HttpAuthRepository(
         val token = currentToken
         currentToken = null
         currentUser = null
+        currentCredentials = null
         if (token == null) return
         withContext(Dispatchers.IO) {
             // 尽力通知服务端使 token 失效；失败无妨（本地会话已清）

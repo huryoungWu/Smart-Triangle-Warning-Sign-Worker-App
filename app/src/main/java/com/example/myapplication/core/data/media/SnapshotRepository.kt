@@ -43,6 +43,7 @@ class LocalSnapshotRepository(private val context: Context) : SnapshotRepository
                     .put("id", s.id)
                     .put("capturedAt", s.capturedAt)
                     .put("taskName", s.taskName)
+                    .put("lane", s.lane ?: 0)          // 作业车道：0 = 未填写/未标注
                     .put("eventLabel", s.eventLabel)
                     .put("imageUri", s.imageUri)
                     .put("note", s.note),
@@ -63,6 +64,7 @@ class LocalSnapshotRepository(private val context: Context) : SnapshotRepository
                             id = o.optString("id"),
                             capturedAt = o.optLong("capturedAt"),
                             taskName = o.optString("taskName"),
+                            lane = o.optInt("lane", 0).takeIf { it > 0 },
                             eventLabel = o.optString("eventLabel"),
                             imageUri = o.optString("imageUri", null),
                             note = o.optString("note", null),

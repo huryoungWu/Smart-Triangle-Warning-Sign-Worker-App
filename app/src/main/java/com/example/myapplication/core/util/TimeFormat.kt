@@ -13,7 +13,10 @@ import java.util.TimeZone
  */
 object TimeFormat {
 
-    private val TZ: TimeZone = TimeZone.getTimeZone("Asia/Shanghai")
+    /** 全 App 统一时区（北京时间） */
+    const val ZONE_ID: String = "Asia/Shanghai"
+
+    private val TZ: TimeZone = TimeZone.getTimeZone(ZONE_ID)
 
     fun format(pattern: String, millis: Long): String =
         SimpleDateFormat(pattern, Locale.getDefault())
@@ -24,4 +27,8 @@ object TimeFormat {
     fun hhmmss(millis: Long): String = format("HH:mm:ss", millis)
     fun mmddHHmm(millis: Long): String = format("MM-dd HH:mm", millis)
     fun full(millis: Long): String = format("yyyy-MM-dd HH:mm", millis)
+
+    /** 是否与 [now] 同一**自然日**（按北京时间判定，风险页「今天」筛选用） */
+    fun isToday(millis: Long, now: Long = System.currentTimeMillis()): Boolean =
+        format("yyyy-MM-dd", millis) == format("yyyy-MM-dd", now)
 }
