@@ -168,7 +168,7 @@ fun TaskExecScreen(
             SectionCard(title = "实时视频") {
                 val context = LocalContext.current
                 val sl = remember { ServiceLocator.get(context) }
-                // 联调模式：播放服务端视频流（所有视频共用同一路；快照即从该流截帧）
+                // 联调模式：播放服务端**该设备的**视频流（按 deviceId 各一路；快照即从该流截帧）
                 val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
                     "${ServiceLocator.SERVER_BASE_URL}/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
                 } else {
@@ -185,7 +185,7 @@ fun TaskExecScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "服务端视频流（演示动画帧 · 所有视频共用一路流）",
+                        "服务端视频流（演示动画帧 · ${state.selectedDeviceId} 专属一路）",
                         style = MaterialTheme.typography.labelSmall,
                         color = NeutralGrey,
                     )

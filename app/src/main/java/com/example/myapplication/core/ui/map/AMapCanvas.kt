@@ -120,15 +120,8 @@ private fun renderMap(
         )
     }
 
-    // ---- 作业人员（蓝点，GCJ-02 直用，禁止转换）----
-    val phone = model.phone
-    if (phone != null) {
-        putMarker(aMap, markers, KEY_PHONE, phone, "作业人员（手机定位）", "手机定位（GCJ-02）", COLOR_PHONE)
-    } else {
-        markers.remove(KEY_PHONE)?.remove()
-    }
-
     // ---- 小车（GPS）橙点：车端上报，已转 GCJ-02 ----
+    // 地图只保留小车一颗位置球（作业人员点位/轨迹不再单独渲染；相机仍以人员位置为中心）
     val gpsPoint = model.vehicleGps
     if (gpsPoint != null) {
         putMarker(
@@ -164,8 +157,7 @@ private fun renderMap(
         polylines.remove(KEY_EST_LINE)?.remove()
     }
 
-    // ---- 轨迹（按来源分线型）----
-    updateTrail(aMap, polylines, KEY_PHONE_TRAIL, model.phoneTrail, COLOR_PHONE, dotted = false)
+    // ---- 轨迹（小车 GPS 轨迹；球已缩小，轨迹可见）----
     updateTrail(aMap, polylines, KEY_GPS_TRAIL, model.vehicleGpsTrail, COLOR_VEHICLE_GPS, dotted = false)
 
     // ---- 相机：首个有效 fix 定位一次；跟随模式下跟随手机 ----
@@ -233,33 +225,30 @@ private fun updateTrail(
     }
 }
 
+/** 位置球位图：**小尺寸**（48px），避免大球盖住轨迹线 */
 private fun circleBitmap(color: Int): Bitmap {
-    val size = 96
+    val size = 48
     val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bmp)
     val paint = Paint().apply {
         this.color = color
         isAntiAlias = true
     }
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 8f, paint)
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 3f, paint)
     val ring = Paint().apply {
         this.color = android.graphics.Color.WHITE
         isAntiAlias = true
         style = Paint.Style.STROKE
-        strokeWidth = 8f
+        strokeWidth = 3f
     }
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 8f, ring)
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 3f, ring)
     return bmp
 }
 
-private const val KEY_PHONE = "phone"
 private const val KEY_VEHICLE_GPS = "vehicle_gps"
 private const val KEY_VEHICLE_EST = "vehicle_est"
-private const val KEY_PHONE_TRAIL = "phone_trail"
 private const val KEY_GPS_TRAIL = "gps_trail"
 private const val KEY_EST_LINE = "est_line"
-
-private val COLOR_PHONE = android.graphics.Color.parseColor("#1565C0")
 private val COLOR_VEHICLE_GPS = android.graphics.Color.parseColor("#E65100")
 private val COLOR_ESTIMATE = android.graphics.Color.parseColor("#757575")
 private val COLOR_ESTIMATE_LINE = android.graphics.Color.parseColor("#9E9E9E")

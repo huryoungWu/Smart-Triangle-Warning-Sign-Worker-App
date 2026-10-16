@@ -12,7 +12,7 @@
  *  - 命令：POST /api/v1/device/command           （内置小车状态机模拟：分段路线 / 急停 / 取消 / 回收 …）
  *  - 业务：POST/GET /api/v1/tasks、POST/GET /api/v1/snapshots、POST /api/v1/warnings、
  *          GET /api/v1/risks、GET /api/v1/app/version、POST /api/v1/feedback
- *  - 视频：GET /api/v1/device/video/snapshot.jpg、GET /api/v1/device/video/stream（占位帧，非真实摄像头）
+ *  - 视频：GET /api/v1/device/video/snapshot.jpg、GET /api/v1/device/video/stream?deviceId=（按设备各一路占位帧，非真实摄像头）
  *
  * 说明：
  *  - 状态推进由 /status 的调用节奏驱动（与 APP 1Hz 轮询一致），手动遥控带 800ms 看门狗
@@ -531,25 +531,93 @@ function hsvToRgb(h, s, v) {
   return [Math.round(m[0] * 255), Math.round(m[1] * 255), Math.round(m[2] * 255)];
 }
 
+/** 字符串稳定哈希（FNV-1a）→ 用于按 deviceId 派生画面风格（同设备恒定、异设备不同） */
+function hashStr(s) {
+  let h = 2166136261 >>> 0;
+  const t = String(s || '');
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * 5×7 点阵字体（仅含 deviceId 所需字符 0-9 A-Z 与 '-'）。
+ * 每字符 7 行，每行 5bit（bit4 在左）；用于在帧左上角渲染设备号 OSD。
+ */
+const FONT_5x7 = {
+  '0': [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e], '1': [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+  '2': [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f], '3': [0x1f, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0e],
+  '4': [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02], '5': [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
+  '6': [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e], '7': [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+  '8': [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e], '9': [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
+  A: [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11], B: [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
+  C: [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e], D: [0x1c, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1c],
+  E: [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f], F: [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
+  G: [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f], H: [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+  I: [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e], J: [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0c],
+  K: [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11], L: [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
+  M: [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11], N: [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+  O: [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e], P: [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+  Q: [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d], R: [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+  S: [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e], T: [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+  U: [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e], V: [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+  W: [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a], X: [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+  Y: [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04], Z: [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+  '-': [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00], ' ': [0, 0, 0, 0, 0, 0, 0],
+};
+
+/** 在 raw（PNG filter-0 扫描线缓冲）上画 5×7 点阵文字（scale 为像素放大倍数） */
+function drawText5x7(raw, w, h, text, x0, y0, scale, rgb) {
+  let x = x0;
+  for (const ch of String(text || '').toUpperCase()) {
+    const glyph = FONT_5x7[ch];
+    if (glyph) {
+      for (let ry = 0; ry < 7; ry++) {
+        for (let rx = 0; rx < 5; rx++) {
+          if (!((glyph[ry] >> (4 - rx)) & 1)) continue;
+          for (let sy = 0; sy < scale; sy++) {
+            for (let sx = 0; sx < scale; sx++) {
+              const px = x + rx * scale + sx;
+              const py = y0 + ry * scale + sy;
+              if (px < 0 || px >= w || py < 0 || py >= h) continue;
+              const o = py * (1 + w * 3) + 1 + px * 3;
+              raw[o] = rgb[0]; raw[o + 1] = rgb[1]; raw[o + 2] = rgb[2];
+            }
+          }
+        }
+      }
+    }
+    x += 6 * scale;
+  }
+}
+
 /** 当前帧号：由时间驱动（10fps）。多个观看端与"截帧"看到的内容一致 */
 const frameIndex = () => Math.floor(Date.now() / 100);
 
 /**
- * 生成动画视频帧（PNG，320×180）——Mock 的"视频源"，所有视频共用这一路流：
- * - 天色缓慢轮转（约 12 秒一轮）→ 不同时刻帧颜色不同
- * - 道路 + 向近处滚动的中央虚线 → 运动感
- * - 左右往返的三角警示牌 → 主体运动
+ * 生成动画视频帧（PNG，320×180）——Mock 的"视频源"，**按 deviceId 区分画面**
+ * （API 形态与真实后端一致：`/device/video/*?deviceId=` 指定取哪台设备的流）：
+ * - 天色/路面/警示牌色调、运动相位、OSD 设备号均随 deviceId 派生 → 不同设备画面稳定不同
+ * - 天色缓慢轮转（约 12 秒一轮）→ 同设备不同时刻帧颜色也不同
+ * - 道路 + 向近处滚动的中央虚线 → 运动感；左右往返的三角警示牌 → 主体运动
+ * - 左上角点阵 OSD 渲染 deviceId → 肉眼可辨当前是哪台设备的流
  * 接真实视频源（车端摄像头/视频文件）后，替换本函数与 /device/video/* 即可。
  */
-function makeFrame(fi = frameIndex(), w = 320, h = 180) {
+function makeFrame(fi = frameIndex(), w = 320, h = 180, deviceId = 'TC-001') {
+  const seed = hashStr(deviceId);
   const raw = Buffer.alloc(h * (1 + w * 3));
-  const [skyR, skyG, skyB] = hsvToRgb(((fi * 3) % 360) / 360, 0.45, 0.5);
+  const [skyR, skyG, skyB] = hsvToRgb((((seed % 120) + (fi * 3) % 360) % 360) / 360, 0.45, 0.5);
   const roadTop = 96;
-  const dashOffset = (fi * 6) % 48;
-  // 三角警示牌：左右往返（周期约 16 秒）
+  const dashOffset = (fi * 6 + (seed >>> 8) % 48) % 48;
+  // 三角警示牌：左右往返（周期约 16 秒；相位随设备错开）
   const span = w - 80;
-  const tPos = (fi * 2) % (2 * span);
+  const tPos = (fi * 2 + (seed >>> 4) % span) % (2 * span);
   const signX = 40 + (tPos < span ? tPos : 2 * span - tPos);
+  // 警示牌/路缘配色随设备派生（hue 偏移），肉眼区分更明显
+  const [signR, signG, signB] = hsvToRgb(((seed >>> 16) % 360) / 360, 0.85, 1.0);
+  const [kerbR, kerbG, kerbB] = hsvToRgb(((seed >>> 8) % 360) / 360, 0.18, 0.42);
   for (let y = 0; y < h; y++) {
     const row = y * (1 + w * 3);
     raw[row] = 0;
@@ -559,9 +627,9 @@ function makeFrame(fi = frameIndex(), w = 320, h = 180) {
       let g;
       let b;
       if (y < roadTop) {
-        r = skyR; g = skyG; b = skyB;                 // 天空（轮转色）
+        r = skyR; g = skyG; b = skyB;                 // 天空（轮转色，基点随设备）
       } else if (y < roadTop + 6) {
-        r = 96; g = 96; b = 104;                       // 路缘
+        r = kerbR; g = kerbG; b = kerbB;               // 路缘（随设备）
       } else {
         r = 52; g = 52; b = 60;                        // 路面
       }
@@ -575,13 +643,16 @@ function makeFrame(fi = frameIndex(), w = 320, h = 180) {
       if (rowInSign >= 0 && rowInSign < signH) {
         const half = (rowInSign / signH) * 16;
         if (Math.abs(x - signX) <= half) {
-          r = 255; g = 140; b = 0;                     // 橙
+          r = signR; g = signG; b = signB;             // 牌面（随设备）
           if (Math.abs(x - signX) > half - 3 || roadTop - y < 3) { r = 255; g = 255; b = 255; } // 白边
         }
       }
       raw[o] = r; raw[o + 1] = g; raw[o + 2] = b;
     }
   }
+  // 左上角 OSD：设备号（白字黑边，肉眼可辨是哪台设备的流）
+  drawText5x7(raw, w, h, deviceId, 7, 7, 2, [0, 0, 0]);
+  drawText5x7(raw, w, h, deviceId, 6, 6, 2, [255, 255, 255]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
@@ -826,9 +897,9 @@ const server = http.createServer(async (req, res) => {
       hasImage: true, // 服务端从视频流截帧（接真机后为车端抓帧/APP 抓帧）
     };
     snapshots.push(snap);
-    // 快照图片：**统一从视频流截帧** —— 取当前帧（时间驱动，与观看端看到的一致）。
+    // 快照图片：**从该设备视频流截帧** —— 取当前帧（时间驱动，与观看端该 deviceId 流看到的一致）。
     // 客户端 multipart 里若带 image 暂不采用（联调约定；接真机后改为车端抓帧或 APP 抓帧，见 docs 第 9 节）。
-    const frame = makeFrame(frameIndex());
+    const frame = makeFrame(frameIndex(), 320, 180, snap.deviceId);
     const fileName = `${snap.id}.png`;
     mediaStore.set(fileName, { buffer: frame, contentType: 'image/png' });
     persistMedia(fileName, frame); // 截帧落盘 → 重启后经 /media/{name} 仍可回放
@@ -878,12 +949,12 @@ const server = http.createServer(async (req, res) => {
     const lng = Number(url.searchParams.get('lng') || 116.4004);
     const radiusKm = Number(url.searchParams.get('radiusKm') || 2);
     const seeds = [
-      { m: 400, heading: 25, type: 'breakdown', title: '小车抛锚占用最右车道', desc: '一辆白色小轿车因发动机故障停在最右车道，未设置警示标志，后方车辆请注意避让。', photo: false, video: true },
-      { m: 1100, heading: 140, type: 'rear_end', title: '两车追尾，占用左侧两车道', desc: '高峰时段两辆小客车发生追尾，双方驾驶员无受伤，车辆停在左侧两条车道，正在等待拖车。', photo: true, video: true },
-      { m: 1600, heading: 210, type: 'construction', title: '路面养护施工，单向半幅封闭', desc: '路面沥青摊铺作业，施工区域长约 300 米，已布设锥桶与警示灯，请提前变道。', photo: true, video: false },
-      { m: 1900, heading: 75, type: 'rollover', title: '货车侧翻，货物散落', desc: '一辆轻型货车因雨天路滑发生侧翻，货物散落占用两条车道，现场正在清理。', photo: true, video: true },
-      { m: 2200, heading: 300, type: 'debris', title: '车道内有散落物', desc: '前方车道内有较大面积散落物（疑似轮胎碎片），请减速通过并注意避让。', photo: false, video: false },
-      { m: 2600, heading: 340, type: 'other', title: '前方长下坡，事故多发路段', desc: '该路段为长下坡弯道，历史事故多发，请控制车速、保持车距。', photo: true, video: false },
+      { m: 400, heading: 25, type: 'breakdown', title: '小车抛锚占用最右车道', desc: '一辆白色小轿车因发动机故障停在最右车道，未设置警示标志，后方车辆请注意避让。', photo: false, video: true, dev: 'TC-001' },
+      { m: 1100, heading: 140, type: 'rear_end', title: '两车追尾，占用左侧两车道', desc: '高峰时段两辆小客车发生追尾，双方驾驶员无受伤，车辆停在左侧两条车道，正在等待拖车。', photo: true, video: true, dev: 'TC-002' },
+      { m: 1600, heading: 210, type: 'construction', title: '路面养护施工，单向半幅封闭', desc: '路面沥青摊铺作业，施工区域长约 300 米，已布设锥桶与警示灯，请提前变道。', photo: true, video: false, dev: 'TC-001' },
+      { m: 1900, heading: 75, type: 'rollover', title: '货车侧翻，货物散落', desc: '一辆轻型货车因雨天路滑发生侧翻，货物散落占用两条车道，现场正在清理。', photo: true, video: true, dev: 'TC-002' },
+      { m: 2200, heading: 300, type: 'debris', title: '车道内有散落物', desc: '前方车道内有较大面积散落物（疑似轮胎碎片），请减速通过并注意避让。', photo: false, video: false, dev: 'TC-001' },
+      { m: 2600, heading: 340, type: 'other', title: '前方长下坡，事故多发路段', desc: '该路段为长下坡弯道，历史事故多发，请控制车速、保持车距。', photo: true, video: false, dev: 'TC-002' },
     ];
     const now = Date.now();
     const base = baseUrl(req);
@@ -904,7 +975,8 @@ const server = http.createServer(async (req, res) => {
           hasPhoto: s.photo,
           hasVideo: s.video,
           photoUrls: s.photo ? [`${base}/media/acc-${1000 + i}-1.png`] : [],
-          videoUrl: s.video ? `${base}/api/v1/device/video/stream?deviceId=TC-001` : null, // 所有视频共用一路流
+          // 事故视频指向事发设备自己的流（按 deviceId 各自一路）
+          videoUrl: s.video ? `${base}/api/v1/device/video/stream?deviceId=${s.dev}` : null,
         };
       });
     log(`风险查询 (${lat},${lng}) r=${radiusKm}km → ${risks.length} 条`);
@@ -942,17 +1014,19 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 201, { id: `fb-${String(bizSeq++).padStart(4, '0')}` });
   }
 
-  // ── 视频流（统一视频源：实时视频与所有"事故视频"共用这一路流；接真实视频源后替换本段）──
+  // ── 视频流（按 deviceId 各自一路：实时视频/事故视频/快照截帧均以 deviceId 区分；接真实视频源后替换本段）──
   if (path === '/api/v1/device/video/snapshot.jpg' && req.method === 'GET') {
-    const png = makeFrame(); // 当前帧（时间驱动，与观看端一致）
+    const dev = url.searchParams.get('deviceId') || 'TC-001';
+    const png = makeFrame(frameIndex(), 320, 180, dev); // 该设备当前帧（时间驱动，与观看端一致）
     res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': '*' });
     return res.end(png);
   }
   if (path === '/api/v1/device/video/stream' && req.method === 'GET') {
+    const dev = url.searchParams.get('deviceId') || 'TC-001';
     res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Access-Control-Allow-Origin': '*' });
-    log(`[视频流] 客户端接入 deviceId=${url.searchParams.get('deviceId') || '-'}（10fps 动画帧）`);
+    log(`[视频流] 客户端接入 deviceId=${dev}（10fps 动画帧）`);
     const timer = setInterval(() => {
-      const png = makeFrame(); // 10fps；帧内容由时间驱动
+      const png = makeFrame(frameIndex(), 320, 180, dev); // 10fps；帧内容由时间驱动
       res.write(`--frame\r\nContent-Type: image/png\r\nContent-Length: ${png.length}\r\n\r\n`);
       res.write(png);
       res.write('\r\n');

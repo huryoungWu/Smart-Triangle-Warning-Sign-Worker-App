@@ -139,6 +139,7 @@ fun AppNavHost() {
             // 风险提示（新增 Tab）：半径可设 + 高德地图 + 距离排序事故列表
             composable(Routes.RISK) {
                 RiskScreen(
+                    vm = vm,
                     mapVm = mapVm,
                     onOpenDetail = { accident ->
                         pendingAccident = accident

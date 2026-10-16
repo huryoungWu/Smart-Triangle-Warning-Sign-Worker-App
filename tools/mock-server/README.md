@@ -68,8 +68,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/tasks -H "Content-Type: application/js
      -d '{"id":"t1","deviceId":"TC-001","kind":"fixed_distance","deviceResult":"done","verifyResult":"pass","targetM":20}'   # 记录上传（核验通过自动上传的同一接口）
 curl "http://127.0.0.1:8080/api/v1/tasks"        # 记录列表（重启后仍在 —— 已落盘保留）
 curl "http://127.0.0.1:8080/api/v1/risks?lat=39.9928&lng=116.4004&radiusKm=2"   # 首条应为「作业人员上报：…」
-curl -o frame.png "http://127.0.0.1:8080/api/v1/device/video/snapshot.jpg"   # 视频流当前帧（快照即取此帧）
-curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?deviceId=TC-001" | head -c 2000   # MJPEG 视频流（Ctrl+C 结束）
+curl -o frame.png "http://127.0.0.1:8080/api/v1/device/video/snapshot.jpg?deviceId=TC-001"   # 该设备视频流当前帧（快照即取此帧）
+curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?deviceId=TC-001" | head -c 2000   # TC-001 的 MJPEG 流（Ctrl+C 结束；换 deviceId 得不同画面）
 ```
 
 > Windows 下 curl 命令行直接传中文会因控制台编码变成乱码，属正常现象；
@@ -85,7 +85,7 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?deviceId=TC-001" | hea
 | 绑定未知设备 | **自动注册为「自定义设备」**并归属当前用户（方便扫码演示） | 404 `unknown_device` |
 | 内置设备解绑 | TC-001/TC-002 返回 400 `cannot_unbind_builtin` | 同左 |
 | 快照上传 | 仅元数据；**图片由服务端从视频流截帧**（当前帧）并**落盘** `tools/mock-server/data/media/`，经 `/media/{id}.png` 回放（**重启后仍可回放**）；**自动登记为风险事件**（风险页 `source=worker`）。未带坐标时按查询点就近放置（演示友好）；带 `lat/lng` 时按真实坐标、半径过滤 | 存盘返回 url；同左（按上报真实坐标过滤） |
-| 视频 | **所有视频共用同一路 MJPEG 流**（`/api/v1/device/video/stream`，10fps 时间驱动动画帧：天色轮转/道路虚线/往返三角牌）；`videoUrl` 均指向该流。视频帧**实时生成、不落盘**；仅"截帧成快照"的那一帧落盘（见上行） | 中继车端真实视频（MJPEG/HLS） |
+| 视频 | **按 `deviceId` 各自一路 MJPEG 流**（`/api/v1/device/video/stream?deviceId=`，10fps 时间驱动动画帧：天色轮转/道路虚线/往返三角牌；色调/相位/左上角 OSD 设备号均随 deviceId 派生，**不同设备画面稳定不同**）；`videoUrl` 指向事发设备那一路。视频帧**实时生成、不落盘**；仅"截帧成快照"的那一帧落盘（见上行） | 中继车端真实视频（MJPEG/HLS） |
 | 数据持久化 | **任务记录（/tasks 上传）+ 快照媒体 + 快照登记记录 + 风险登记**落盘 `tools/mock-server/data/`（`media/*.png` + `state.json`），重启自动恢复（启动日志打印恢复条数）；其余演示数据（预警/设备状态）仍在内存，重启清空。目录已 gitignore | 数据库 |
 | 状态推进 | 由 `/status` 调用节奏驱动（与 APP 1Hz 轮询一致） | 车端 1Hz 上报 |
 
@@ -94,6 +94,6 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?deviceId=TC-001" | hea
 认证 `auth/login|refresh|profile|logout` ｜ 设备 `devices`、`devices/bind`、`devices/:id/bind`、`devices/:id`
 ｜ 状态 `device/status` ｜ 命令 `device/command`（move/stop/estop/resume/light/task_start/segment_confirm/task_cancel/recover/odo_reset）
 ｜ 记录 `tasks`（POST/GET，支持 `Idempotency-Key`） ｜ 快照 `snapshots`（multipart/JSON） ｜ 预警 `warnings`
-｜ 风险 `risks` ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`
+｜ 风险 `risks` ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`（均按 `?deviceId=` 区分设备）
 
-字段与错误码详见 `docs/后端接口设计文档.md`。
+字段与错误码详见 `docs/后端接口设计文档.md`。**正式服务端开发（后端同学）请看 [`docs/后端开发对接文档.md`](../../docs/后端开发对接文档.md)**——按 APP 实际解析口径整理，含 Mock 禁止照搬清单（视频必须接真实摄像头）与验收清单。

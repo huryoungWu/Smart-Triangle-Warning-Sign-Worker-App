@@ -50,6 +50,7 @@ fun MapPanel(
     title: String = "小车实时位置",
     showLegend: Boolean = true,
     showFollowSwitch: Boolean = false,
+    extraMarkers: List<MapPin> = emptyList(),
 ) {
     val mapState by mapVm.uiState.collectAsStateWithLifecycle()
     val vehicleState by vm.uiState.collectAsStateWithLifecycle()
@@ -95,6 +96,7 @@ fun MapPanel(
             AMapCanvas(
                 model = renderModel,
                 onMapReady = { },
+                extraMarkers = extraMarkers,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(height),

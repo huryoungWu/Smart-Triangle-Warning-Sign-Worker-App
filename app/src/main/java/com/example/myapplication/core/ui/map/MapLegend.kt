@@ -28,7 +28,6 @@ fun MapLegend(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        LegendRow(Color(0xFF1565C0), "作业人员（手机定位）", "手机 GPS 定位（GCJ-02，直接显示）")
         if (vehicleHasGps) {
             LegendRow(Color(0xFFE65100), "小车（GPS）", "车端 GPS 上报（WGS-84 转 GCJ-02 显示）")
         }

@@ -127,7 +127,7 @@ fun AccidentDetailScreen(
                 }
             }
 
-            // ── 事故视频（联调阶段所有视频共用服务端同一路视频流）──
+            // ── 事故视频（联调阶段播放事发设备的视频流，videoUrl 已带 deviceId）──
             SectionCard(title = "事故视频") {
                 val video = accident.videoUrl
                 when {

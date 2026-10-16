@@ -32,15 +32,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.geo.GeoPoint
-import com.example.myapplication.core.geo.MapRenderModel
 import com.example.myapplication.core.model.risk.Accident
 import com.example.myapplication.core.model.risk.RiskRadius
 import com.example.myapplication.core.ui.RemoteImage
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
-import com.example.myapplication.core.ui.map.AMapCanvas
+import com.example.myapplication.core.ui.map.MapPanel
 import com.example.myapplication.core.ui.map.MapPin
 import com.example.myapplication.feature.map.MapViewModel
+import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -57,6 +57,7 @@ import java.util.Locale
  */
 @Composable
 fun RiskScreen(
+    vm: VehicleViewModel,
     mapVm: MapViewModel,
     onOpenDetail: (Accident) -> Unit,
 ) {
@@ -88,29 +89,24 @@ fun RiskScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // ── 风险地图 ──
+        // ── 风险地图（中心点=用户坐标，与任务地图同源：MapPanel 接管定位/隐私门）──
         item {
-            SectionCard(title = "风险地图（周边 ${radiusKm} 公里）") {
-                AMapCanvas(
-                    model = MapRenderModel(
-                        phone = phoneFix?.point,
-                        followPhone = true,
-                    ),
-                    extraMarkers = accidents.map { a ->
-                        MapPin(
-                            id = a.id,
-                            point = GeoPoint(a.lat, a.lng),
-                            title = a.title,
-                            snippet = "${a.type.label} · ${a.distanceText}",
-                            colorArgb = android.graphics.Color.parseColor("#D32F2F"),
-                        )
-                    },
-                    onMapReady = { },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp),
-                )
-            }
+            MapPanel(
+                vm = vm,
+                mapVm = mapVm,
+                height = 260.dp,
+                title = "风险地图（周边 ${radiusKm} 公里）",
+                showLegend = false,
+                extraMarkers = accidents.map { a ->
+                    MapPin(
+                        id = a.id,
+                        point = GeoPoint(a.lat, a.lng),
+                        title = a.title,
+                        snippet = "${a.type.label} · ${a.distanceText}",
+                        colorArgb = android.graphics.Color.parseColor("#D32F2F"),
+                    )
+                },
+            )
         }
 
         // ── 事故列表（从近到远）──
