@@ -5,7 +5,7 @@ package com.example.myapplication.core.model.vehicle
  * 一切"完成/停止/模式"以本快照为准，不得由 APP 侧推断（规格第 4 节·数据真实性）。
  */
 data class DeviceSnapshot(
-    val deviceId: String,
+    val deviceCode: String,
     val fw: String,
     val mode: VehicleMode,
     val motion: MotionState,

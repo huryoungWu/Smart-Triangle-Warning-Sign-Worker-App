@@ -142,7 +142,7 @@ class ServiceLocator(context: Context) {
      * 3. 复位设备层中"属于旧服务端"的状态
      *
      * 调用方在返回 [ServerUrlApplyResult.CHANGED] 后，还需通知 `VehicleViewModel.onServerChanged()`
-     * 停掉 1Hz 状态轮询与遥控保持包，并拉取新服务端的设备列表。
+     * 停掉状态刷新与遥控保持包，并拉取新服务端的设备列表。
      */
     suspend fun applyServerBaseUrl(raw: String): ServerUrlApplyResult {
         val canonical = com.example.myapplication.core.util.normalizeServerUrl(raw)

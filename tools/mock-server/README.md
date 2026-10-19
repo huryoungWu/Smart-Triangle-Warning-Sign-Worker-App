@@ -100,17 +100,17 @@ curl -X POST http://127.0.0.1:8080/api/v1/auth/login -H "Content-Type: applicati
 curl http://127.0.0.1:8080/api/v1/devices
 curl -X POST http://127.0.0.1:8080/api/v1/devices/bind -H "Content-Type: application/json" \
      -d '{"username":"demo","password":"123456","device_code":"TC-001","binding_code":"123456","device_type":"triangle"}'   # 连接设备（绑定码）
-curl "http://127.0.0.1:8080/api/v1/device/status?deviceId=TC-001"
+curl "http://127.0.0.1:8080/api/v1/device/status?device_code=TC-001"
 curl -X POST http://127.0.0.1:8080/api/v1/device/command -H "Content-Type: application/json" \
-     -d '{"deviceId":"TC-001","type":"task_start","kind":"fixed_distance","targetM":2,"lane":2}'   # lane = 作业车道（1~8）
+     -d '{"device_code":"TC-001","type":"task_start","kind":"fixed_distance","targetM":2,"lane":2}'   # lane = 作业车道（1~8）
 curl -X POST http://127.0.0.1:8080/api/v1/snapshots -H "Content-Type: application/json" \
-     -d '{"id":"t1","deviceId":"TC-001","taskName":"自动布置","lane":2,"eventLabel":"任务开始（自动抓拍）","capturedAt":1791980000000}'
+     -d '{"id":"t1","device_code":"TC-001","taskName":"自动布置","lane":2,"eventLabel":"任务开始（自动抓拍）","capturedAt":1791980000000}'
 curl -X POST http://127.0.0.1:8080/api/v1/tasks -H "Content-Type: application/json" -H "Idempotency-Key: t1" \
-     -d '{"id":"t1","deviceId":"TC-001","kind":"fixed_distance","lane":2,"deviceResult":"done","verifyResult":"pass","targetM":20}'   # 记录上传（核验通过自动上传的同一接口）
+     -d '{"id":"t1","device_code":"TC-001","kind":"fixed_distance","lane":2,"deviceResult":"done","verifyResult":"pass","targetM":20}'   # 记录上传（核验通过自动上传的同一接口）
 curl "http://127.0.0.1:8080/api/v1/tasks"        # 记录列表（重启后仍在 —— 已落盘保留）
 curl "http://127.0.0.1:8080/api/v1/risks?lat=39.9928&lng=116.4004&radiusKm=2"   # 演示 8 条（今天 6 + 历史 2，均带 lane 车道）+「作业人员上报：…」条目
-curl -o frame.png "http://127.0.0.1:8080/api/v1/device/video/snapshot.jpg?deviceId=TC-001"   # 该设备视频流当前帧（快照即取此帧）
-curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?deviceId=TC-001" | head -c 2000   # TC-001 的 MJPEG 流（Ctrl+C 结束；换 deviceId 得不同画面）
+curl -o frame.png "http://127.0.0.1:8080/api/v1/device/video/snapshot.jpg?device_code=TC-001"   # 该设备视频流当前帧（快照即取此帧）
+curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | head -c 2000   # TC-001 的 MJPEG 流（Ctrl+C 结束；换 device_code 得不同画面）
 ```
 
 > **Windows 下 curl 命令行直接传中文会因控制台编码（GBK）变成乱码字节**——Mock 现在会**直接拒绝**
@@ -151,24 +151,25 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?deviceId=TC-001" | hea
 | 项 | Mock 行为 | 正式服务端应按文档 |
 |---|---|---|
 | 鉴权 | 宽松：无 token 按默认用户 `demo`；任意账号均可登录（新账号自动建号） | Bearer token，401 刷新 |
-| 车端 GPS | 默认发送 `gps` 块（**WGS-84**）：位置 = 手机锚点（APP 随状态上报 `&lat=&lng=`）/默认点，沿航向投影 odo 里程，**随 1Hz 状态实时更新** — APP 端转 GCJ-02 后映射到高德地图。置 `EMIT_GPS=false` 可模拟无 GPS（APP 自动走行程估算降级） | 真实车端 GPS 模块（同为 WGS-84） |
+| 车端 GPS | 默认发送 `gps` 块（**WGS-84**）：位置 = 手机锚点（APP 随状态上报 `&lat=&lng=`）/默认点，沿航向投影 odo 里程，**随状态刷新更新（服务端定时推进）** — APP 端转 GCJ-02 后映射到高德地图。置 `EMIT_GPS=false` 可模拟无 GPS（APP 自动走行程估算降级） | 真实车端 GPS 模块（同为 WGS-84） |
 | 设备列表 | **按登录用户过滤**（demo 有 2 台；新账号为空） | 同左（按绑定关系） |
 | 连接设备（bind） | **只校验绑定码非空**（任意非空都算通过）；账号/密码仅记日志 | 必须比对设备登记的绑定码，不符 → 400 `invalid_binding_code`；账号与 Bearer 身份一致 |
 | 绑定未知设备 | **自动注册为「自定义设备」**并归属当前用户（方便扫码演示） | 404 `unknown_device` |
 | 内置设备解绑 | TC-001/TC-002 返回 400 `cannot_unbind_builtin` | 同左 |
 | 快照上传 | 仅元数据；**图片由服务端从视频流截帧**（当前帧）并**落盘** `tools/mock-server/data/media/`，经 `/media/{id}.png` 回放（**重启后仍可回放**）；**自动登记为风险事件**（风险页 `source=worker`）。未带坐标时按查询点就近放置（演示友好）；带 `lat/lng` 时按真实坐标、半径过滤 | 存盘返回 url；同左（按上报真实坐标过滤） |
-| 视频 | **按 `deviceId` 各自一路 MJPEG 流**（`/api/v1/device/video/stream?deviceId=`，10fps 时间驱动动画帧：天色轮转/道路虚线/往返三角牌；色调/相位/左上角 OSD 设备号均随 deviceId 派生，**不同设备画面稳定不同**）；`videoUrl` 指向事发设备那一路。视频帧**实时生成、不落盘**；仅"截帧成快照"的那一帧落盘（见上行） | 中继车端真实视频（MJPEG/HLS） |
+| 视频 | **按 `device_code` 各自一路 MJPEG 流**（`/api/v1/device/video/stream?device_code=`，10fps 时间驱动动画帧：天色轮转/道路虚线/往返三角牌；色调/相位/左上角 OSD 设备号均随 device_code 派生，**不同设备画面稳定不同**）；`videoUrl` 指向事发设备那一路。视频帧**实时生成、不落盘**；仅"截帧成快照"的那一帧落盘（见上行） | 中继车端真实视频（MJPEG/HLS） |
 | 数据持久化 | **任务记录（/tasks 上传）+ 快照媒体 + 快照登记记录 + 风险登记**落盘 `tools/mock-server/data/`（`media/*.png` + `state.json`），重启自动恢复（启动日志打印恢复条数）；其余演示数据（预警/设备状态）仍在内存，重启清空。目录已 gitignore | 数据库 |
 | 图片地址 | 入库存**相对路径**（`/media/xxx.png`），`/risks` 查询时按**当前请求的 origin** 拼绝对地址（历史绝对地址只重写 origin）——换端口 / 换访问地址（127.0.0.1 ↔ 局域网 IP ↔ adb reverse）后旧数据图片仍可加载 | 对象存储/CDN 固定域名 |
 | 风险数据（`/risks`） | 演示 **8 条**（**今天 6 条** + 历史 2 条），**每条都带 `lane` 占用车道**，距离均 ≤ 2 公里、方位各异 —— 便于验证 APP 风险页「默认今天 / 按距离近→远 / 按时间新→旧」。**无车道信息的条目 APP 不展示**（列表每行都要有「第 N 车道」） | 真实外部数据源（交警/平台），每条带占用车道 |
 | 请求体编码 | 文本字段含替换字符 U+FFFD（非法 UTF-8，如 Windows 控制台 GBK 中文）→ `400 bad_request` 拒绝入库 | 同左（应校验编码） |
-| 状态推进 | 由 `/status` 调用节奏驱动（与 APP 1Hz 轮询一致） | 车端 1Hz 上报 |
+| 状态推进 | 由 Mock 服务端定时器驱动（与 APP 查询次数无关；APP 连接成功后读取一次、之后由用户手动刷新） | 车端 1Hz 上报 |
+| 请求/响应日志 | **每个请求**打印方法/路径/请求体（JSON 原样；multipart 打印解析后字段；GET 为空），**每个 JSON 响应**打印状态码与响应体 | — |
 
 ## 接口清单
 
 认证 `auth/login|refresh|profile|logout` ｜ 设备 `devices`、**`devices/bind`（连接设备：账号+绑定码）**、`devices/:id/bind`、`devices/:id`
 ｜ 状态 `device/status`（含 `task.lane` 回显） ｜ 命令 `device/command`（move/stop/estop/resume/light/task_start[+lane]/segment_confirm/task_cancel/recover/odo_reset）
 ｜ 记录 `tasks`（POST/GET，支持 `Idempotency-Key`，含 `lane`） ｜ 快照 `snapshots`（multipart/JSON，含 `lane`） ｜ 预警 `warnings`（含 `lane`）
-｜ 风险 `risks`（含 `lane` 占用车道） ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`（均按 `?deviceId=` 区分设备）
+｜ 风险 `risks`（含 `lane` 占用车道） ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`（均按 `?device_code=` 区分设备）
 
 字段与错误码详见 `docs/后端接口设计文档.md`。**正式服务端开发（后端同学）请看 [`docs/后端开发对接文档.md`](../../docs/后端开发对接文档.md)**——按 APP 实际解析口径整理，含 Mock 禁止照搬清单（视频必须接真实摄像头）与验收清单。

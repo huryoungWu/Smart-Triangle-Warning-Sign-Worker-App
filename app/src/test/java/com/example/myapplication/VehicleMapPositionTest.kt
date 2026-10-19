@@ -25,7 +25,7 @@ import org.junit.Test
 class VehicleMapPositionTest {
 
     private fun snapshot(gps: VehicleGps?, traveledM: Double = 0.0) = DeviceSnapshot(
-        deviceId = "TC-001",
+        deviceCode = "TC-001",
         fw = "0.3.1",
         mode = VehicleMode.STANDBY,
         motion = MotionState.IDLE,

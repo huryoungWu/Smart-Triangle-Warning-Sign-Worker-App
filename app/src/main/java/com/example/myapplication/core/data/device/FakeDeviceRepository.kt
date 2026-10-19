@@ -90,7 +90,7 @@ class FakeDeviceRepository : DeviceRepository {
 
     /** 当前选中的设备 id（连接页下拉选择后写入） */
     @Volatile
-    var selectedDeviceId: String = DEVICE_ID
+    var selectedDeviceCode: String = DEVICE_CODE
 
     private var lastTickAt = System.currentTimeMillis()
     private var lastCmdAt = System.currentTimeMillis()
@@ -144,7 +144,7 @@ class FakeDeviceRepository : DeviceRepository {
             return Result.failure(IOException("绑定码不能为空，请输入设备铭牌上的绑定码"))
         }
         delay(NETWORK_DELAY_MS * 4)   // 模拟一次绑定请求往返
-        selectedDeviceId = request.deviceCode
+        selectedDeviceCode = request.deviceCode
         Result.success(Unit)
     }
 
@@ -549,7 +549,7 @@ class FakeDeviceRepository : DeviceRepository {
     // ══════════════ 快照与 GPS ══════════════
 
     private fun buildSnapshot(): DeviceSnapshot = DeviceSnapshot(
-        deviceId = selectedDeviceId,
+        deviceCode = selectedDeviceCode,
         fw = FW_VERSION,
         mode = mode,
         motion = motion,
@@ -586,7 +586,7 @@ class FakeDeviceRepository : DeviceRepository {
     }
 
     companion object {
-        const val DEVICE_ID = "TC-001"
+        const val DEVICE_CODE = "TC-001"
         const val FW_VERSION = "0.3.1"
 
         val BASE_GCJ02: GeoPoint = GeoPoint(39.9928, 116.4004)

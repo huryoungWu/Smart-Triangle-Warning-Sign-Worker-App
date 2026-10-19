@@ -32,7 +32,7 @@ class HttpSnapshotUploadRepository(
     private val baseUrl: String get() = baseUrlProvider()
 
 
-    override suspend fun upload(snapshot: TaskSnapshot, deviceId: String): Result<String> =
+    override suspend fun upload(snapshot: TaskSnapshot, deviceCode: String): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val boundary = "----ZT-${UUID.randomUUID().toString().take(12)}"
@@ -41,7 +41,7 @@ class HttpSnapshotUploadRepository(
 
                 listOfNotNull(
                     "id" to snapshot.id,
-                    "deviceId" to deviceId,
+                    "device_code" to deviceCode,
                     "taskName" to snapshot.taskName,
                     // 作业车道（第几车道）：随任务带入，服务端登记到风险事件；未填写则不上报
                     snapshot.lane?.let { "lane" to it.toString() },

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenu
@@ -82,7 +83,7 @@ fun ConnectScreen(
     val connecting = state.connection == ConnectionPhase.CONNECTING
 
     val devices = state.deviceList
-    val selected = devices.firstOrNull { it.id == state.selectedDeviceId } ?: devices.firstOrNull()
+    val selected = devices.firstOrNull { it.id == state.selectedDeviceCode } ?: devices.firstOrNull()
     // 用户添加的设备（本机登记，可在「添加设备」弹窗内手动删除）
     val customDevices by vm.customDevices.collectAsStateWithLifecycle(initialValue = emptyList())
     var menuExpanded by remember { mutableStateOf(false) }
@@ -93,7 +94,7 @@ fun ConnectScreen(
     // ── 添加设备（手动编号 / 扫码）──
     var showAddDevice by remember { mutableStateOf(false) }
     var addByScan by remember { mutableStateOf(false) }
-    var newDeviceId by remember { mutableStateOf("") }
+    var newDeviceCode by remember { mutableStateOf("") }
     val cameraPermission = rememberCameraPermissionState()
     val scanLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         com.journeyapps.barcodescanner.ScanContract(),
@@ -102,7 +103,7 @@ fun ConnectScreen(
         if (!contents.isNullOrEmpty()) {
             // 识别成功：扫码相机界面由扫码库自动关闭，这里同步收起「添加设备」弹窗，全流程自动退出
             vm.addDevice(contents)
-            newDeviceId = ""
+            newDeviceCode = ""
             showAddDevice = false
         }
     }
@@ -164,7 +165,7 @@ fun ConnectScreen(
                                 }
                             },
                             trailingIcon = {
-                                if (dev.id == state.selectedDeviceId) {
+                                if (dev.id == state.selectedDeviceCode) {
                                     Text("✓", color = SafeGreen, fontWeight = FontWeight.Bold)
                                 }
                             },
@@ -229,6 +230,34 @@ fun ConnectScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(if (connecting) "连接中…" else "连接设备")
+                }
+            }
+
+            // 手动刷新设备状态：已连接或失联（状态未确认）时可用。
+            // 初次状态读取失败后，可在这里重试，无需重新绑定。
+            if (state.connection == ConnectionPhase.CONNECTED ||
+                state.connection == ConnectionPhase.LOST
+            ) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = vm::refreshStatus,
+                    enabled = !state.refreshing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.refreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (state.refreshing) "刷新中…" else "刷新状态")
                 }
             }
 
@@ -328,8 +357,8 @@ fun ConnectScreen(
                         }
                     } else {
                         OutlinedTextField(
-                            value = newDeviceId,
-                            onValueChange = { newDeviceId = it },
+                            value = newDeviceCode,
+                            onValueChange = { newDeviceCode = it },
                             label = { Text("设备编号") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -390,11 +419,11 @@ fun ConnectScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        vm.addDevice(newDeviceId)
-                        newDeviceId = ""
+                        vm.addDevice(newDeviceCode)
+                        newDeviceCode = ""
                         showAddDevice = false
                     },
-                    enabled = newDeviceId.isNotBlank(),
+                    enabled = newDeviceCode.isNotBlank(),
                 ) { Text("添加") }
             },
             dismissButton = {

@@ -24,7 +24,7 @@ class VehicleUiStateTest {
         estopLocked: Boolean = false,
         taskState: TaskRunState = TaskRunState.IDLE,
     ) = DeviceSnapshot(
-        deviceId = "TC-001",
+        deviceCode = "TC-001",
         fw = "0.3.1",
         mode = mode,
         motion = motion,

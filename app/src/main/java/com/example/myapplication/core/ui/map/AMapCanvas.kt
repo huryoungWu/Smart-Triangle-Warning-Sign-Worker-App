@@ -35,7 +35,7 @@ import com.example.myapplication.core.geo.MapRenderModel
  *   触发顺序随宿主变化，双调是常见崩溃源；用 runCatching 兜底
  * - 隐私同意门在 [com.example.myapplication.feature.map.MapScreen] 外层，未同意前不创建本组件
  *
- * 渲染用**增量 diff**（Marker 复用）而非 clear+add，防止 1s 轮询导致闪烁/内存抖动。
+ * 渲染用**增量 diff**（Marker 复用）而非 clear+add，防止状态刷新导致闪烁/内存抖动。
  */
 /**
  * 通用地图标记点（如道路风险事故点位）。

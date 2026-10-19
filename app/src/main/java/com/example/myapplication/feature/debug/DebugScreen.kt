@@ -70,7 +70,11 @@ fun DebugScreen(
     ) {
         PageTitle("调试数据", onBack = onBack)
 
-        DeviceStatusStrip(state)
+        DeviceStatusStrip(
+            state = state,
+            refreshing = state.refreshing,
+            onRefresh = vm::refreshStatus,
+        )
 
         SectionCard(title = "实时数据（车轮编码器）") {
             if (state.isStale()) {

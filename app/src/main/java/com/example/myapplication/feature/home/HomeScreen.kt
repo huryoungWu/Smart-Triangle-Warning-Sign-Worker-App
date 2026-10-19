@@ -98,7 +98,7 @@ fun HomeScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = snapshot?.let { "${it.deviceId}" } ?: "未读取到设备信息",
+                        text = snapshot?.let { "${it.deviceCode}" } ?: "未读取到设备信息",
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
@@ -115,6 +115,13 @@ fun HomeScreen(
                 }
             }
             Spacer(Modifier.height(10.dp))
+            SecondaryActionButton(
+                text = if (state.refreshing) "刷新中…" else "刷新状态",
+                onClick = vm::refreshStatus,
+                enabled = (connected || state.connection == ConnectionPhase.LOST) &&
+                    !state.refreshing,
+            )
+            Spacer(Modifier.height(8.dp))
             SecondaryActionButton(text = "重新选择设备", onClick = onBackToConnect)
         }
 

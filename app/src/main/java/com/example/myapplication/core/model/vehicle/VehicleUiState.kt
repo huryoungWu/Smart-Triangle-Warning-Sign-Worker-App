@@ -37,10 +37,12 @@ data class VehicleUiState(
     /** 可选设备列表（连接页下拉） */
     val deviceList: List<DeviceSummary> = emptyList(),
     /** 当前选中的设备 id */
-    val selectedDeviceId: String = "",
+    val selectedDeviceCode: String = "",
     val snapshot: DeviceSnapshot? = null,
     /** 最近一次成功收到设备状态的时间，用于"最后更新时间"与"非实时"标注（M02/M09） */
     val lastUpdateAt: Long = 0L,
+    /** 手动刷新进行中：按钮显示进度并禁用，避免并发请求 */
+    val refreshing: Boolean = false,
     /** 进行中的命令票据（命令五层分层），同一时刻仅一条运动类命令 */
     val activeTicket: CommandTicket? = null,
     /** 手动遥控按住中（M04） */
@@ -61,7 +63,7 @@ data class VehicleUiState(
     val pendingResumeConfirm: Boolean = false,
     val dialog: AppDialog? = null,
 ) {
-    /** 数据是否过期（>3 秒），过期须标注"非实时"（M09） */
+    /** 数据是否过期（>3 秒），过期须标注"非实时"（M09；手动刷新模式下每次刷新后 3 秒即过期） */
     fun isStale(now: Long = System.currentTimeMillis()): Boolean =
         lastUpdateAt == 0L || now - lastUpdateAt > 3000L
 

@@ -54,7 +54,7 @@ fun DeviceInfoScreen(
         PageTitle("设备信息", onBack = onBack)
 
         SectionCard(title = "设备") {
-            InfoRow("设备编号", snapshot?.deviceId ?: "未连接")
+            InfoRow("设备编号", snapshot?.deviceCode ?: "未连接")
             InfoRow("固件版本", snapshot?.fw ?: "-")
             InfoRow("连接方式", "本地 Wi-Fi · 192.168.4.1")
             InfoRow("通信模式", if (transport == DeviceTransport.FAKE) "模拟设备（演示）" else "真实设备（HTTP）")

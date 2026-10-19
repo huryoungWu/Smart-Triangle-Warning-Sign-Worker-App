@@ -83,7 +83,10 @@ class VehicleViewModel(
     /** 用户添加的设备（连接页「添加设备」弹窗内展示，可手动删除） */
     val customDevices: Flow<List<DeviceSummary>> = deviceRegistryRepository.devices
 
-    private var pollJob: Job? = null
+    /** 连接（bind + 初次状态读取）协程 */
+    private var connectJob: Job? = null
+    /** 手动刷新状态协程（同一时刻只允许一个） */
+    private var refreshJob: Job? = null
     private var keepaliveJob: Job? = null
     private var cmdSeq = 1
 
@@ -109,16 +112,16 @@ class VehicleViewModel(
             _uiState.update {
                 it.copy(
                     deviceList = devices,
-                    selectedDeviceId = devices.firstOrNull()?.id ?: "",
+                    selectedDeviceCode = devices.firstOrNull()?.id ?: "",
                 )
             }
         }
     }
 
     /** 选择要连接的设备（连接页下拉） */
-    fun selectDevice(deviceId: String) {
+    fun selectDevice(deviceCode: String) {
         if (_uiState.value.connection == ConnectionPhase.CONNECTED) return
-        _uiState.update { it.copy(selectedDeviceId = deviceId) }
+        _uiState.update { it.copy(selectedDeviceCode = deviceCode) }
     }
 
     /** 设备列表 = 内置设备 + 用户已添加登记（按编号去重） */
@@ -136,10 +139,10 @@ class VehicleViewModel(
         viewModelScope.launch {
             val devices = loadDeviceList()
             _uiState.update { s ->
-                val keep = s.selectedDeviceId.takeIf { id -> devices.any { it.id == id } }
+                val keep = s.selectedDeviceCode.takeIf { id -> devices.any { it.id == id } }
                 s.copy(
                     deviceList = devices,
-                    selectedDeviceId = keep ?: devices.firstOrNull()?.id ?: "",
+                    selectedDeviceCode = keep ?: devices.firstOrNull()?.id ?: "",
                 )
             }
         }
@@ -155,15 +158,15 @@ class VehicleViewModel(
             rejectMotion("设备编号不能为空")
             return
         }
-        if (id.length > MAX_DEVICE_ID_LEN) {
-            rejectMotion("设备编号不能超过 $MAX_DEVICE_ID_LEN 个字符")
+        if (id.length > MAX_DEVICE_CODE_LEN) {
+            rejectMotion("设备编号不能超过 $MAX_DEVICE_CODE_LEN 个字符")
             return
         }
         val existing = _uiState.value.deviceList.firstOrNull { it.id.equals(id, ignoreCase = true) }
         if (existing != null) {
             _uiState.update {
                 it.copy(
-                    selectedDeviceId = existing.id,
+                    selectedDeviceCode = existing.id,
                     dialog = AppDialog.Alert("设备已存在", "编号 ${existing.id} 已在设备列表中，已为你选中该设备。"),
                 )
             }
@@ -181,7 +184,7 @@ class VehicleViewModel(
             _uiState.update {
                 it.copy(
                     deviceList = loadDeviceList(),
-                    selectedDeviceId = id,
+                    selectedDeviceCode = id,
                     dialog = AppDialog.Alert("添加成功", "设备 $id 已添加并选中，可直接连接。"),
                 )
             }
@@ -192,11 +195,11 @@ class VehicleViewModel(
      * 删除用户添加的设备（连接页「添加设备」弹窗内手动删除）。
      * 删除后若该设备正被选中，自动改选列表中的第一台；正连接的设备须先断开连接。
      */
-    fun removeDevice(deviceId: String) {
-        val id = deviceId.trim()
+    fun removeDevice(deviceCode: String) {
+        val id = deviceCode.trim()
         if (id.isEmpty()) return
         if (_uiState.value.connection == ConnectionPhase.CONNECTED &&
-            _uiState.value.selectedDeviceId == id
+            _uiState.value.selectedDeviceCode == id
         ) {
             rejectMotion("该设备已连接，请先断开连接后再删除")
             return
@@ -207,10 +210,10 @@ class VehicleViewModel(
             _uiState.update {
                 it.copy(
                     deviceList = devices,
-                    selectedDeviceId = if (it.selectedDeviceId == id) {
+                    selectedDeviceCode = if (it.selectedDeviceCode == id) {
                         devices.firstOrNull()?.id ?: ""
                     } else {
-                        it.selectedDeviceId
+                        it.selectedDeviceCode
                     },
                     dialog = AppDialog.Alert(
                         "设备已删除",
@@ -224,15 +227,17 @@ class VehicleViewModel(
     // ==================== M01 设备连接 ====================
 
     /**
-     * 连接设备（M01）：**先带绑定码连接（连接即绑定）**，成功后才开始 1Hz 状态轮询。
+     * 连接设备（M01）：**先带绑定码连接（连接即绑定）**，成功后**只读取一次**初始状态。
+     *
+     * 之后不再有任何定时请求；状态只在用户点击「刷新状态」时重新读取（见 [refreshStatus]）。
      *
      * 连接请求 5 个字段：登录账号/密码（[authRepository] 登录后带入，未登录省略）+ 设备编号
-     * （[VehicleUiState.selectedDeviceId]）+ [bindingCode]（用户输入）+ 设备类型（默认 `triangle`）。
+     * （[VehicleUiState.selectedDeviceCode]）+ [bindingCode]（用户输入）+ 设备类型（默认 `triangle`）。
      * 连接失败（绑定码错误/已被绑定/设备不存在）保持未连接并原样展示服务端原因。
      */
     fun connect(bindingCode: String) {
-        if (pollJob?.isActive == true) return
-        val selectedId = _uiState.value.selectedDeviceId
+        if (connectJob?.isActive == true || refreshJob?.isActive == true) return
+        val selectedId = _uiState.value.selectedDeviceCode
         if (selectedId.isBlank()) {
             rejectMotion("请先选择要连接的设备")
             return
@@ -244,13 +249,13 @@ class VehicleViewModel(
         }
         // 把所选设备 id 下发到设备层（Fake / 服务端实现据此回对应设备信息与路由命令）
         (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let {
-            it.selectedDeviceId = selectedId
+            it.selectedDeviceCode = selectedId
         }
         (deviceRepository as? com.example.myapplication.core.data.device.ServerDeviceRepository)?.let {
-            it.selectedDeviceId = selectedId
+            it.selectedDeviceCode = selectedId
         }
         _uiState.update { it.copy(connection = ConnectionPhase.CONNECTING) }
-        pollJob = viewModelScope.launch {
+        connectJob = viewModelScope.launch {
             val credentials = authRepository.currentCredentials
             val connected = deviceRepository.connect(
                 com.example.myapplication.core.data.api.DeviceConnectRequest(
@@ -275,24 +280,55 @@ class VehicleViewModel(
                 }
                 return@launch
             }
-            while (isActive) {
-                val result = deviceRepository.fetchStatus()
-                result.onSuccess { snapshot ->
-                    onSnapshot(snapshot)
-                }.onFailure {
-                    onLinkLost()
-                }
-                delay(POLL_INTERVAL_MS)
+            // 连接成功后的初始状态：只读这一次，不启动任何定时任务
+            fetchStatusOnce()
+        }
+    }
+
+    /**
+     * 手动刷新设备状态（唯一的状态重新读取入口）。
+     *
+     * - 仅在「已连接」或「已断开/状态未确认」时可用；刷新成功后由 [onSnapshot] 恢复已连接。
+     * - 刷新期间忽略重复点击，保证同一时刻只有一个状态请求。
+     * - 不自恢复、不重试：失败后由用户再次点击刷新。
+     */
+    fun refreshStatus() {
+        val state = _uiState.value
+        if (state.connection != ConnectionPhase.CONNECTED &&
+            state.connection != ConnectionPhase.LOST
+        ) {
+            return
+        }
+        if (connectJob?.isActive == true || refreshJob?.isActive == true) return
+
+        refreshJob = viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true) }
+            try {
+                fetchStatusOnce()
+            } finally {
+                _uiState.update { it.copy(refreshing = false) }
             }
         }
     }
 
-    /** 手动断开连接（M01）：停止轮询与保持包，清空设备状态回未连接 */
+    /** 状态接口的唯一读取出口：连接后的初次读取与手动刷新共用 */
+    private suspend fun fetchStatusOnce() {
+        deviceRepository.fetchStatus()
+            .onSuccess { snapshot ->
+                onSnapshot(snapshot)
+            }.onFailure {
+                onLinkLost()
+            }
+    }
+
+    /** 手动断开连接（M01）：停止保持包与状态刷新任务，清空设备状态回未连接 */
     fun disconnect() {
         keepaliveJob?.cancel()
         keepaliveJob = null
-        pollJob?.cancel()
-        pollJob = null
+        refreshJob?.cancel()
+        refreshJob = null
+        connectJob?.cancel()
+        connectJob = null
         _uiState.update {
             it.copy(
                 connection = ConnectionPhase.DISCONNECTED,
@@ -302,6 +338,7 @@ class VehicleViewModel(
                 holdingDir = null,
                 activeTicket = null,
                 stopUnconfirmed = false,
+                refreshing = false,
             )
         }
     }
@@ -310,12 +347,12 @@ class VehicleViewModel(
      * 服务端地址已切换（设置 → 服务器地址）：旧连接、旧设备列表全部作废。
      *
      * 必须在 `ServiceLocator.applyServerBaseUrl` **之后**调用 —— 此时地址已生效，
-     * [reloadDevices] 才会打到新服务端。不清空的话，1Hz 状态轮询与 300ms 遥控保持包
+     * [reloadDevices] 才会打到新服务端。不清空的话，状态刷新与 300ms 遥控保持包
      * 会安静地继续打向新服务端。
      */
     fun onServerChanged() {
         disconnect()
-        _uiState.update { it.copy(deviceList = emptyList(), selectedDeviceId = "") }
+        _uiState.update { it.copy(deviceList = emptyList(), selectedDeviceCode = "") }
         reloadDevices()
     }
 
@@ -997,7 +1034,7 @@ class VehicleViewModel(
             snapshotRepository.capture(snapshot)
             // 统一约定：快照上传到服务端 → 服务端登记为风险事件（风险页展示「作业人员上报」）。
             // 失败不阻塞主流程（本机已保存）；重试标记/队列为后续增强。
-            snapshotUploadRepository?.upload(snapshot, _uiState.value.selectedDeviceId)
+            snapshotUploadRepository?.upload(snapshot, _uiState.value.selectedDeviceCode)
         }
     }
 
@@ -1098,15 +1135,15 @@ class VehicleViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        pollJob?.cancel()
+        connectJob?.cancel()
+        refreshJob?.cancel()
     }
 
     companion object {
-        private const val POLL_INTERVAL_MS = 1000L
         /** 按住移动时的保持包间隔（须短于设备看门狗 800ms） */
         private const val MOVE_KEEPALIVE_MS = 300L
         /** 添加设备编号最大长度 */
-        private const val MAX_DEVICE_ID_LEN = 32
+        private const val MAX_DEVICE_CODE_LEN = 32
 
         val Factory = viewModelFactory {
             initializer {

@@ -27,7 +27,7 @@ import java.net.URL
  * ViewModel / 界面不感知差异；切换见 [com.example.myapplication.di.ServiceLocator.TRANSPORT]。
  *
  * 协议见 `docs/后端接口设计文档.md`：
- * - `GET  /api/v1/device/status?deviceId=` —— 状态（复用 [DeviceJson] 解析：小写 token 与枚举名均兼容）
+ * - `GET  /api/v1/device/status?device_code=` —— 状态（复用 [DeviceJson] 解析：小写 token 与枚举名均兼容）
  * - `POST /api/v1/device/command`         —— 全部控制命令（type 见文档 6.2 全表）
  * - `GET  /api/v1/devices`                —— 设备列表（台账）
  *
@@ -47,18 +47,18 @@ class ServerDeviceRepository(
 
     /** 当前选中设备（连接页下拉后由 ViewModel 写入，用法同 [FakeDeviceRepository]） */
     @Volatile
-    var selectedDeviceId: String = DEFAULT_DEVICE_ID
+    var selectedDeviceCode: String = DEFAULT_DEVICE_CODE
 
     /**
      * 服务端已切换：设备编号属于**旧**服务端，必须复位交由连接页重新选择。
-     * 不复位的话，新服务端上可能没有这台设备（状态轮询永远失败 → 卡在"未连接"），
+     * 不复位的话，新服务端上可能没有这台设备（状态读取永远失败 → 卡在"未连接"），
      * 也可能恰好存在但**不属于当前账号** —— 而 `/device/status`、`/device/command`
-     * 都只带 deviceId，会向别人的设备下发命令。
+     * 都只带 device_code，会向别人的设备下发命令。
      *
      * `phoneLat` / `phoneLng` **不复位**：那是手机自身位置（客户端事实），与服务端无关。
      */
     fun resetForNewServer() {
-        selectedDeviceId = DEFAULT_DEVICE_ID
+        selectedDeviceCode = DEFAULT_DEVICE_CODE
     }
 
     /**
@@ -82,7 +82,7 @@ class ServerDeviceRepository(
                     val d = arr.optJSONObject(i) ?: continue
                     add(
                         DeviceSummary(
-                            id = d.optString("deviceId"),
+                            id = d.optString("device_code"),
                             name = d.optString("name"),
                             started = d.optBoolean("started", false),
                             available = d.optBoolean("available", true),
@@ -100,7 +100,7 @@ class ServerDeviceRepository(
      * `username` / `password` / `device_code` / `binding_code` / `device_type`（见 docs 第 4.2 节）。
      *
      * 失败时抛出**服务端可读原因**（如「绑定码不能为空」「该设备已被其他账号绑定」），
-     * 由连接页原样展示；成功后才由 ViewModel 启动 1Hz 状态轮询。
+     * 由连接页原样展示；成功后由 ViewModel 读取一次状态（之后仅在手动刷新时再读）。
      */
     override suspend fun connect(request: DeviceConnectRequest): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -114,11 +114,12 @@ class ServerDeviceRepository(
             val device = JSONObject(request("POST", "$baseUrl/api/v1/devices/bind", body.toString()))
                 .optJSONObject("device")
             // 以服务端返回的设备编号为准（编号可能有规范化），保证后续状态查询/命令对应同一台设备
-            val boundId = device?.optString("deviceId")?.takeIf { it.isNotBlank() }
-            if (boundId != null) selectedDeviceId = boundId
+            val boundId = device?.optString("device_code")?.takeIf { it.isNotBlank() }
+            if (boundId != null) selectedDeviceCode = boundId
         }
     }
 
+    /** 读取一次设备状态：连接成功后读取一次，之后仅在用户手动刷新时调用。 */
     override suspend fun fetchStatus(): Result<DeviceSnapshot> = withContext(Dispatchers.IO) {
         runCatching {
             val anchor = if (phoneLat.isFinite() && phoneLng.isFinite()) {
@@ -127,7 +128,7 @@ class ServerDeviceRepository(
                 ""
             }
             DeviceJson.parseStatus(
-                request("GET", "$baseUrl/api/v1/device/status?deviceId=$selectedDeviceId$anchor", null),
+                request("GET", "$baseUrl/api/v1/device/status?device_code=$selectedDeviceCode$anchor", null),
             )
         }
     }
@@ -188,10 +189,10 @@ class ServerDeviceRepository(
     override suspend fun resetOdo(): Result<CmdAck> =
         postCommand(JSONObject().put("type", "odo_reset"))
 
-    /** 命令统一出口：补 deviceId 与客户端时间戳，解析 {accepted, cmdId, reason} */
+    /** 命令统一出口：补 device_code 与客户端时间戳，解析 {accepted, cmdId, reason} */
     private suspend fun postCommand(body: JSONObject): Result<CmdAck> = withContext(Dispatchers.IO) {
         runCatching {
-            body.put("deviceId", selectedDeviceId).put("ts", System.currentTimeMillis())
+            body.put("device_code", selectedDeviceCode).put("ts", System.currentTimeMillis())
             DeviceJson.parseAck(request("POST", "$baseUrl/api/v1/device/command", body.toString()))
         }
     }
@@ -250,6 +251,6 @@ class ServerDeviceRepository(
 
     companion object {
         /** 内置演示设备（Mock 服务端默认账号 demo 名下）；换服务端后复位到它 */
-        const val DEFAULT_DEVICE_ID = "TC-001"
+        const val DEFAULT_DEVICE_CODE = "TC-001"
     }
 }

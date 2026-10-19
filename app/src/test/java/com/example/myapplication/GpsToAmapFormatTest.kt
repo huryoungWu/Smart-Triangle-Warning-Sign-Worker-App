@@ -34,7 +34,7 @@ import kotlin.math.abs
 class GpsToAmapFormatTest {
 
     private fun snapshotWithGps(lat: Double, lng: Double) = DeviceSnapshot(
-        deviceId = "TC-001",
+        deviceCode = "TC-001",
         fw = "0.3.1",
         mode = VehicleMode.STANDBY,
         motion = MotionState.IDLE,

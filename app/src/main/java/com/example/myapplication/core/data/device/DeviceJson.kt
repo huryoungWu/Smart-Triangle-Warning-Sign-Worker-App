@@ -27,7 +27,7 @@ object DeviceJson {
         val taskObj = o.optJSONObject("task")
         val odoObj = o.optJSONObject("odo")
         return DeviceSnapshot(
-            deviceId = o.optString("deviceId", "unknown"),
+            deviceCode = o.optString("device_code", "unknown"),
             fw = o.optString("fw", "-"),
             mode = enumOrDefault(o.optString("mode"), VehicleMode.STANDBY),
             motion = enumOrDefault(o.optString("motion"), MotionState.IDLE),

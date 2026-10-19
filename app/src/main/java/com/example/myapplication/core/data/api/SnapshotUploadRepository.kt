@@ -17,5 +17,5 @@ import com.example.myapplication.core.model.media.TaskSnapshot
  */
 interface SnapshotUploadRepository {
     /** 上传快照（成功返回服务端快照 id） */
-    suspend fun upload(snapshot: TaskSnapshot, deviceId: String): Result<String>
+    suspend fun upload(snapshot: TaskSnapshot, deviceCode: String): Result<String>
 }

@@ -5,11 +5,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.core.util.TimeFormat
@@ -27,9 +36,16 @@ import java.util.Locale
 fun DeviceStatusStrip(
     state: VehicleUiState,
     modifier: Modifier = Modifier,
+    /** 手动刷新进行中：按钮显示进度并禁用 */
+    refreshing: Boolean = false,
+    /** 手动刷新状态；null 时不显示刷新按钮（未接入手动刷新的页面保持原样） */
+    onRefresh: (() -> Unit)? = null,
 ) {
     val snapshot = state.snapshot
     val stale = state.isStale()
+    // 已连接或已断开（状态未确认）时允许刷新；连接中/未连接不可刷新
+    val canRefresh = state.connection == ConnectionPhase.CONNECTED ||
+        state.connection == ConnectionPhase.LOST
 
     Column(modifier = modifier.fillMaxWidth()) {
         FlowRow(
@@ -56,6 +72,7 @@ fun DeviceStatusStrip(
                 .fillMaxWidth()
                 .padding(top = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             // 位置来源按事实标注：车端 GPS 定位 / 车轮编码器估算（数据真实性要求）
             val gpsFixed = snapshot?.gps?.state == GpsFixState.FIXED
@@ -71,13 +88,37 @@ fun DeviceStatusStrip(
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
             )
-            if (state.lastUpdateAt > 0) {
-                Text(
-                    text = "最后更新 ${TimeFormat.format("HH:mm:ss", state.lastUpdateAt)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state.lastUpdateAt > 0) {
+                    Text(
+                        text = "最后更新 ${TimeFormat.format("HH:mm:ss", state.lastUpdateAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (onRefresh != null) {
+                    TextButton(
+                        onClick = onRefresh,
+                        enabled = canRefresh && !refreshing,
+                    ) {
+                        if (refreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (refreshing) "刷新中…" else "刷新状态")
+                    }
+                }
             }
         }
     }

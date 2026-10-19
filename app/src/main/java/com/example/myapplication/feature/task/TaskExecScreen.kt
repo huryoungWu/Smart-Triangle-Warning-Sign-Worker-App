@@ -85,7 +85,7 @@ import com.example.myapplication.ui.theme.WarningRedBg
  * 任务执行页（取代原「一键布置」）。
  *
  * **页面上没有「启动」按钮 —— 任务在「发布」时已开始**，本页纯监控 + 少量干预。
- * 进度完全由 1Hz 轮询 + 设备回报的分段状态驱动。
+ * 进度由连接时/手动刷新读取的设备回报（分段状态）驱动。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -134,7 +134,11 @@ fun TaskExecScreen(
         },
         )
 
-        DeviceStatusStrip(state)
+        DeviceStatusStrip(
+            state = state,
+            refreshing = state.refreshing,
+            onRefresh = vm::refreshStatus,
+        )
         MapPanel(vm = vm, mapVm = mapVm, height = 200.dp, title = "小车实时位置", showLegend = false)
 
         // ── 实时视频与快照捕捉 ──
@@ -145,9 +149,9 @@ fun TaskExecScreen(
             // MjpegStreamView 以 url 为 key → 自动断流重连
             val serverUrl by sl.settingsRepository.serverBaseUrl
                 .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
-            // 联调模式：播放服务端**该设备的**视频流（按 deviceId 各一路；快照即从该流截帧）
+            // 联调模式：播放服务端**该设备的**视频流（按 device_code 各一路；快照即从该流截帧）
             val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
-                "$serverUrl/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
+                "$serverUrl/api/v1/device/video/stream?device_code=${state.selectedDeviceCode}"
             } else {
                 null
             }
@@ -162,7 +166,7 @@ fun TaskExecScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "服务端视频流（演示动画帧 · ${state.selectedDeviceId} 专属一路）",
+                    "服务端视频流（演示动画帧 · ${state.selectedDeviceCode} 专属一路）",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
