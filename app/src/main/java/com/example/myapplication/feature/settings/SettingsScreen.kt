@@ -13,7 +13,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +30,7 @@ import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
 import com.example.myapplication.core.ui.LockedFeatureCard
+import com.example.myapplication.core.ui.MenuRow
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
@@ -59,6 +59,7 @@ fun SettingsScreen(
     onOpenDeviceInfo: () -> Unit,
     onOpenDebug: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenServerConfig: () -> Unit,
     onBackToLogin: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -128,6 +129,8 @@ fun SettingsScreen(
 
         // ── 更多（APP 一切入口）──
         SectionCard(title = "更多") {
+            MenuRow("服务器地址", onClick = onOpenServerConfig)
+            MenuRow("调试数据", onClick = onOpenDebug)
             MenuRow("关于我们", onClick = onOpenAbout)
             MenuRow("帮助与反馈", onClick = {
                 vm.showInfo(
@@ -153,35 +156,5 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun MenuRow(
-    label: String,
-    danger: Boolean = false,
-    onClick: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (danger) com.example.myapplication.ui.theme.WarningRed
-            else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = onClick) {
-            Text(
-                text = "›",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (danger) com.example.myapplication.ui.theme.WarningRed
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }

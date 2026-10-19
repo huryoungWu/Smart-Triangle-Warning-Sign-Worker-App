@@ -41,6 +41,7 @@ import com.example.myapplication.feature.risk.AccidentDetailScreen
 import com.example.myapplication.feature.risk.RiskScreen
 import com.example.myapplication.feature.settings.AboutScreen
 import com.example.myapplication.feature.settings.DeviceInfoScreen
+import com.example.myapplication.feature.settings.ServerConfigScreen
 import com.example.myapplication.feature.settings.SettingsScreen
 import com.example.myapplication.feature.task.TaskExecScreen
 import com.example.myapplication.feature.task.TaskPublishScreen
@@ -168,7 +169,21 @@ fun AppNavHost() {
                     onOpenDeviceInfo = { navController.navigate(Routes.DEVICE_INFO) },
                     onOpenDebug = { navController.navigate(Routes.DEBUG) },
                     onOpenAbout = { navController.navigate(Routes.ABOUT) },
+                    onOpenServerConfig = { navController.navigate(Routes.SERVER_CONFIG) },
                     onBackToLogin = {
+                        navController.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    },
+                )
+            }
+
+            composable(Routes.SERVER_CONFIG) {
+                ServerConfigScreen(
+                    vm = vm,
+                    onBack = { navController.popBackStack() },
+                    // 地址已切换 → 旧会话作废，回登录页重新登录（同「切换账号」的写法）
+                    onSaved = {
                         navController.navigate(Routes.LOGIN) {
                             popUpTo(0) { inclusive = true }
                         }

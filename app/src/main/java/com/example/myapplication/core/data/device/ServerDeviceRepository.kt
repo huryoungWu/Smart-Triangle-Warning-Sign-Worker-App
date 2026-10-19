@@ -10,6 +10,7 @@ import com.example.myapplication.core.model.vehicle.MoveDir
 import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskMode
+import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -33,16 +34,32 @@ import java.net.URL
  * 联调：`tools/mock-server/server.js`（零依赖 Node Mock，已内置小车状态机模拟）。
  */
 class ServerDeviceRepository(
-    private val baseUrl: String,
+    /** 每次请求时解析（服务端地址可在「设置 → 服务器地址」运行时更改） */
+    private val baseUrlProvider: () -> String = { FALLBACK_SERVER_BASE_URL },
     /** 登录 token 提供者（未登录返回 null）；由 ServiceLocator 注入 */
     private val tokenProvider: () -> String? = { null },
     private val connectTimeoutMs: Int = 1500,
     private val readTimeoutMs: Int = 2000,
 ) : DeviceRepository {
 
+    /** 保持 `baseUrl` 这个名字：下面所有 `"$baseUrl/api/v1/..."` 插值点无需改动 */
+    private val baseUrl: String get() = baseUrlProvider()
+
     /** 当前选中设备（连接页下拉后由 ViewModel 写入，用法同 [FakeDeviceRepository]） */
     @Volatile
-    var selectedDeviceId: String = "TC-001"
+    var selectedDeviceId: String = DEFAULT_DEVICE_ID
+
+    /**
+     * 服务端已切换：设备编号属于**旧**服务端，必须复位交由连接页重新选择。
+     * 不复位的话，新服务端上可能没有这台设备（状态轮询永远失败 → 卡在"未连接"），
+     * 也可能恰好存在但**不属于当前账号** —— 而 `/device/status`、`/device/command`
+     * 都只带 deviceId，会向别人的设备下发命令。
+     *
+     * `phoneLat` / `phoneLng` **不复位**：那是手机自身位置（客户端事实），与服务端无关。
+     */
+    fun resetForNewServer() {
+        selectedDeviceId = DEFAULT_DEVICE_ID
+    }
 
     /**
      * 手机当前位置（GCJ-02，由 MapViewModel 实时写入，用法同 Fake 的 gpsBaseGcj02）。
@@ -230,4 +247,9 @@ class ServerDeviceRepository(
             LightMode.ON -> "on"
             LightMode.BLINK -> "blink"
         }
+
+    companion object {
+        /** 内置演示设备（Mock 服务端默认账号 demo 名下）；换服务端后复位到它 */
+        const val DEFAULT_DEVICE_ID = "TC-001"
+    }
 }

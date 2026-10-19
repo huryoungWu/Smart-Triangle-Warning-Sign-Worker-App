@@ -34,6 +34,18 @@ enum class UploadMode { STUB, HTTP }
 /** 道路风险数据源：FAKE = 演示数据；SERVER = 服务端 GET /api/v1/risks */
 enum class RiskSource { FAKE, SERVER }
 
+/** [ServiceLocator.applyServerBaseUrl] 的结果 */
+enum class ServerUrlApplyResult {
+    /** 地址非法，未做任何改动 */
+    INVALID,
+
+    /** 规范化后与当前地址相同（例如只换了个等价写法）—— 不登出、不断连 */
+    UNCHANGED,
+
+    /** 确实换了服务端：旧会话已作废，调用方应引导重新登录 */
+    CHANGED,
+}
+
 /**
  * 简易手动 DI（单模块不引入 Hilt/Koin）。
  * 通信层接口化：默认 Fake 模拟设备（无真机可跑通全流程），接真机切 HTTP。
@@ -42,12 +54,30 @@ class ServiceLocator(context: Context) {
 
     val settingsRepository = SettingsRepository(context)
 
+    init {
+        // 启动期同步灌一次地址（DataStore 是异步的，而下面的仓库要能同步取到地址）。
+        // 唯一一次阻塞主线程，量级 1–50 ms；详见 SettingsRepository.hydrateServerBaseUrlBlocking。
+        settingsRepository.hydrateServerBaseUrlBlocking()
+    }
+
+    /**
+     * 各 HTTP 仓库的服务端地址提供者：**每次请求时才解析**。
+     *
+     * 这样换地址不需要重建 ServiceLocator / ViewModel —— ViewModel 在构造时就把仓库实例
+     * 捕获成 val（见 AppNavHost 的 Factory），重建传不过去；provider 让对象标识保持不变。
+     */
+    private val baseUrlProvider: () -> String = { settingsRepository.currentServerBaseUrl }
+
+    /** 当前生效的服务端地址（同步读；界面请订阅 `settingsRepository.serverBaseUrl` 以跟随变化） */
+    val serverBaseUrl: String get() = settingsRepository.currentServerBaseUrl
+
     /**
      * 账号（登录/登出）。设备信息按登录用户获取：各 HTTP 仓库经 [AuthRepository.currentToken]
      * 携带 `Authorization`；未登录（含跳过登录）时不带，Mock 服务端按默认用户 demo 处理。
      * 调试默认账号：demo / 123456（登录页已预填）。
      */
-    val authRepository: AuthRepository = com.example.myapplication.core.data.auth.HttpAuthRepository(SERVER_BASE_URL)
+    val authRepository: AuthRepository =
+        com.example.myapplication.core.data.auth.HttpAuthRepository(baseUrlProvider)
 
     val workRecordRepository = WorkRecordRepository(context)
 
@@ -65,7 +95,7 @@ class ServiceLocator(context: Context) {
      */
     val snapshotUploadRepository: SnapshotUploadRepository? = when (TRANSPORT) {
         DeviceTransport.SERVER -> com.example.myapplication.core.data.media.HttpSnapshotUploadRepository(
-            SERVER_BASE_URL,
+            baseUrlProvider,
             tokenProvider = { authRepository.currentToken },
         )
         else -> null
@@ -80,7 +110,7 @@ class ServiceLocator(context: Context) {
         when (RISK_SOURCE) {
             RiskSource.FAKE -> com.example.myapplication.core.data.risk.FakeRiskRepository()
             RiskSource.SERVER -> com.example.myapplication.core.data.risk.HttpRiskRepository(
-                SERVER_BASE_URL,
+                baseUrlProvider,
                 tokenProvider = { authRepository.currentToken },
             )
         }
@@ -90,7 +120,7 @@ class ServiceLocator(context: Context) {
         when (UPLOAD_MODE) {
             UploadMode.STUB -> com.example.myapplication.core.data.upload.StubTaskUploadRepository()
             UploadMode.HTTP -> com.example.myapplication.core.data.upload.HttpTaskUploadRepository(
-                SERVER_BASE_URL,
+                baseUrlProvider,
                 tokenProvider = { authRepository.currentToken },
             )
         }
@@ -99,9 +129,41 @@ class ServiceLocator(context: Context) {
         DeviceTransport.FAKE -> FakeDeviceRepository()
         DeviceTransport.HTTP -> HttpDeviceRepository()
         DeviceTransport.SERVER -> ServerDeviceRepository(
-            SERVER_BASE_URL,
+            baseUrlProvider,
             tokenProvider = { authRepository.currentToken },
         )
+    }
+
+    /**
+     * 应用新的服务端地址（**唯一写入入口**）。顺序不可调换：
+     *
+     * 1. 落库 + 更新内存缓存 → 此后所有仓库立即指向新地址
+     * 2. 作废旧会话（`clearSession`，**不是** `logout` —— 后者会把旧 token 发给新服务端）
+     * 3. 复位设备层中"属于旧服务端"的状态
+     *
+     * 调用方在返回 [ServerUrlApplyResult.CHANGED] 后，还需通知 `VehicleViewModel.onServerChanged()`
+     * 停掉 1Hz 状态轮询与遥控保持包，并拉取新服务端的设备列表。
+     */
+    suspend fun applyServerBaseUrl(raw: String): ServerUrlApplyResult {
+        val canonical = com.example.myapplication.core.util.normalizeServerUrl(raw)
+            ?: return ServerUrlApplyResult.INVALID
+        val changed = canonical != settingsRepository.currentServerBaseUrl
+        if (!settingsRepository.saveServerBaseUrl(canonical)) return ServerUrlApplyResult.INVALID
+        if (changed) {
+            authRepository.clearSession()
+            (deviceRepository as? ServerDeviceRepository)?.resetForNewServer()
+        }
+        return if (changed) ServerUrlApplyResult.CHANGED else ServerUrlApplyResult.UNCHANGED
+    }
+
+    /** 清除用户覆盖，回到编译期默认地址（语义同 [applyServerBaseUrl]） */
+    suspend fun resetServerBaseUrl(): ServerUrlApplyResult {
+        val before = settingsRepository.currentServerBaseUrl
+        val restored = settingsRepository.resetServerBaseUrl()
+        if (restored == before) return ServerUrlApplyResult.UNCHANGED
+        authRepository.clearSession()
+        (deviceRepository as? ServerDeviceRepository)?.resetForNewServer()
+        return ServerUrlApplyResult.CHANGED
     }
 
     val transport: DeviceTransport get() = TRANSPORT
@@ -119,19 +181,10 @@ class ServiceLocator(context: Context) {
          * 一行切换（联调只改这一行）：
          * - [DeviceTransport.FAKE]   模拟设备演示（默认，无服务端也能跑全流程）
          * - [DeviceTransport.SERVER] 三层架构联调：状态/命令/记录上传/风险数据全部走服务端
-         *                            （配套地址 [SERVER_BASE_URL]，步骤见 tools/mock-server/README.md）
+         *                            （服务端地址见 SettingsRepository.serverBaseUrl，步骤见 tools/mock-server/README.md）
          * - [DeviceTransport.HTTP]   旧方案：手机直连真机 192.168.4.1
          */
         val TRANSPORT: DeviceTransport = DeviceTransport.SERVER
-
-        /**
-         * 联调服务端地址（TRANSPORT = SERVER 时生效）。**当前 = 模拟器 / USB 调试模式**：
-         * - 模拟器 / USB 真机：保持 "http://127.0.0.1:8080"，执行一次 `adb reverse tcp:8080 tcp:8080`
-         *   （走 adb 隧道，不依赖设备自身的网络配置）
-         * - 真机同 Wi-Fi：改成电脑局域网 IP（Mock 启动时会打印），
-         *   并把该地址加进 res/xml/network_security_config.xml 白名单（192.168.43.120 已加，可直接用）
-         */
-        const val SERVER_BASE_URL = "http://127.0.0.1:8080"
 
         /** 上传通道：SERVER 模式自动切真实服务端（需独立演示占位时可改回 STUB） */
         val UPLOAD_MODE: UploadMode

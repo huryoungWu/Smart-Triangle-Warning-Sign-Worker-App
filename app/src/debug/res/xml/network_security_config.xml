@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  **仅 debug 构建**：整份覆盖 main 的同名资源（debug source set 优先级更高）。
+
+  原因：服务端地址可以在「设置 → 服务器地址」里填任意 host（局域网 IP / 公网 IP / IPv6），
+  而 main 里的静态白名单无法预知用户会填什么 —— 不放行就会在 HttpURLConnection 层
+  抛 UnknownServiceException: CLEARTEXT communication to x.x.x.x not permitted。
+
+  release 仍使用 app/src/main/res/xml/network_security_config.xml 的严格白名单不变。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

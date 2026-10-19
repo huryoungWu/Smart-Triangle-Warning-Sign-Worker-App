@@ -3,6 +3,7 @@ package com.example.myapplication.core.data.upload
 import com.example.myapplication.core.data.api.TaskUploadRepository
 import com.example.myapplication.core.data.api.UploadResult
 import com.example.myapplication.core.model.vehicle.WorkRecord
+import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -15,10 +16,15 @@ import java.net.URL
  * 载荷契约见 [TaskUploadJson]；建议携带 `Idempotency-Key: <record.id>` 支持安全重试。
  */
 class HttpTaskUploadRepository(
-    private val baseUrl: String,
+    /** 每次请求时解析（服务端地址可在「设置 → 服务器地址」运行时更改） */
+    private val baseUrlProvider: () -> String = { FALLBACK_SERVER_BASE_URL },
     /** 登录 token 提供者（未登录返回 null）；由 ServiceLocator 注入 */
     private val tokenProvider: () -> String? = { null },
 ) : TaskUploadRepository {
+
+    /** 保持 `baseUrl` 这个名字：下面 `"$baseUrl/api/v1/..."` 插值点无需改动 */
+    private val baseUrl: String get() = baseUrlProvider()
+
 
     override suspend fun upload(record: WorkRecord): Result<UploadResult> =
         withContext(Dispatchers.IO) {

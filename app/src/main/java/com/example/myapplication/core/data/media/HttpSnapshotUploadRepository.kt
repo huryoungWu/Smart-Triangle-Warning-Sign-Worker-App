@@ -2,6 +2,7 @@ package com.example.myapplication.core.data.media
 
 import com.example.myapplication.core.data.api.SnapshotUploadRepository
 import com.example.myapplication.core.model.media.TaskSnapshot
+import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -20,11 +21,16 @@ import java.util.UUID
  * - 接真机摄像头后（或改为 APP 侧截帧时）：在本方法 multipart 中补 `image` 文件部分即可，链路不变
  */
 class HttpSnapshotUploadRepository(
-    private val baseUrl: String,
+    /** 每次请求时解析（服务端地址可在「设置 → 服务器地址」运行时更改） */
+    private val baseUrlProvider: () -> String = { FALLBACK_SERVER_BASE_URL },
     private val tokenProvider: () -> String? = { null },
     private val connectTimeoutMs: Int = 3000,
     private val readTimeoutMs: Int = 5000,
 ) : SnapshotUploadRepository {
+
+    /** 保持 `baseUrl` 这个名字：下面 `"$baseUrl/api/v1/..."` 插值点无需改动 */
+    private val baseUrl: String get() = baseUrlProvider()
+
 
     override suspend fun upload(snapshot: TaskSnapshot, deviceId: String): Result<String> =
         withContext(Dispatchers.IO) {

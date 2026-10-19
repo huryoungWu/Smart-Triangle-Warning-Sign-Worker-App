@@ -23,7 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.di.DeviceTransport
+import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.core.model.vehicle.CommandPhase
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.TaskKind
@@ -63,6 +68,16 @@ fun HomeScreen(
     val spec = state.activeSpec
     val taskRunning = task?.state == TaskRunState.RUNNING
 
+    val context = LocalContext.current
+    val sl = remember(context) { ServiceLocator.get(context) }
+    val serverUrl by sl.settingsRepository.serverBaseUrl
+        .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
+    val linkLabel = when (sl.transport) {
+        DeviceTransport.SERVER -> "服务端 $serverUrl"
+        DeviceTransport.HTTP -> "本地 Wi-Fi 192.168.4.1"
+        DeviceTransport.FAKE -> "模拟设备"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -87,8 +102,8 @@ fun HomeScreen(
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = snapshot?.let { "固件 ${it.fw} · 本地 Wi-Fi 192.168.4.1" }
-                            ?: "本地 Wi-Fi · 192.168.4.1",
+                        // 链路描述跟随实际传输方式：SERVER 走服务端（地址可运行时改），HTTP 才是直连小车
+                        text = snapshot?.let { "固件 ${it.fw} · $linkLabel" } ?: linkLabel,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

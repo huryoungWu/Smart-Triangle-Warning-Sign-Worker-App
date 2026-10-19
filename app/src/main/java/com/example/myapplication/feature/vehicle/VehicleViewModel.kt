@@ -306,6 +306,19 @@ class VehicleViewModel(
         }
     }
 
+    /**
+     * 服务端地址已切换（设置 → 服务器地址）：旧连接、旧设备列表全部作废。
+     *
+     * 必须在 `ServiceLocator.applyServerBaseUrl` **之后**调用 —— 此时地址已生效，
+     * [reloadDevices] 才会打到新服务端。不清空的话，1Hz 状态轮询与 300ms 遥控保持包
+     * 会安静地继续打向新服务端。
+     */
+    fun onServerChanged() {
+        disconnect()
+        _uiState.update { it.copy(deviceList = emptyList(), selectedDeviceId = "") }
+        reloadDevices()
+    }
+
     /** 失联立即显示"已断开／状态未确认"并禁用运动操作（M01） */
     private fun onLinkLost() {
         val wasConnected = _uiState.value.connection == ConnectionPhase.CONNECTED

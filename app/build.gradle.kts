@@ -3,8 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// 高德 Key 从 local.properties 读取（该文件本就不进 VCS），也支持环境变量兜底。
-// 注意：改 Key 后需在 Android Studio 里 Re-Sync（configuration-cache 不追踪此处文件读取）。
+// 本机配置（高德 Key、服务端默认地址）统一从 local.properties 读取（该文件本就不进 VCS），
+// 也支持环境变量兜底。
+// 注意：改这些值后需在 Android Studio 里 Re-Sync（configuration-cache 不追踪此处文件读取）。
 val amapKeys: Map<String, String> = run {
     val f = rootProject.file("local.properties")
     if (!f.exists()) {
@@ -41,6 +42,11 @@ android {
         // 高德 Key：未配置时注入占位符，UI 依据 AMAP_KEY_CONFIGURED 降级（不黑屏）
         manifestPlaceholders["AMAP_KEY"] = "REPLACE_WITH_YOUR_AMAP_KEY"
         buildConfigField("boolean", "AMAP_KEY_CONFIGURED", "false")
+
+        // 服务端默认地址（local.properties 的 SERVER_BASE_URL，环境变量兜底；缺省 = 模拟器/USB 模式）。
+        // 这只是**默认值**：装机后可在「设置 → 服务器地址」里随时改，不必重新编译（见 ServerConfigScreen）。
+        val serverBaseUrl = amapProp("SERVER_BASE_URL").ifBlank { "http://127.0.0.1:8080" }
+        buildConfigField("String", "DEFAULT_SERVER_BASE_URL", "\"$serverBaseUrl\"")
     }
 
     buildTypes {

@@ -5,6 +5,7 @@ import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.model.risk.Accident
 import com.example.myapplication.core.model.risk.AccidentType
+import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -20,12 +21,17 @@ import java.net.URL
  * - 服务端不可达/解析失败时按空列表降级（界面显示「周边暂无风险事件」）
  */
 class HttpRiskRepository(
-    private val baseUrl: String,
+    /** 每次请求时解析（服务端地址可在「设置 → 服务器地址」运行时更改） */
+    private val baseUrlProvider: () -> String = { FALLBACK_SERVER_BASE_URL },
     /** 登录 token 提供者（未登录返回 null）；由 ServiceLocator 注入 */
     private val tokenProvider: () -> String? = { null },
     private val connectTimeoutMs: Int = 3000,
     private val readTimeoutMs: Int = 5000,
 ) : RiskRepository {
+
+    /** 保持 `baseUrl` 这个名字：下面 `"$baseUrl/api/v1/..."` 插值点无需改动 */
+    private val baseUrl: String get() = baseUrlProvider()
+
     override suspend fun getAccidents(center: GeoPoint, radiusKm: Double): List<Accident> =
         withContext(Dispatchers.IO) {
             runCatching {

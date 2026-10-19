@@ -139,11 +139,9 @@ fun AccidentDetailScreen(
                 )
             }
             Spacer(Modifier.height(6.dp))
-            SafetyText("坐标为高德地图坐标系（GCJ-02），可直接用于导航。")
         }
 
         Spacer(Modifier.height(8.dp))
-        SafetyText("请谨慎驾驶，注意观察现场情况；以上信息仅供参考，以现场实际为准。")
 
         Spacer(Modifier.height(24.dp))
     }

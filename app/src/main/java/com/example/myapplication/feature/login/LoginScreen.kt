@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.StatusChip
@@ -54,6 +55,10 @@ fun LoginScreen(
     val sl = remember(context) { ServiceLocator.get(context) }
     val auth = sl.authRepository
     val serverMode = sl.transport == DeviceTransport.SERVER
+
+    // 服务端地址可运行时更改（设置 → 服务器地址），这里订阅它以跟随变化
+    val serverUrl by sl.settingsRepository.serverBaseUrl
+        .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
 
     // 调试默认账号（正式账号接入后替换预填值即可）
     var username by remember { mutableStateOf("demo") }
@@ -152,7 +157,7 @@ fun LoginScreen(
             text = if (serverMode) {
                 "调试默认账号：demo / 123456（已预填，Mock 服务端内置）。\n" +
                     "设备信息按登录账号获取；跳过登录时服务端按默认账号处理。\n" +
-                    "当前服务端：${ServiceLocator.SERVER_BASE_URL}"
+                    "当前服务端：$serverUrl（可在「设置 → 服务器地址」修改）"
             } else {
                 "当前为演示模式（模拟设备），无需真实账号；\n" +
                     "切到联调模式（TRANSPORT = SERVER）后启用服务端登录。"

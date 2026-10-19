@@ -141,9 +141,13 @@ fun TaskExecScreen(
         SectionCard(title = "实时视频") {
             val context = LocalContext.current
             val sl = remember { ServiceLocator.get(context) }
+            // 服务端地址可运行时更改（设置 → 服务器地址）：订阅它，换地址后 URL 变化，
+            // MjpegStreamView 以 url 为 key → 自动断流重连
+            val serverUrl by sl.settingsRepository.serverBaseUrl
+                .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
             // 联调模式：播放服务端**该设备的**视频流（按 deviceId 各一路；快照即从该流截帧）
             val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
-                "${ServiceLocator.SERVER_BASE_URL}/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
+                "$serverUrl/api/v1/device/video/stream?deviceId=${state.selectedDeviceId}"
             } else {
                 null
             }

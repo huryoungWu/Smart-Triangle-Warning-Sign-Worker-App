@@ -24,6 +24,9 @@ object Routes {
     const val DEBUG = "debug"
     const val DEVICE_INFO = "device_info"
     const val ABOUT = "about"
+
+    /** 服务器地址（设置 → 服务器地址）：运行时切换服务端，无需重新装包 */
+    const val SERVER_CONFIG = "server_config"
     const val RISK = "risk"
     const val ACCIDENT_DETAIL = "accident_detail"
 
@@ -38,6 +41,6 @@ object Routes {
     val tabs = setOf(HOME, RISK, RECORDS, SETTINGS)
 
     /** 显示底部导航栏的页面：**除登录页外全部显示** */
-    val bottomBarPages = setOf(CONNECT, HOME, RISK, RECORDS, SETTINGS, TASK_PUBLISH, TASK_EXEC, MAP, DEBUG, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL)
+    val bottomBarPages = setOf(CONNECT, HOME, RISK, RECORDS, SETTINGS, TASK_PUBLISH, TASK_EXEC, MAP, DEBUG, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL, SERVER_CONFIG)
 
 }

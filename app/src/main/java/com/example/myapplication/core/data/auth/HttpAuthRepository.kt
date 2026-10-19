@@ -5,6 +5,7 @@ import com.example.myapplication.core.data.api.AuthCredentials
 import com.example.myapplication.core.data.api.AuthRepository
 import com.example.myapplication.core.data.api.AuthSession
 import com.example.myapplication.core.data.api.AuthUser
+import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -22,10 +23,14 @@ import java.net.URL
  *   `demo` 处理（Mock 宽松模式）；正式服务端会返回 401，届时需先登录
  */
 class HttpAuthRepository(
-    private val baseUrl: String,
+    /** 每次请求时解析（服务端地址可在「设置 → 服务器地址」运行时更改），见 [com.example.myapplication.di.ServiceLocator] */
+    private val baseUrlProvider: () -> String = { FALLBACK_SERVER_BASE_URL },
     private val connectTimeoutMs: Int = 3000,
     private val readTimeoutMs: Int = 5000,
 ) : AuthRepository {
+
+    /** 保持 `baseUrl` 这个名字：下面所有 `"$baseUrl/api/v1/..."` 插值点无需改动 */
+    private val baseUrl: String get() = baseUrlProvider()
 
     @Volatile
     override var currentToken: String? = null
@@ -72,11 +77,21 @@ class HttpAuthRepository(
             }
         }
 
-    override suspend fun logout() {
-        val token = currentToken
+    /**
+     * 仅清本地会话，**不通知服务端**。
+     *
+     * 专给「服务端地址切换」用：此时必须让旧 token 立即作废，但**不能走 [logout]** ——
+     * logout 会按"当前地址"解析 URL，切换后调用等于把旧 token 发给新服务端。
+     */
+    override fun clearSession() {
         currentToken = null
         currentUser = null
         currentCredentials = null
+    }
+
+    override suspend fun logout() {
+        val token = currentToken
+        clearSession()
         if (token == null) return
         withContext(Dispatchers.IO) {
             // 尽力通知服务端使 token 失效；失败无妨（本地会话已清）

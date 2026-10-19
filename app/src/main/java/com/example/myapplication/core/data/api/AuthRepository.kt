@@ -38,6 +38,14 @@ interface AuthRepository {
 
     suspend fun login(username: String, password: String): Result<AuthSession>
 
+    /**
+     * **仅清本地会话**（token / 用户 / 凭据），不通知服务端。
+     *
+     * 用于「服务端地址切换」：旧 token 属于旧服务端，必须立即作废；此时**不能**调 [logout]——
+     * logout 按"当前地址"解析 URL，切换后调用会把旧 token 发到新服务端去。
+     */
+    fun clearSession()
+
     /** 登出：清空本地会话（服务端尽力通知，失败不影响本地清除） */
     suspend fun logout()
 }
