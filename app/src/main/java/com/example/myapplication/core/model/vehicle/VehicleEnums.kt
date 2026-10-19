@@ -118,10 +118,12 @@ enum class TaskRunState(val label: String) {
 enum class CommandKind(val label: String) {
     MOVE("方向指令"),
     STOP("普通停车"),
+    MANUAL_STOP("手动停车"),
     ESTOP("紧急停止"),
     RESUME("恢复待命"),
     TASK_START("启动任务"),
     TASK_CANCEL("取消任务"),
+    TASK_COMPLETE("任务完成"),
     LIGHT("灯光设置"),
     ODO_RESET("计数清零"),
     SEGMENT_CONFIRM("确认执行本段"),

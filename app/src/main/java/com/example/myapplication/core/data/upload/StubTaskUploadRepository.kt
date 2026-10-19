@@ -12,7 +12,7 @@ class StubTaskUploadRepository : TaskUploadRepository {
     /** 演示用：置 true 则下一次上传返回失败 */
     var failNext = false
 
-    override suspend fun upload(record: WorkRecord): Result<UploadResult> {
+    override suspend fun upload(record: WorkRecord, deviceCode: String): Result<UploadResult> {
         delay(300)
         if (failNext) {
             failNext = false

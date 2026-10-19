@@ -57,6 +57,9 @@ class HttpDeviceRepository(
 
     override suspend fun sendStop(): Result<CmdAck> = postCmd(JSONObject().put("type", "stop"))
 
+    override suspend fun sendManualStop(): Result<CmdAck> =
+        postCmd(JSONObject().put("type", "manual_stop"))
+
     override suspend fun sendEstop(): Result<CmdAck> = postCmd(JSONObject().put("type", "estop"))
 
     override suspend fun sendResume(): Result<CmdAck> = postCmd(JSONObject().put("type", "resume"))
@@ -66,6 +69,9 @@ class HttpDeviceRepository(
     )
 
     override suspend fun cancelTask(): Result<CmdAck> = postCmd(JSONObject().put("type", "task_cancel"))
+
+    override suspend fun completeTask(): Result<CmdAck> =
+        postCmd(JSONObject().put("type", "task_complete"))
 
     override suspend fun startRecover(): Result<CmdAck> = postCmd(JSONObject().put("type", "recover"))
 

@@ -2,6 +2,7 @@ package com.example.myapplication
 
 import com.example.myapplication.core.data.device.FakeDeviceRepository
 import com.example.myapplication.core.model.vehicle.LightMode
+import com.example.myapplication.core.model.vehicle.MoveDir
 import com.example.myapplication.core.model.vehicle.RouteSegment
 import com.example.myapplication.core.model.vehicle.SegmentAction
 import com.example.myapplication.core.model.vehicle.SegmentRunState
@@ -42,6 +43,56 @@ class RouteStateMachineTest {
         val s = repo.fetchStatus().getOrThrow()
         assertEquals(TaskRunState.DONE, s.task.state)
         assertTrue(s.task.segments.all { it.state == SegmentRunState.DONE })
+    }
+
+    @Test
+    fun `manual move during running task pauses instead of canceling`() = runBlocking {
+        val repo = FakeDeviceRepository()
+        repo.startRoute(
+            TaskKind.FIXED_DISTANCE, TaskMode.AUTO,
+            listOf(seg(SegmentAction.FWD, 3.0)),
+            LightMode.BLINK,
+        ).getOrThrow()
+
+        // 任务正在执行、当前段 running：仍允许手动微调
+        val before = repo.fetchStatus().getOrThrow()
+        assertEquals(TaskRunState.RUNNING, before.task.state)
+        assertTrue(before.task.segments.any { it.state == SegmentRunState.RUNNING })
+
+        assertTrue(repo.sendMove(MoveDir.FWD).getOrThrow().accepted)
+        val during = repo.fetchStatus().getOrThrow()
+        assertEquals(TaskRunState.RUNNING, during.task.state)
+
+        // 松手只结束手动微调，任务不能被取消
+        assertTrue(repo.sendManualStop().getOrThrow().accepted)
+        val after = repo.fetchStatus().getOrThrow()
+        assertEquals(TaskRunState.RUNNING, after.task.state)
+
+        // 松开后自动任务继续并最终完成
+        repo.tick(20)
+        assertEquals(TaskRunState.DONE, repo.fetchStatus().getOrThrow().task.state)
+    }
+
+    @Test
+    fun `user completion closes running segment and allows manual move`() = runBlocking {
+        val repo = FakeDeviceRepository()
+        repo.startRoute(
+            TaskKind.FIXED_DISTANCE, TaskMode.AUTO,
+            listOf(seg(SegmentAction.FWD, 20.0)),
+            LightMode.BLINK,
+        ).getOrThrow()
+
+        // 不推进，保持当前段 running；用户直接确认完成
+        val ack = repo.completeTask().getOrThrow()
+        assertTrue(ack.accepted)
+
+        val s = repo.fetchStatus().getOrThrow()
+        assertEquals(TaskRunState.DONE, s.task.state)
+        assertTrue(s.task.segments.none { it.state == SegmentRunState.RUNNING })
+
+        // 完成后应允许手动微调（防止“打开手动干预点不动”回归）
+        val move = repo.sendMove(MoveDir.FWD).getOrThrow()
+        assertTrue(move.accepted)
     }
 
     @Test
@@ -128,12 +179,12 @@ class RouteStateMachineTest {
             kind = TaskKind.FIXED_DISTANCE, source = com.example.myapplication.core.model.vehicle.TaskSource.APP,
             targetM = 20.0, traveledM = 20.0, deviceResult = WorkRecord.RESULT_DONE,
         )
-        val ok = repo.upload(record)
+        val ok = repo.upload(record, "TC-001")
         assertTrue(ok.isSuccess)
 
         repo.failNext = true
-        assertTrue(repo.upload(record).isFailure)
+        assertTrue(repo.upload(record, "TC-001").isFailure)
         // 失败注入是一次性的
-        assertTrue(repo.upload(record).isSuccess)
+        assertTrue(repo.upload(record, "TC-001").isSuccess)
     }
 }

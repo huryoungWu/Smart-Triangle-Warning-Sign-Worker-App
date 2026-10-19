@@ -85,6 +85,9 @@ fun RiskScreen(
         com.example.myapplication.di.ServiceLocator.get(context).riskRepository
     }
 
+    // 进入风险页先读一次状态，保证地图上的小车点位不是旧快照
+    LaunchedEffect(Unit) { vm.refreshStatus() }
+
     LaunchedEffect(center) {
         loading = true
         accidents = repo.getAccidents(center, radiusKm.toDouble())
@@ -112,7 +115,6 @@ fun RiskScreen(
                 title = "风险点位",
                 showLegend = false,
                 showPhoneMarker = true,      // 五角星 = 我的位置
-                showDisclaimer = false,      // 风险页不显示小车位置免责横幅（红色感叹号提示）
                 cameraZoom = RISK_MAP_CAMERA_ZOOM,   // 视野覆盖 2 公里半径内的风险点位
                 extraMarkers = shown.map { a ->
                     MapPin(

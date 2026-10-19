@@ -123,7 +123,6 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-            SafetyText("定位仅用于地图显示作业人员位置，不用于任何安全判断。")
         }
 
 

@@ -26,7 +26,7 @@ class HttpTaskUploadRepository(
     private val baseUrl: String get() = baseUrlProvider()
 
 
-    override suspend fun upload(record: WorkRecord): Result<UploadResult> =
+    override suspend fun upload(record: WorkRecord, deviceCode: String): Result<UploadResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val conn = URL("$baseUrl/api/v1/tasks").openConnection() as HttpURLConnection
@@ -38,7 +38,9 @@ class HttpTaskUploadRepository(
                     conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     conn.setRequestProperty("Idempotency-Key", record.id)
                     tokenProvider()?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
-                    conn.outputStream.use { it.write(TaskUploadJson.toJson(record).toByteArray(Charsets.UTF_8)) }
+                    conn.outputStream.use {
+                        it.write(TaskUploadJson.toJson(record, deviceCode).toByteArray(Charsets.UTF_8))
+                    }
                     val code = conn.responseCode
                     val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
                         ?.bufferedReader()?.use { it.readText() }.orEmpty()

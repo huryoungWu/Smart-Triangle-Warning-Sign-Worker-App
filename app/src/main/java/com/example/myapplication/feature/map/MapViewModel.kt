@@ -170,12 +170,38 @@ class MapViewModel(
         if (snapshot == null) return
         val point = resolveVehicleMapPoint(snapshot, anchor)
         _uiState.update { state ->
+            // 来源切换（GPS ↔ 行程估算）时从当前点重新开始，避免把两种口径连成一条线
+            val sourceChanged = when (point) {
+                is VehicleMapPoint.Gps -> state.lastVehiclePoint !is VehicleMapPoint.Gps
+                is VehicleMapPoint.Estimated -> state.lastVehiclePoint !is VehicleMapPoint.Estimated
+                VehicleMapPoint.Unknown -> false
+            }
             val trail = when (point) {
-                is VehicleMapPoint.Gps -> state.vehicleTrail + point.gcj02
-                is VehicleMapPoint.Estimated -> state.vehicleTrail + point.gcj02
-                VehicleMapPoint.Unknown -> state.vehicleTrail
+                is VehicleMapPoint.Gps ->
+                    appendVehicleTrail(state.vehicleTrail, point.gcj02, reset = sourceChanged)
+                is VehicleMapPoint.Estimated ->
+                    appendVehicleTrail(state.vehicleTrail, point.gcj02, reset = sourceChanged)
+                VehicleMapPoint.Unknown -> emptyList()
             }
             state.copy(lastVehiclePoint = point, vehicleTrail = trail.takeLast(TRAIL_MAX))
+        }
+    }
+
+    /**
+     * 只有真实移动超过阈值才追加轨迹点：
+     * 位置没变或 GPS 抖动时不生成第二个点，地图上就不会出现一条“凭空出现”的轨迹线。
+     */
+    private fun appendVehicleTrail(
+        trail: List<GeoPoint>,
+        point: GeoPoint,
+        reset: Boolean,
+    ): List<GeoPoint> {
+        if (reset || trail.isEmpty()) return listOf(point)
+        val last = trail.last()
+        return if (CoordTransform.distanceM(last, point) >= TRAIL_MIN_STEP_M) {
+            trail + point
+        } else {
+            trail
         }
     }
 
@@ -215,6 +241,8 @@ class MapViewModel(
 
     companion object {
         private const val TRAIL_MAX = 2000
+        /** 小车轨迹最小采样距离（米）：小于该距离不追加点，过滤静止抖动 */
+        private const val TRAIL_MIN_STEP_M = 1.0
 
         val Factory = viewModelFactory {
             initializer {

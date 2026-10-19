@@ -39,12 +39,12 @@ class HttpSnapshotUploadRepository(
                 val out = ByteArrayOutputStream()
                 fun writeText(text: String) = out.write(text.toByteArray(Charsets.UTF_8))
 
-                listOfNotNull(
+                // 所有字段显式上报（服务端不再补默认值）；数值型缺失用 0
+                listOf(
                     "id" to snapshot.id,
                     "device_code" to deviceCode,
                     "taskName" to snapshot.taskName,
-                    // 作业车道（第几车道）：随任务带入，服务端登记到风险事件；未填写则不上报
-                    snapshot.lane?.let { "lane" to it.toString() },
+                    "lane" to (snapshot.lane ?: 0).toString(),
                     "eventLabel" to snapshot.eventLabel,
                     "capturedAt" to snapshot.capturedAt.toString(),
                     "note" to snapshot.note,

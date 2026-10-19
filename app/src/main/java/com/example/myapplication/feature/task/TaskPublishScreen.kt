@@ -78,6 +78,8 @@ fun TaskPublishScreen(
     // 作业车道未填写或越界（必填项，随任务下发/上传）
     val laneInvalid = draft.lane == null || draft.lane !in LaneRange.MIN..LaneRange.MAX
 
+    // 进入发布页先读一次状态，保证「现场位置」不是旧快照
+    LaunchedEffect(Unit) { vm.refreshStatus() }
     LaunchedEffect(kind) { vm.initDraft(kind) }
 
     Column(
@@ -219,7 +221,6 @@ fun TaskPublishScreen(
 
         // ⑤ 预检区（原独立预检页并入）
         SectionCard(title = "布置前预检") {
-            SafetyText("系统不检测障碍物与道路安全，以下为人工现场确认。")
             Spacer(Modifier.height(8.dp))
             PrecheckRow(
                 com.example.myapplication.core.model.vehicle.PrecheckHuman.CONFIRM_ITEM,

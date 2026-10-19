@@ -60,15 +60,6 @@ fun RecordsScreen(vm: VehicleViewModel) {
     ) {
         PageTitle("作业记录")
 
-        SafetyNoticeBanner(
-            variant = BannerVariant.INFO,
-            text = if (serverUpload) {
-                "记录保存在本机手机，并上传服务端（POST /api/v1/tasks）；服务端单号见各条记录。"
-            } else {
-                "记录保存在本机手机（${WorkRecord.LOCAL_ONLY_NOTICE}）；上传为演示占位，未接入真实服务器。"
-            },
-        )
-
         if (records.isEmpty()) {
             SectionCard(title = "暂无作业记录") {
                 Text(

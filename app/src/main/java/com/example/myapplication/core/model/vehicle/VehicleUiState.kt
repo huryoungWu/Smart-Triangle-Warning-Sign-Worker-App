@@ -43,6 +43,8 @@ data class VehicleUiState(
     val lastUpdateAt: Long = 0L,
     /** 手动刷新进行中：按钮显示进度并禁用，避免并发请求 */
     val refreshing: Boolean = false,
+    /** 用户已现场确认任务完成（任务进度只显示「未完成/已完成」） */
+    val taskCompletedByUser: Boolean = false,
     /** 进行中的命令票据（命令五层分层），同一时刻仅一条运动类命令 */
     val activeTicket: CommandTicket? = null,
     /** 手动遥控按住中（M04） */
@@ -67,11 +69,10 @@ data class VehicleUiState(
     fun isStale(now: Long = System.currentTimeMillis()): Boolean =
         lastUpdateAt == 0L || now - lastUpdateAt > 3000L
 
-    /** 运动类指令是否可下发（M04 自动任务禁止手动抢占；失联/急停锁定禁用） */
+    /** 手动运动类指令是否可下发（失联/急停锁定/安全停止禁用；自动任务中允许手动微调） */
     val motionCommandsEnabled: Boolean
         get() = connection == ConnectionPhase.CONNECTED &&
             snapshot?.estopLocked != true &&
-            snapshot?.mode != VehicleMode.AUTO &&
             snapshot?.mode != VehicleMode.SAFE_STOP
 
     /**

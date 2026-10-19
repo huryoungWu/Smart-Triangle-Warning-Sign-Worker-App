@@ -13,7 +13,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,7 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.di.DeviceTransport
 import com.example.myapplication.di.ServiceLocator
-import com.example.myapplication.core.model.vehicle.CommandPhase
+import com.example.myapplication.core.model.vehicle.CommandKind
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskRunState
@@ -45,7 +44,6 @@ import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
 import com.example.myapplication.ui.theme.WarnOrange
 import com.example.myapplication.ui.theme.WarnOrangeBg
-import com.example.myapplication.ui.theme.WarningRed
 
 /**
  * 开始作业页（主流程第二站）。
@@ -66,7 +64,15 @@ fun HomeScreen(
     val snapshot = state.snapshot
     val task = snapshot?.task
     val spec = state.activeSpec
-    val taskRunning = task?.state == TaskRunState.RUNNING
+    // 状态接口现在只在连接时/手动刷新时读取：发布任务后快照可能仍是 IDLE。
+    // 因此这里同时参考本地命令票据 —— 任务已下发且票据未进入终态，也算「正在执行」。
+    val localTaskActive = state.activeTicket?.let {
+        it.kind == CommandKind.TASK_START && !it.phase.isTerminal
+    } == true
+    val taskRunning = task?.state == TaskRunState.RUNNING || localTaskActive
+    // 设备已报告 done 但用户尚未点「任务完成」时，仍保留入口，避免离开执行页后无法确认
+    val taskNeedsAttention = spec != null && !state.taskCompletedByUser &&
+        (taskRunning || task?.state == TaskRunState.DONE)
 
     val context = LocalContext.current
     val sl = remember(context) { ServiceLocator.get(context) }
@@ -125,9 +131,9 @@ fun HomeScreen(
             SecondaryActionButton(text = "重新选择设备", onClick = onBackToConnect)
         }
 
-        // ── 正在执行的任务（**仅当任务运行中才显示**，可跳回执行页）──
-        if (taskRunning && spec != null) {
-            SectionCard(title = "正在执行的任务") {
+        // ── 当前任务（执行中，或设备完成但用户尚未确认；可跳回执行页）──
+        if (taskNeedsAttention) {
+            SectionCard(title = "当前任务") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = spec.name,
@@ -135,7 +141,11 @@ fun HomeScreen(
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.weight(1f),
                     )
-                    StatusChip("执行中", InfoBlue, InfoBlueBg)
+                    StatusChip(
+                        if (task?.state == TaskRunState.DONE) "待确认完成" else "执行中",
+                        InfoBlue,
+                        InfoBlueBg,
+                    )
                 }
                 Text(
                     text = "${spec.kind.label} · ${spec.mode.label}",
@@ -148,25 +158,13 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                 )
-                // 进度与执行页「任务进度」同源：同一命令五层步骤与口径
-                val phase = state.activeTicket?.phase
-                val step = phase?.progressStep ?: 0
-                val halted = phase == CommandPhase.FAILED || phase == CommandPhase.UNKNOWN
+                // 进度与执行页同源：只显示「未完成 / 已完成」，已完成由用户确认
+                val completed = state.taskCompletedByUser
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = when {
-                        phase == null -> "待下发"
-                        halted -> "已中断：${phase.label}"
-                        else -> "第 $step/5 步 · ${phase.label}"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (halted) WarningRed else InfoBlue,
-                )
-                Spacer(Modifier.height(4.dp))
-                LinearProgressIndicator(
-                    progress = { step / 5f },
-                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                    color = if (halted) WarningRed else MaterialTheme.colorScheme.primary,
+                StatusChip(
+                    text = if (completed) "已完成" else "未完成",
+                    fg = if (completed) SafeGreen else InfoBlue,
+                    bg = if (completed) SafeGreenBg else InfoBlueBg,
                 )
                 Spacer(Modifier.height(10.dp))
                 PrimaryActionButton(text = "进入任务执行", onClick = onOpenExec)

@@ -102,9 +102,9 @@ curl -X POST http://127.0.0.1:8080/api/v1/devices/bind -H "Content-Type: applica
      -d '{"username":"demo","password":"123456","device_code":"TC-001","binding_code":"123456","device_type":"triangle"}'   # 连接设备（绑定码）
 curl "http://127.0.0.1:8080/api/v1/device/status?device_code=TC-001"
 curl -X POST http://127.0.0.1:8080/api/v1/device/command -H "Content-Type: application/json" \
-     -d '{"device_code":"TC-001","type":"task_start","kind":"fixed_distance","targetM":2,"lane":2}'   # lane = 作业车道（1~8）
+     -d '{"device_code":"TC-001","type":"task_start","kind":"fixed_distance","targetM":2,"mode":"auto","light":"blink","lane":2,"segments":[]}'   # 字段需完整（lane = 作业车道 1~8）
 curl -X POST http://127.0.0.1:8080/api/v1/snapshots -H "Content-Type: application/json" \
-     -d '{"id":"t1","device_code":"TC-001","taskName":"自动布置","lane":2,"eventLabel":"任务开始（自动抓拍）","capturedAt":1791980000000}'
+     -d '{"id":"t1","device_code":"TC-001","taskName":"自动布置","lane":2,"eventLabel":"任务开始（自动抓拍）","capturedAt":1791980000000,"note":"任务启动自动抓拍"}'
 curl -X POST http://127.0.0.1:8080/api/v1/tasks -H "Content-Type: application/json" -H "Idempotency-Key: t1" \
      -d '{"id":"t1","device_code":"TC-001","kind":"fixed_distance","lane":2,"deviceResult":"done","verifyResult":"pass","targetM":20}'   # 记录上传（核验通过自动上传的同一接口）
 curl "http://127.0.0.1:8080/api/v1/tasks"        # 记录列表（重启后仍在 —— 已落盘保留）
@@ -163,12 +163,15 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 | 风险数据（`/risks`） | 演示 **8 条**（**今天 6 条** + 历史 2 条），**每条都带 `lane` 占用车道**，距离均 ≤ 2 公里、方位各异 —— 便于验证 APP 风险页「默认今天 / 按距离近→远 / 按时间新→旧」。**无车道信息的条目 APP 不展示**（列表每行都要有「第 N 车道」） | 真实外部数据源（交警/平台），每条带占用车道 |
 | 请求体编码 | 文本字段含替换字符 U+FFFD（非法 UTF-8，如 Windows 控制台 GBK 中文）→ `400 bad_request` 拒绝入库 | 同左（应校验编码） |
 | 状态推进 | 由 Mock 服务端定时器驱动（与 APP 查询次数无关；APP 连接成功后读取一次、之后由用户手动刷新） | 车端 1Hz 上报 |
+| 任务完成 | 用户点「任务完成」→ `task_complete`：服务端停止运动并把 `task.state` 置为 `done`、`resultNote=user_confirmed`；APP 随即 `POST /tasks` 生成并上传作业记录 | 车端/网关同样以用户确认为准 |
+| 任务中手动微调 | 任务运行中也可 `move`：手动期间暂停自动推进；`manual_stop` 只结束微调、不取消任务；`stop` 仍会取消任务 | 车端同样区分 `manual_stop` 与 `stop` |
 | 请求/响应日志 | **每个请求**打印方法/路径/请求体（JSON 原样；multipart 打印解析后字段；GET 为空），**每个 JSON 响应**打印状态码与响应体 | — |
+| 字段完整性 | **不补默认值**：缺失必填字段 → 400（JSON 接口）或 `param_out_of_range`（命令）；`light`/`lane` 允许显式 `null` | 正式服务端同样应严格校验 |
 
 ## 接口清单
 
 认证 `auth/login|refresh|profile|logout` ｜ 设备 `devices`、**`devices/bind`（连接设备：账号+绑定码）**、`devices/:id/bind`、`devices/:id`
-｜ 状态 `device/status`（含 `task.lane` 回显） ｜ 命令 `device/command`（move/stop/estop/resume/light/task_start[+lane]/segment_confirm/task_cancel/recover/odo_reset）
+｜ 状态 `device/status`（含 `task.lane` 回显） ｜ 命令 `device/command`（move/manual_stop/stop/estop/resume/light/task_start[+lane]/task_complete/segment_confirm/task_cancel/recover/odo_reset）
 ｜ 记录 `tasks`（POST/GET，支持 `Idempotency-Key`，含 `lane`） ｜ 快照 `snapshots`（multipart/JSON，含 `lane`） ｜ 预警 `warnings`（含 `lane`）
 ｜ 风险 `risks`（含 `lane` 占用车道） ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`（均按 `?device_code=` 区分设备）
 

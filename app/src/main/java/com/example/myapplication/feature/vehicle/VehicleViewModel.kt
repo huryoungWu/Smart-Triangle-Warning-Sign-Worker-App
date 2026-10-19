@@ -339,6 +339,7 @@ class VehicleViewModel(
                 activeTicket = null,
                 stopUnconfirmed = false,
                 refreshing = false,
+                taskCompletedByUser = false,
             )
         }
     }
@@ -483,11 +484,13 @@ class VehicleViewModel(
         }
     }
 
-    /** 设备报告完成（M05/M06）：写记录 + 进入人工核验 */
+    /** 设备报告完成 / 用户确认完成（M05/M06）：写记录 + 进入人工核验 */
     private fun onTaskDeviceDone(snapshot: DeviceSnapshot) {
         val taskId = snapshot.task.id ?: "task-${System.currentTimeMillis()}"
         if (writtenTaskIds.contains(taskId)) return
         writtenTaskIds.add(taskId)
+        // 用户点击「任务完成」触发的刷新：完成文案按用户确认口径显示
+        val userConfirmed = _uiState.value.taskCompletedByUser
 
         val recordId = activeRecordId ?: UUID.randomUUID().toString()
         activeRecordId = recordId
@@ -527,8 +530,12 @@ class VehicleViewModel(
                     finishedAt = System.currentTimeMillis(),
                 ),
                 dialog = AppDialog.Alert(
-                    "报告已完成",
-                    "车端报告已达到目标位置（目标 ${snapshot.task.targetM} 米，编码器估算 ${snapshot.task.traveledM} 米）。\n\n" +
+                    if (userConfirmed) "任务已完成" else "报告已完成",
+                    (if (userConfirmed) {
+                        "你已现场确认任务完成"
+                    } else {
+                        "车端报告已达到目标位置"
+                    }) + "（目标 ${snapshot.task.targetM} 米，编码器估算 ${snapshot.task.traveledM} 米）。\n\n" +
                         "请人工现场核对：实际位置、车辆朝向、警示灯光是否正常。\n" +
                         "现场核验结果将与设备完成分开记录。\n\n" +
                         "已自动抓拍任务结束快照（含图片、时间与事件类型），可用于生成发给过往司机的预警信息。",
@@ -578,10 +585,6 @@ class VehicleViewModel(
             rejectMotion("当前状态禁止手动运动：${motionRejectionReason(state)}")
             return
         }
-        if (state.snapshot?.mode == VehicleMode.AUTO) {
-            rejectMotion("自动任务执行中，禁止手动抢占")
-            return
-        }
         if (_uiState.value.holdingMove) return
         _uiState.update { it.copy(holdingMove = true, holdingDir = dir) }
 
@@ -603,18 +606,21 @@ class VehicleViewModel(
         keepaliveJob?.cancel()
         keepaliveJob = null
         _uiState.update { it.copy(holdingMove = false, holdingDir = null) }
-        sendCommand(CommandKind.STOP, trackTicket = false) { deviceRepository.sendStop() }
+        // 只结束手动微调：正在执行的自动任务保持，下一拍继续
+        sendCommand(CommandKind.MANUAL_STOP, trackTicket = false) { deviceRepository.sendManualStop() }
+        refreshStatus() // 松手后读一次位置，让地图反映本次微调结果
     }
 
-    /** 离开手动遥控页（返回/切后台）→ 强制停车（三重保障之一） */
+    /** 离开手动遥控页（返回/切后台）→ 结束手动微调（不取消任务） */
     fun onLeaveManual() {
         if (_uiState.value.holdingMove) onHoldEnd()
     }
 
-    /** 普通停车（M04）：停运动 + 取消自动任务，不锁定、不自动关灯 */
+    /** 手动微调停车（M04）：停手动运动，不取消任务 */
     fun stopNormal() {
-        sendCommand(CommandKind.STOP) { deviceRepository.sendStop() }
+        sendCommand(CommandKind.MANUAL_STOP) { deviceRepository.sendManualStop() }
         _uiState.update { it.copy(holdingMove = false, holdingDir = null) }
+        refreshStatus()
     }
 
     // ==================== M08 急停与恢复 ====================
@@ -684,6 +690,7 @@ class VehicleViewModel(
             )
             return
         }
+        _uiState.update { it.copy(taskCompletedByUser = false) }
         val recordId = UUID.randomUUID().toString()
         activeRecordId = recordId
         activeRecordStartedAt = System.currentTimeMillis()
@@ -710,6 +717,7 @@ class VehicleViewModel(
             )
             return
         }
+        _uiState.update { it.copy(taskCompletedByUser = false) }
         val recordId = UUID.randomUUID().toString()
         activeRecordId = recordId
         activeRecordStartedAt = System.currentTimeMillis()
@@ -745,7 +753,7 @@ class VehicleViewModel(
             // 留空自动生成任务名（「自动布置」），避免出现「1014-0930」这类只有数字、含义不明的标题
             name = draft.name.ifBlank { defaultTaskName(draft) },
         )
-        _uiState.update { it.copy(draft = spec, activeSpec = spec) }
+        _uiState.update { it.copy(draft = spec, activeSpec = spec, taskCompletedByUser = false) }
 
         activeRecordId = UUID.randomUUID().toString()
         activeRecordStartedAt = System.currentTimeMillis()
@@ -767,6 +775,7 @@ class VehicleViewModel(
             rejectMotion("当前状态不允许重新下发")
             return
         }
+        _uiState.update { it.copy(taskCompletedByUser = false) }
         activeRecordId = UUID.randomUUID().toString()
         activeRecordStartedAt = System.currentTimeMillis()
         sendCommand(CommandKind.TASK_START, trackTicket = true) {
@@ -805,21 +814,26 @@ class VehicleViewModel(
                 return@launch
             }
             val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
-            val result = taskUploadRepository.upload(record)
+            val result = taskUploadRepository.upload(record, _uiState.value.selectedDeviceCode)
             result.onSuccess { r ->
                 workRecordRepository.setUploaded(id, r.serverId, r.uploadedAt)
                 syncUploadRecord(id)
+                val userConfirmed = _uiState.value.taskCompletedByUser
                 _uiState.update {
                     it.copy(
                         dialog = AppDialog.Alert(
                             when {
+                                auto && userConfirmed && serverUpload -> "任务完成 · 已上传"
+                                auto && userConfirmed -> "任务完成 · 已模拟上传"
                                 auto && serverUpload -> "核验通过 · 已自动上传"
                                 auto -> "核验通过 · 已模拟上传"
                                 serverUpload -> "上传成功"
                                 else -> "已模拟上传"
                             },
                             buildString {
-                                if (auto) append("人工现场核验：通过。\n")
+                                if (auto) {
+                                    append(if (userConfirmed) "用户确认任务完成。\n" else "人工现场核验：通过。\n")
+                                }
                                 if (serverUpload) {
                                     append("任务记录已保存本机，并上传服务端（POST /api/v1/tasks）。\n\n")
                                     append("服务端单号：").append(r.serverId)
@@ -852,6 +866,80 @@ class VehicleViewModel(
     fun cancelTask() {
         sendCommand(CommandKind.TASK_CANCEL, trackTicket = false) { deviceRepository.cancelTask() }
         recordTaskIfNeeded(WorkRecord.RESULT_CANCELED, "用户取消任务")
+    }
+
+    /**
+     * 用户现场确认任务完成：任务进度只有「未完成 / 已完成」，已完成以本操作为准。
+     *
+     * 下发 `task_complete` 成功后立即标记本地已完成，落一条作业记录并**直接上传**，
+     * 同时主动读一次状态用于收尾（用户操作触发，不是定时轮询）。
+     */
+    fun completeTask() {
+        val state = _uiState.value
+        if (state.taskCompletedByUser) return
+        if (state.connection != ConnectionPhase.CONNECTED) {
+            rejectMotion("设备未连接，无法确认任务完成")
+            return
+        }
+        sendCommand(
+            kind = CommandKind.TASK_COMPLETE,
+            trackTicket = false,
+            onAccepted = {
+                _uiState.update { it.copy(taskCompletedByUser = true) }
+                // 防止随后状态刷新把同一任务再落一条记录
+                _uiState.value.snapshot?.task?.id?.let { writtenTaskIds.add(it) }
+                finalizeUserCompletedTask()
+                refreshStatus()
+            },
+        ) { deviceRepository.completeTask() }
+    }
+
+    /**
+     * 用户确认完成后的收尾：落一条「已完成」记录（设备已自动完成过则复用）并**直接上传**。
+     * 用户点击「任务完成」即视为完成确认，不再要求二次「核验通过」。
+     */
+    private fun finalizeUserCompletedTask() {
+        viewModelScope.launch {
+            val snapshot = _uiState.value.snapshot ?: return@launch
+            val recordId = _uiState.value.pendingVerify?.recordId
+                ?: activeRecordId
+                ?: UUID.randomUUID().toString()
+            activeRecordId = recordId
+            if (activeRecordStartedAt == 0L) activeRecordStartedAt = snapshot.receivedAt
+
+            val existing = workRecordRepository.records.first().firstOrNull { it.id == recordId }
+            if (existing == null) {
+                workRecordRepository.append(
+                    WorkRecord(
+                        id = recordId,
+                        startedAt = activeRecordStartedAt,
+                        finishedAt = System.currentTimeMillis(),
+                        kind = snapshot.task.kind ?: TaskKind.FIXED_DISTANCE,
+                        source = snapshot.task.source,
+                        targetM = snapshot.task.targetM,
+                        traveledM = snapshot.task.traveledM,
+                        deviceResult = WorkRecord.RESULT_DONE,
+                        deviceResultNote = "user_confirmed",
+                        verifyResult = WorkRecord.VERIFY_PASS,
+                        verifyNote = "用户确认任务完成",
+                        name = activeSpecRef?.name,
+                        mode = activeSpecRef?.mode,
+                        lane = activeSpecRef?.lane,
+                        route = activeSpecRef?.segments?.map {
+                            RouteSegment(action = it.action, value = it.value)
+                        } ?: emptyList(),
+                    ),
+                )
+            } else {
+                workRecordRepository.updateVerify(recordId, WorkRecord.VERIFY_PASS, "用户确认任务完成")
+            }
+            _uiState.update { it.copy(pendingVerify = null) }
+            syncUploadRecord(recordId)
+            // 已经上传过的记录不重复上传
+            if (existing?.uploadState != WorkRecord.UPLOAD_UPLOADED) {
+                performUpload(recordId, auto = true)
+            }
+        }
     }
 
     /** 一键布置阶段（M06）：以设备回报为准 */
@@ -1054,7 +1142,6 @@ class VehicleViewModel(
         state.connection != ConnectionPhase.CONNECTED -> "设备未连接或状态未确认"
         state.snapshot?.estopLocked == true -> "急停锁定中"
         state.snapshot?.mode == VehicleMode.SAFE_STOP -> "安全停止中"
-        state.snapshot?.mode == VehicleMode.AUTO -> "自动任务执行中"
         else -> "当前状态不允许"
     }
 
@@ -1065,6 +1152,7 @@ class VehicleViewModel(
     private fun sendCommand(
         kind: CommandKind,
         trackTicket: Boolean = false,
+        onAccepted: (() -> Unit)? = null,
         block: suspend () -> Result<CmdAck>,
     ) {
         val now = System.currentTimeMillis()
@@ -1082,6 +1170,7 @@ class VehicleViewModel(
             val result = block()
             result.onSuccess { ack ->
                 if (ack.accepted) {
+                    onAccepted?.invoke()
                     if (trackTicket) {
                         val current = _uiState.value.activeTicket
                         if (current?.id == ticket.id) {

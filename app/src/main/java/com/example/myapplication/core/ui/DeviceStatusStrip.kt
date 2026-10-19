@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,7 +24,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
-import com.example.myapplication.core.model.vehicle.GpsFixState
 import com.example.myapplication.core.model.vehicle.VehicleUiState
 import java.util.Locale
 
@@ -71,53 +71,38 @@ fun DeviceStatusStrip(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 位置来源按事实标注：车端 GPS 定位 / 车轮编码器估算（数据真实性要求）
-            val gpsFixed = snapshot?.gps?.state == GpsFixState.FIXED
             Text(
-                text = if (state.connection == ConnectionPhase.CONNECTED) {
-                    if (gpsFixed) {
-                        "以设备返回值为准 · 位置来自车端 GPS"
-                    } else {
-                        "以设备返回值为准 · 位置由车轮编码器估算"
-                    }
+                text = if (state.lastUpdateAt > 0) {
+                    "最后更新${TimeFormat.format("HH:mm:ss", state.lastUpdateAt)}"
                 } else {
-                    "状态未确认，禁用运动操作"
+                    ""
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (state.lastUpdateAt > 0) {
-                    Text(
-                        text = "最后更新 ${TimeFormat.format("HH:mm:ss", state.lastUpdateAt)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (onRefresh != null) {
-                    TextButton(
-                        onClick = onRefresh,
-                        enabled = canRefresh && !refreshing,
-                    ) {
-                        if (refreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (refreshing) "刷新中…" else "刷新状态")
+            if (onRefresh != null) {
+                TextButton(
+                    onClick = onRefresh,
+                    enabled = canRefresh && !refreshing,
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    if (refreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
                     }
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (refreshing) "刷新中…" else "刷新状态")
                 }
             }
         }

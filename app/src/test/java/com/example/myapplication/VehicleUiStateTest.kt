@@ -54,14 +54,26 @@ class VehicleUiStateTest {
     }
 
     @Test
-    fun `motion commands disabled during auto task (no manual preemption, M04)`() {
+    fun `motion commands enabled during auto task (manual intervention allowed)`() {
         val state = connected(snapshot(mode = VehicleMode.AUTO, taskState = TaskRunState.RUNNING))
+        assertTrue(state.motionCommandsEnabled)
+    }
+
+    @Test
+    fun `motion commands disabled in safe stop`() {
+        val state = connected(snapshot(mode = VehicleMode.SAFE_STOP))
         assertFalse(state.motionCommandsEnabled)
     }
 
     @Test
     fun `motion commands enabled in manual standby`() {
         val state = connected(snapshot(mode = VehicleMode.MANUAL))
+        assertTrue(state.motionCommandsEnabled)
+    }
+
+    @Test
+    fun `motion commands enabled after user completed task`() {
+        val state = connected(snapshot(mode = VehicleMode.STANDBY, taskState = TaskRunState.DONE))
         assertTrue(state.motionCommandsEnabled)
     }
 

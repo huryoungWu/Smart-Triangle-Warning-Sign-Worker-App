@@ -14,7 +14,11 @@ import org.json.JSONObject
  */
 object TaskUploadJson {
 
-    fun toJson(record: WorkRecord): String {
+    /**
+     * 上传载荷：**所有字段显式出现**（服务端不再补默认值）。
+     * 数值型缺失用 0，非数值型缺失用 JSON null。
+     */
+    fun toJson(record: WorkRecord, deviceCode: String): String {
         val segArr = JSONArray()
         record.route.forEach { seg ->
             segArr.put(
@@ -24,21 +28,22 @@ object TaskUploadJson {
             )
         }
         return JSONObject()
+            .put("device_code", deviceCode)
             .put("id", record.id)
-            .put("name", record.name)
+            .put("name", record.name ?: JSONObject.NULL)
             .put("kind", record.kind.token)
-            .put("mode", record.mode?.token)
-            .put("lane", record.lane)              // 作业车道（第几车道）；null 时字段省略
+            .put("mode", record.mode?.token ?: JSONObject.NULL)
+            .put("lane", record.lane ?: 0)         // 数值型缺失用 0
             .put("startedAt", record.startedAt)
             .put("finishedAt", record.finishedAt)
             .put("segments", segArr)
             .put("targetM", record.targetM)
             .put("traveledM", record.traveledM)
             .put("deviceResult", record.deviceResult)
-            .put("deviceResultNote", record.deviceResultNote)
+            .put("deviceResultNote", record.deviceResultNote ?: JSONObject.NULL)
             .put("verifyResult", record.verifyResult)
-            .put("verifyNote", record.verifyNote)
-            .put("abnormalNote", record.abnormalNote)
+            .put("verifyNote", record.verifyNote ?: JSONObject.NULL)
+            .put("abnormalNote", record.abnormalNote ?: JSONObject.NULL)
             .toString()
     }
 }

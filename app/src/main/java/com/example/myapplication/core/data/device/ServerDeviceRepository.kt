@@ -8,6 +8,7 @@ import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.model.vehicle.MoveDir
 import com.example.myapplication.core.model.vehicle.RouteSegment
+import com.example.myapplication.core.model.vehicle.SegmentAction
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.model.vehicle.TaskMode
 import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
@@ -108,9 +109,9 @@ class ServerDeviceRepository(
                 .put("device_code", request.deviceCode)
                 .put("binding_code", request.bindingCode)
                 .put("device_type", request.deviceType)
-            // 未登录（跳过登录）时省略账号密码：Mock 按默认账号处理，正式服务端由 Bearer 鉴权兜底
-            request.username?.takeIf { it.isNotBlank() }?.let { body.put("username", it) }
-            request.password?.takeIf { it.isNotBlank() }?.let { body.put("password", it) }
+            // 未登录（跳过登录）时显式上报 null（服务端不再补默认值；正式服务端由 Bearer 鉴权兜底）
+            body.put("username", request.username?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+            body.put("password", request.password?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
             val device = JSONObject(request("POST", "$baseUrl/api/v1/devices/bind", body.toString()))
                 .optJSONObject("device")
             // 以服务端返回的设备编号为准（编号可能有规范化），保证后续状态查询/命令对应同一台设备
@@ -141,19 +142,38 @@ class ServerDeviceRepository(
     override suspend fun sendStop(): Result<CmdAck> =
         postCommand(JSONObject().put("type", "stop"))
 
+    /** 手动微调结束：不取消正在执行的任务。 */
+    override suspend fun sendManualStop(): Result<CmdAck> =
+        postCommand(JSONObject().put("type", "manual_stop"))
+
     override suspend fun sendEstop(): Result<CmdAck> =
         postCommand(JSONObject().put("type", "estop"))
 
     override suspend fun sendResume(): Result<CmdAck> =
         postCommand(JSONObject().put("type", "resume"))
 
+    /**
+     * 单段快捷任务（形态 1）：所有字段显式上报。
+     * `segments=[]` 表示单段快捷；`light`/`lane` 该路径无值，显式上报 null。
+     */
     override suspend fun startTask(kind: TaskKind, targetM: Double): Result<CmdAck> =
         postCommand(
-            JSONObject().put("type", "task_start").put("kind", kind.token).put("targetM", targetM),
+            JSONObject()
+                .put("type", "task_start")
+                .put("kind", kind.token)
+                .put("targetM", targetM)
+                .put("mode", TaskMode.AUTO.token)
+                .put("light", JSONObject.NULL)
+                .put("lane", JSONObject.NULL)
+                .put("segments", JSONArray()),
         )
 
     override suspend fun cancelTask(): Result<CmdAck> =
         postCommand(JSONObject().put("type", "task_cancel"))
+
+    /** 用户现场确认任务完成：停止运动并把任务置为 done。 */
+    override suspend fun completeTask(): Result<CmdAck> =
+        postCommand(JSONObject().put("type", "task_complete"))
 
     override suspend fun startRecover(): Result<CmdAck> =
         postCommand(JSONObject().put("type", "recover"))
@@ -169,14 +189,19 @@ class ServerDeviceRepository(
         segments.forEach { seg ->
             segArr.put(JSONObject().put("action", seg.action.token).put("value", seg.value))
         }
+        // 目标里程：所有前进段之和（与车端 targetM 口径一致）；不再依赖服务端计算
+        val targetM = segments
+            .filter { it.action == SegmentAction.FWD }
+            .sumOf { it.value }
         val body = JSONObject()
             .put("type", "task_start")
             .put("kind", kind.token)
+            .put("targetM", targetM)
             .put("mode", mode.token)
             .put("light", light.token)
             .put("segments", segArr)
-        // 作业车道（第几车道）：未填写则整字段省略（服务端按未标注处理）
-        lane?.let { body.put("lane", it) }
+        // 作业车道：始终显式上报；未填写用 null（服务端按未标注处理）
+        body.put("lane", lane ?: JSONObject.NULL)
         return postCommand(body)
     }
 

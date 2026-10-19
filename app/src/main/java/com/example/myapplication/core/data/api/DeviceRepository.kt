@@ -75,6 +75,12 @@ interface DeviceRepository {
     /** POST /cmd {type:stop} —— 普通停车：停运动+取消任务，不锁、不关灯（M04） */
     suspend fun sendStop(): Result<CmdAck>
 
+    /**
+     * POST /cmd {type:manual_stop} —— **只结束手动微调，不取消任务**。
+     * 自动任务在手动微调期间暂停，收到本命令后从当前进度继续。
+     */
+    suspend fun sendManualStop(): Result<CmdAck>
+
     /** POST /cmd {type:estop} —— 急停：进入安全停止并锁定（M08） */
     suspend fun sendEstop(): Result<CmdAck>
 
@@ -106,6 +112,12 @@ interface DeviceRepository {
 
     /** POST /cmd {type:task_cancel} */
     suspend fun cancelTask(): Result<CmdAck>
+
+    /**
+     * POST /cmd {type:task_complete} —— **用户现场确认任务完成**：
+     * 停止运动并把任务置为完成（不依赖设备自行判断到达终点）。
+     */
+    suspend fun completeTask(): Result<CmdAck>
 
     /** POST /light —— 三模式互斥（M07）；最终显示以 /status 为准 */
     suspend fun setLight(mode: LightMode): Result<CmdAck>

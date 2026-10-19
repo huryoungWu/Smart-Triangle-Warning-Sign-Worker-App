@@ -203,8 +203,9 @@ function tick(dev) {
     dev.odo.speedMps = SPEED.move;
   }
 
-  // 任务推进
-  if (dev.task.state === 'running') {
+  // 任务推进：手动微调期间暂停，松手（manual_stop）后从当前进度继续
+  const manualOverride = dev.movingDir && dev.motion === 'moving';
+  if (dev.task.state === 'running' && !manualOverride) {
     if (dev.task.kind === 'recover') {
       const step = SPEED.recover * dt;
       dev.task.traveledM = Math.max(0, dev.task.traveledM - step);
@@ -224,7 +225,7 @@ function tick(dev) {
     } else {
       tickRoute(dev, dt);
     }
-  } else if (dev.motion !== 'moving') {
+  } else if (!manualOverride && dev.motion !== 'moving') {
     dev.odo.speedMps = 0;
   }
 }
@@ -294,13 +295,19 @@ function applyCommand(dev, body) {
   const t = body.type;
   if (t === 'move') {
     if (dev.estopLocked || dev.mode === 'safe_stop') return { accepted: false, reason: 'estop_locked' };
-    const seg = currentSegment(dev);
-    if (dev.task.state === 'running' && seg && seg.state === 'running') return { accepted: false, reason: 'task_running' };
     if (!['fwd', 'back', 'left', 'right'].includes(body.dir)) return { accepted: false, reason: 'param_out_of_range' };
+    // 任务执行中也允许手动微调：手动期间 tick 暂停任务推进，manual_stop 后继续
     dev.movingDir = body.dir;
     dev.lastMoveAt = Date.now();
     if (dev.task.state !== 'running') dev.mode = 'manual';
     dev.motion = 'moving';
+    return { accepted: true };
+  }
+  if (t === 'manual_stop') {
+    // 只结束手动微调，不改变 task.state / segments；自动任务下一拍继续
+    dev.movingDir = null;
+    dev.motion = 'idle';
+    dev.odo.speedMps = 0;
     return { accepted: true };
   }
   if (t === 'stop') {
@@ -360,6 +367,28 @@ function applyCommand(dev, body) {
     }
     return { accepted: true };
   }
+  // 用户现场确认任务完成：停止运动并把任务置为 done（已完成以用户确认为准）
+  if (t === 'task_complete') {
+    if (dev.task.state === 'done') return { accepted: true }; // 幂等
+    if (dev.task.state !== 'running') return { accepted: false, reason: 'no_task' };
+    dev.movingDir = null;
+    dev.motion = 'idle';
+    dev.odo.speedMps = 0;
+    dev.mode = 'standby';
+    // 用户确认完成：当前运行/待确认段收尾为 done，后续未执行段标 skipped，
+    // 否则 /status 里会残留 running 段，让 APP 误判“段执行中”而禁用手动干预。
+    for (const s of dev.task.segments) {
+      if (s.state === 'running' || s.state === 'waiting_confirm') {
+        s.state = 'done';
+        s.progress = 1;
+      } else if (s.state === 'pending') {
+        s.state = 'skipped';
+      }
+    }
+    dev.task.state = 'done';
+    dev.task.resultNote = 'user_confirmed';
+    return { accepted: true };
+  }
   if (t === 'recover') {
     if (dev.estopLocked || dev.mode === 'safe_stop') return { accepted: false, reason: 'estop_locked' };
     if (dev.task.state === 'running') return { accepted: false, reason: 'task_running' };
@@ -379,16 +408,41 @@ function startTask(dev, body) {
   if (dev.estopLocked || dev.mode === 'safe_stop') return { accepted: false, reason: 'estop_locked' };
   if (dev.task.state === 'running') return { accepted: false, reason: 'task_running' };
 
+  // 必填字段：服务端不再补默认值（APP 必须显式上报；light/lane 允许显式 null）
+  const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
+  if (!has('kind') || !has('mode') || !has('targetM') ||
+      !has('light') || !has('lane') || !has('segments')) {
+    return { accepted: false, reason: 'param_out_of_range' };
+  }
+  if (!['fixed_distance', 'manual', 'one_touch', 'recover'].includes(body.kind)) {
+    return { accepted: false, reason: 'param_out_of_range' };
+  }
+  if (!['auto', 'segment_confirm'].includes(body.mode)) {
+    return { accepted: false, reason: 'param_out_of_range' };
+  }
+  if (body.light !== null && !['off', 'on', 'blink'].includes(body.light)) {
+    return { accepted: false, reason: 'param_out_of_range' };
+  }
+
   // 作业车道（第几车道，1~8）：发布任务时必填；非法值整条命令拒绝
   const lane = normalizeLane(body.lane);
   if (Number.isNaN(lane)) return { accepted: false, reason: 'param_out_of_range' };
 
   let segments = body.segments;
-  if (!segments || segments.length === 0) {
+  if (!Array.isArray(segments)) return { accepted: false, reason: 'param_out_of_range' };
+  // targetM 必须是显式数字（null 不能被 Number(null)=0 蒙混过关）
+  const targetM = body.targetM;
+  if (typeof targetM !== 'number' || !Number.isFinite(targetM)) {
+    return { accepted: false, reason: 'param_out_of_range' };
+  }
+
+  if (segments.length === 0) {
     // 形态1：单段快捷（定距布置）
-    const targetM = Number(body.targetM || 0);
     if (!(targetM >= LIMIT.mMin && targetM <= LIMIT.mMax)) return { accepted: false, reason: 'param_out_of_range' };
     segments = [{ action: 'fwd', value: targetM }];
+  } else if (targetM < 0 || targetM > LIMIT.totalMax) {
+    // 形态2：多段路线，targetM 由 APP 计算并上报，服务端不再自行求和
+    return { accepted: false, reason: 'param_out_of_range' };
   }
   if (segments.length > LIMIT.segMax) return { accepted: false, reason: 'too_many_segments' };
   for (const s of segments) {
@@ -397,16 +451,14 @@ function startTask(dev, body) {
     if (s.action === 'turn' && !(Math.abs(v) >= LIMIT.degMin && Math.abs(v) <= LIMIT.degMax)) return { accepted: false, reason: 'segment_out_of_range' };
     if (!['fwd', 'turn'].includes(s.action)) return { accepted: false, reason: 'segment_out_of_range' };
   }
-  const total = segments.filter((s) => s.action === 'fwd').reduce((a, s) => a + Number(s.value), 0);
-  if (total > LIMIT.totalMax) return { accepted: false, reason: 'param_out_of_range' };
 
-  const mode = body.mode === 'segment_confirm' ? 'segment_confirm' : 'auto';
+  const mode = body.mode;
   dev.task = {
     id: nid('t'),
-    kind: body.kind || 'fixed_distance',
+    kind: body.kind,
     source: 'app',
     mode,
-    targetM: total,
+    targetM,
     traveledM: 0,
     state: 'running',
     stage: null,
@@ -956,15 +1008,19 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/v1/devices/bind' && req.method === 'POST') {
     const id = String(body.device_code || '').trim();
     const bindingCode = String(body.binding_code || '').trim();
-    const deviceType = String(body.device_type || DEVICE_TYPE_TRIANGLE).trim();
+    // 服务端不再补 device_type 默认值：APP 必须显式上报
+    const deviceType = String(body.device_type ?? '').trim();
     if (!id || id.length > 32) {
       return sendError(res, 400, 'bad_request', '设备编号（device_code）不能为空且不超过 32 字符');
     }
     if (!bindingCode) {
       return sendError(res, 400, 'bad_request', '绑定码（binding_code）不能为空，请输入设备铭牌上的绑定码');
     }
+    if (!deviceType) {
+      return sendError(res, 400, 'bad_request', '缺少 device_type');
+    }
     const user = currentUser(req);            // 有 token 以 token 为准；无 token 按默认用户（宽松）
-    const loginName = String(body.username || user); // 登录账号（APP 登录后带入，仅记日志）
+    const loginName = body.username == null ? '' : String(body.username); // APP 未登录时显式传 null
     const exists = devices.get(id);
     if (exists && exists.owner !== user) {
       return sendError(res, 409, 'already_bound', '该设备已被其他账号绑定');
@@ -992,11 +1048,16 @@ const server = http.createServer(async (req, res) => {
   // ── 实时状态（APP 连接后读取一次，之后由用户手动刷新）──
   // 状态机由上方 setInterval 统一推进；本接口只读，不随查询次数改变车辆状态。
   if (path === '/api/v1/device/status' && req.method === 'GET') {
-    const id = url.searchParams.get('device_code') || 'TC-001';
+    // 服务端不再补默认设备编号：APP 必须显式传 device_code
+    const id = url.searchParams.get('device_code');
+    if (!id) return sendError(res, 400, 'bad_request', '缺少 device_code 查询参数');
     const d = getDevice(id);
     // 可选的手机位置锚点（GCJ-02）：APP 定位可用时上报，服务端把"车端 GPS"锚定在作业人员附近
-    const lat = Number(url.searchParams.get('lat'));
-    const lng = Number(url.searchParams.get('lng'));
+    // 只传一个时按"未上报"处理（避免缺省值被 Number(null)=0 当成有效坐标）
+    const rawLat = url.searchParams.get('lat');
+    const rawLng = url.searchParams.get('lng');
+    const lat = rawLat === null ? Number.NaN : Number(rawLat);
+    const lng = rawLng === null ? Number.NaN : Number(rawLng);
     const anchor = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) > 1e-6 ? { lat, lng } : null;
     // 只在连接后/用户手动刷新时调用，频率低，可以放心打日志（原先 1Hz 轮询时刻意不打印以免刷屏）
     log(`[状态] u=${currentUser(req)} ${id}${anchor ? ` 锚点=${anchor.lat},${anchor.lng}` : ''}`);
@@ -1021,11 +1082,13 @@ const server = http.createServer(async (req, res) => {
       log(`记录重复上传（幂等命中） clientId=${idem}`);
       return sendJson(res, 201, { id: exist.id, receivedAt: exist.receivedAt });
     }
+    // 服务端不再补默认设备编号：APP 必须显式上报
+    if (!body.device_code) return sendError(res, 400, 'bad_request', '缺少 device_code');
     const rec = {
       ...body,
       id: `srv-${String(bizSeq++).padStart(4, '0')}`,
       clientId: body.id || idem || null,
-      device_code: body.device_code || 'TC-001',
+      device_code: body.device_code,
       receivedAt: Date.now(),
     };
     workRecords.push(rec);
@@ -1050,16 +1113,25 @@ const server = http.createServer(async (req, res) => {
     if (!isJson) log(`请求体(multipart 字段): ${JSON.stringify(parsed.fields)}${parsed.image ? ` image=${parsed.image.buffer.length}B` : ''}`);
     const fields = parsed.fields;
     if (hasInvalidUtf8(fields)) return sendError(res, 400, 'bad_request', UTF8_HINT);
+    // 必填字段：服务端不再补默认值；缺失直接 400，便于暴露 APP 漏传
+    const required = ['device_code', 'taskName', 'lane', 'eventLabel', 'capturedAt', 'note'];
+    const missing = required.filter((k) => fields[k] === undefined);
+    if (missing.length) return sendError(res, 400, 'bad_request', `缺少字段: ${missing.join(', ')}`);
+    if (!fields.device_code) return sendError(res, 400, 'bad_request', 'device_code 不能为空');
+    const capturedAt = Number(fields.capturedAt);
+    if (!fields.capturedAt || !Number.isFinite(capturedAt) || capturedAt <= 0) {
+      return sendError(res, 400, 'bad_request', 'capturedAt 必须为毫秒时间戳');
+    }
     const lane = normalizeLane(fields.lane);
     const snap = {
       id: `snap-${String(bizSeq++).padStart(4, '0')}`,
-      device_code: fields.device_code || 'TC-001',
-      taskName: fields.taskName || '',
+      device_code: fields.device_code,
+      taskName: fields.taskName,
       // 作业车道（第几车道）：随所属任务上报，登记到风险事件
       lane: Number.isInteger(lane) ? lane : null,
-      eventLabel: fields.eventLabel || '现场抓拍',
-      capturedAt: Number(fields.capturedAt) || Date.now(),
-      note: fields.note || '',
+      eventLabel: fields.eventLabel,
+      capturedAt,
+      note: fields.note,
       hasImage: true, // 服务端从视频流截帧（接真机后为车端抓帧/APP 抓帧）
     };
     snapshots.push(snap);
@@ -1121,9 +1193,19 @@ const server = http.createServer(async (req, res) => {
 
   // ── 道路风险（围绕请求点生成演示数据；坐标为 GCJ-02）──
   if (path === '/api/v1/risks' && req.method === 'GET') {
-    const lat = Number(url.searchParams.get('lat') || 39.9928);
-    const lng = Number(url.searchParams.get('lng') || 116.4004);
-    const radiusKm = Number(url.searchParams.get('radiusKm') || 2);
+    // 服务端不再补默认查询点/半径：APP 必须显式上报
+    const rawLat = url.searchParams.get('lat');
+    const rawLng = url.searchParams.get('lng');
+    const rawRadius = url.searchParams.get('radiusKm');
+    if (!rawLat || !rawLng || !rawRadius) {
+      return sendError(res, 400, 'bad_request', '缺少 lat / lng / radiusKm 查询参数');
+    }
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    const radiusKm = Number(rawRadius);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radiusKm)) {
+      return sendError(res, 400, 'bad_request', 'lat / lng / radiusKm 必须为数字');
+    }
     // lane = 事故/风险占用车道（第几车道，1~8）：演示数据**每条必带**（风险列表要显示「第 N 车道」）
     // minutesAgo/daysAgo = 演示发生时间：今天 6 条（默认「今天」筛选下可见）+ 历史 2 条（切「全部」可见）
     // 距离均 ≤ 2 公里（风险页搜索半径），方位各不相同，便于验证「近→远 / 新→旧」排序
@@ -1212,13 +1294,17 @@ const server = http.createServer(async (req, res) => {
 
   // ── 视频流（按 deviceCode 各自一路：实时视频/事故视频/快照截帧均以 deviceCode 区分；接真实视频源后替换本段）──
   if (path === '/api/v1/device/video/snapshot.jpg' && req.method === 'GET') {
-    const dev = url.searchParams.get('device_code') || 'TC-001';
+    // 服务端不再补默认设备编号：APP 必须显式传 device_code
+    const dev = url.searchParams.get('device_code');
+    if (!dev) return sendError(res, 400, 'bad_request', '缺少 device_code 查询参数');
     const png = makeFrame(frameIndex(), 320, 180, dev); // 该设备当前帧（时间驱动，与观看端一致）
     res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': CORS_ORIGIN });
     return res.end(png);
   }
   if (path === '/api/v1/device/video/stream' && req.method === 'GET') {
-    const dev = url.searchParams.get('device_code') || 'TC-001';
+    // 服务端不再补默认设备编号：APP 必须显式传 device_code
+    const dev = url.searchParams.get('device_code');
+    if (!dev) return sendError(res, 400, 'bad_request', '缺少 device_code 查询参数');
     res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Access-Control-Allow-Origin': CORS_ORIGIN });
     log(`[视频流] 客户端接入 device_code=${dev}（10fps 动画帧）`);
     const timer = setInterval(() => {

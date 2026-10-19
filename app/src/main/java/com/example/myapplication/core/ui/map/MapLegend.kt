@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.myapplication.core.ui.SafetyText
 
 /**
  * 地图图例（数据真实性的 UI 落点）：
@@ -54,21 +53,6 @@ private fun LegendRow(color: Color, title: String, desc: String, dashed: Boolean
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-/** 小车位置来源免责声明（常驻横幅） */
-@Composable
-fun VehiclePositionDisclaimer(vehicleHasGps: Boolean, stale: Boolean, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        if (vehicleHasGps) {
-            SafetyText("小车位置来自车端 GPS 上报并做坐标转换；定位精度取决于车端模块。")
-        } else {
-            SafetyText("小车位置为行程估算示意，非地图实时定位，误差可达数十米；请以现场实际位置为准。")
-        }
-        if (stale) {
-            SafetyText("设备状态非实时（通信中断或数据过期）。")
         }
     }
 }

@@ -41,7 +41,6 @@ import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.core.ui.map.AMapCanvas
 import com.example.myapplication.core.ui.map.MapLegend
-import com.example.myapplication.core.ui.map.VehiclePositionDisclaimer
 import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -83,6 +82,9 @@ fun MapScreen(
     val vehicleState by vm.uiState.collectAsStateWithLifecycle()
     val permission = rememberLocationPermissionState()
     val renderModel = remember(mapState, mapVm.phoneFix.value) { mapVm.renderModel() }
+
+    // 进入地图页先读一次状态，保证小车位置不是旧快照
+    LaunchedEffect(Unit) { vm.refreshStatus() }
 
     // 车端快照随 VehicleViewModel 状态推入地图
     LaunchedEffect(vehicleState.snapshot) {
@@ -209,12 +211,6 @@ fun MapScreen(
         SectionCard(title = "图例") {
             MapLegend(vehicleHasGps = renderModel.vehicleHasGps)
         }
-
-        // 免责横幅（规格第 4 节·数据真实性）
-        VehiclePositionDisclaimer(
-            vehicleHasGps = renderModel.vehicleHasGps,
-            stale = vehicleState.isStale(),
-        )
 
         SafetyText("地图仅用于显示位置，不具备道路安全判断、障碍或来车检测能力。")
         SafetyText("小车位置不等于道路风险评估；布置前须人工现场确认。")

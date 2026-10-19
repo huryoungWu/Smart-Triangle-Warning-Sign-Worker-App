@@ -17,5 +17,9 @@ data class UploadResult(val serverId: String, val uploadedAt: Long)
  * HTTP 模式按真实上传展示服务端单号（界面文案按 [com.example.myapplication.di.UploadMode] 区分）。
  */
 interface TaskUploadRepository {
-    suspend fun upload(record: WorkRecord): Result<UploadResult>
+    /**
+     * [deviceCode] 随记录一并上报（与任务/快照使用同一设备编号字段）。
+     * 服务端不再为缺失字段补默认值，因此调用方必须显式传入。
+     */
+    suspend fun upload(record: WorkRecord, deviceCode: String): Result<UploadResult>
 }

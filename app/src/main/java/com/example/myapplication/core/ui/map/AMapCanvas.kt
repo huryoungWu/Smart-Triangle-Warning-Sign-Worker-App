@@ -22,6 +22,7 @@ import com.amap.api.maps.model.Marker
 import com.amap.api.maps.model.MarkerOptions
 import com.amap.api.maps.model.Polyline
 import com.amap.api.maps.model.PolylineOptions
+import com.example.myapplication.core.geo.CoordTransform
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.geo.MapRenderModel
 
@@ -158,7 +159,7 @@ private fun renderMap(
             "小车（行程估算）", "由车轮编码器估算行驶距离推算 · 非地图定位", COLOR_ESTIMATE,
         )
         val anchor = model.estimateAnchor
-        if (anchor != null) {
+        if (anchor != null && CoordTransform.distanceM(anchor, est) >= 0.5) {
             val line = polylines.getOrPut(KEY_EST_LINE) {
                 aMap.addPolyline(
                     PolylineOptions()
@@ -169,6 +170,9 @@ private fun renderMap(
                 )
             }
             line.points = listOf(LatLng(anchor.lat, anchor.lng), LatLng(est.lat, est.lng))
+        } else {
+            // 锚点与估算点重合（尚未移动）时不画虚线
+            polylines.remove(KEY_EST_LINE)?.remove()
         }
     } else {
         markers.remove(KEY_VEHICLE_EST)?.remove()

@@ -168,10 +168,7 @@ class FakeDeviceRepository : DeviceRepository {
         if (estopLocked || mode == VehicleMode.SAFE_STOP) {
             return@command CmdAck(false, reason = "estop_locked：急停锁定中，禁止运动指令")
         }
-        // 自动任务执行运动段时禁止抢占；分段确认的 WAITING_CONFIRM 间隙允许微调
-        if (task.state == TaskRunState.RUNNING && currentSegment()?.state == SegmentRunState.RUNNING) {
-            return@command CmdAck(false, reason = "task_running：任务段执行中，禁止手动抢占")
-        }
+        // 任务执行中允许手动微调：手动期间暂停自动推进，松手后任务继续
         movingDir = dir
         lastCmdAt = System.currentTimeMillis()
         if (task.state != TaskRunState.RUNNING) {
@@ -208,6 +205,14 @@ class FakeDeviceRepository : DeviceRepository {
     }
 
     // ══════════════ 急停 / 恢复 ══════════════
+
+    /** 手动微调结束：只停手动运动，不取消正在运行的任务。 */
+    override suspend fun sendManualStop(): Result<CmdAck> = command {
+        movingDir = null
+        motion = MotionState.IDLE
+        odo = odo.copy(speedMps = 0.0)
+        CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
+    }
 
     override suspend fun sendEstop(): Result<CmdAck> = command {
         movingDir = null
@@ -350,6 +355,35 @@ class FakeDeviceRepository : DeviceRepository {
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
     }
 
+    /** 用户现场确认任务完成：停止运动并把任务置为 DONE（幂等）。 */
+    override suspend fun completeTask(): Result<CmdAck> = command {
+        if (task.state == TaskRunState.DONE) {
+            return@command CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
+        }
+        if (task.state != TaskRunState.RUNNING) {
+            return@command CmdAck(false, reason = "no_task：当前无运行中任务")
+        }
+        movingDir = null
+        motion = MotionState.IDLE
+        mode = VehicleMode.STANDBY
+        odo = odo.copy(speedMps = 0.0)
+        // 用户确认完成：当前运行/待确认段收尾为 done，后续未执行段标 skipped
+        routeSegments = routeSegments.map {
+            when (it.state) {
+                SegmentRunState.RUNNING, SegmentRunState.WAITING_CONFIRM ->
+                    it.copy(state = SegmentRunState.DONE, progress = 1f)
+                SegmentRunState.PENDING -> it.copy(state = SegmentRunState.SKIPPED)
+                else -> it
+            }
+        }.toMutableList()
+        task = task.copy(
+            state = TaskRunState.DONE,
+            resultNote = "user_confirmed",
+            segments = routeSegments,
+        )
+        CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
+    }
+
     override suspend fun setLight(modeIn: LightMode): Result<CmdAck> = command {
         light = modeIn
         CmdAck(true, "c-${UUID.randomUUID().toString().take(6)}")
@@ -445,11 +479,13 @@ class FakeDeviceRepository : DeviceRepository {
             )
         }
 
-        // 任务推进
+        // 任务推进：手动微调期间暂停，松手（manual_stop）后从当前进度继续
+        val manualOverride = movingDir != null && motion == MotionState.MOVING
         when {
-            task.kind == TaskKind.RECOVER && task.state == TaskRunState.RUNNING -> tickRecover(dtSec)
-            task.state == TaskRunState.RUNNING -> tickRoute(dtSec, now)
-            motion != MotionState.MOVING -> odo = odo.copy(speedMps = 0.0)
+            !manualOverride && task.kind == TaskKind.RECOVER && task.state == TaskRunState.RUNNING ->
+                tickRecover(dtSec)
+            !manualOverride && task.state == TaskRunState.RUNNING -> tickRoute(dtSec, now)
+            !manualOverride && motion != MotionState.MOVING -> odo = odo.copy(speedMps = 0.0)
         }
     }
 
