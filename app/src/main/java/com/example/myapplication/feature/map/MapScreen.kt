@@ -29,7 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.awaitCancellation
 import com.example.myapplication.BuildConfig
 import com.example.myapplication.core.geo.MapRenderModel
 import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
@@ -83,8 +87,18 @@ fun MapScreen(
     val permission = rememberLocationPermissionState()
     val renderModel = remember(mapState, mapVm.phoneFix.value) { mapVm.renderModel() }
 
-    // 进入地图页先读一次状态，保证小车位置不是旧快照
-    LaunchedEffect(Unit) { vm.refreshStatus() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // 页面可见期间 1Hz 读取状态：小车位置/轨迹实时更新；切后台或离开页面自动停止
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            vm.acquireLiveStatus()
+            try {
+                awaitCancellation()
+            } finally {
+                vm.releaseLiveStatus()
+            }
+        }
+    }
 
     // 车端快照随 VehicleViewModel 状态推入地图
     LaunchedEffect(vehicleState.snapshot) {
@@ -178,6 +192,7 @@ fun MapScreen(
         AMapCanvas(
             model = renderModel,
             onMapReady = { /* 相机已由 renderMap 管理 */ },
+            showPhoneMarker = true,   // 蓝星 = 我的实时位置 A
             modifier = Modifier
                 .fillMaxWidth()
                 .height(360.dp),

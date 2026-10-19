@@ -98,6 +98,7 @@ fun TaskPublishScreen(
             height = 220.dp,
             title = "现场位置",
             showLegend = false,
+            showPhoneMarker = true,   // 蓝星 = 我的实时位置 A
         )
 
         // ② 任务名 + 作业车道

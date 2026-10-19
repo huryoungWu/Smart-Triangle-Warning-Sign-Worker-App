@@ -92,6 +92,30 @@ class VehicleMapPositionTest {
     }
 
     @Test
+    fun `task destination follows route from operator position with north default`() {
+        val start = GeoPoint(39.9088, 116.3975)
+        // 向北 10 米 → 右转 90° → 向东 10 米
+        val north10 = com.example.myapplication.core.geo.CoordTransform.projectGcj02(start, 0.0, 10.0)
+        val expected =
+            com.example.myapplication.core.geo.CoordTransform.projectGcj02(north10, 90.0, 10.0)
+        val segments = listOf(
+            com.example.myapplication.core.model.vehicle.SegmentState(
+                com.example.myapplication.core.model.vehicle.SegmentAction.FWD, 10.0,
+            ),
+            com.example.myapplication.core.model.vehicle.SegmentState(
+                com.example.myapplication.core.model.vehicle.SegmentAction.TURN, 90.0,
+            ),
+            com.example.myapplication.core.model.vehicle.SegmentState(
+                com.example.myapplication.core.model.vehicle.SegmentAction.FWD, 10.0,
+            ),
+        )
+        val actual = com.example.myapplication.core.geo.resolveTaskDestination(start, segments)
+        val distance = com.example.myapplication.core.geo.CoordTransform.distanceM(expected, actual)
+        assertTrue("目的地应与路线推算一致，误差 ${distance}m", distance < 0.1)
+        assertTrue("默认正北后右转，终点应位于起点的北/东方向", actual.lat > start.lat && actual.lng > start.lng)
+    }
+
+    @Test
     fun `estimate projected forward along heading`() {
         val anchor = EstimateAnchor(
             gcj02 = GeoPoint(39.9088, 116.3975),

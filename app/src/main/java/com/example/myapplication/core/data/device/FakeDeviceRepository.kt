@@ -50,7 +50,7 @@ sealed interface FakeFault {
  * 模拟三角警示牌小车（无真机时跑通全流程）。
  *
  * **路线分段状态机**：整条路线一次性下发，车端逐段执行：
- * - FWD/BACK：odo 按 0.25 m/s 递增，heading 不变
+ * - FWD/BACK：按 1 m/s 沿当前 heading 移动（默认正北）
  * - TURN：**只改 heading**（60°/s），不动位置、不计里程
  * - WAIT：原地不动，计时完成
  *
@@ -80,6 +80,10 @@ class FakeDeviceRepository : DeviceRepository {
     /** 模拟行进方向（度，正北=0）；与作业人员方向一致，未知时默认正北 */
     @Volatile
     var headingDeg: Double = 0.0
+
+    /** 相对锚点 A 的局部坐标（米）：x=东，y=北，默认正北 */
+    private var posEastM = 0.0
+    private var posNorthM = 0.0
 
     /**
      * 时间加速系数（**仅供单测**，生产默认 1.0）。
@@ -278,6 +282,10 @@ class FakeDeviceRepository : DeviceRepository {
 
         routeMode = mode
         this.light = light
+        // 新任务从作业人员锚点 A 出发：局部坐标归零，默认正北
+        posEastM = 0.0
+        posNorthM = 0.0
+        headingDeg = 0.0
         routeSegments = segments.map {
             SegmentState(action = it.action, value = it.value, state = SegmentRunState.PENDING)
         }.toMutableList()
@@ -468,15 +476,27 @@ class FakeDeviceRepository : DeviceRepository {
 
         if (fault is FakeFault.ResultUnknown) return   // 接受命令但不推进 → 结果未知
 
-        // 手动微调移动（不推进段进度）
-        if (movingDir != null && motion == MotionState.MOVING) {
-            val step = MANUAL_SPEED_MPS * dtSec
-            odo = odo.copy(
-                traveledM = odo.traveledM + step,
-                leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
-                rightPulse = odo.rightPulse + (step * PULSE_PER_M).toLong(),
-                speedMps = MANUAL_SPEED_MPS,
-            )
+        // 手动微调移动（不推进段进度）：前进/后退沿航向位移，左转/右转只改航向
+        val dir = movingDir
+        if (dir != null && motion == MotionState.MOVING) {
+            if (dir == MoveDir.LEFT || dir == MoveDir.RIGHT) {
+                val d = TURN_SPEED_DPS * dtSec
+                val delta = if (dir == MoveDir.LEFT) -d else d
+                headingDeg = (headingDeg + delta + 360.0) % 360.0
+                odo = odo.copy(speedMps = 0.0)
+            } else {
+                val step = MANUAL_SPEED_MPS * dtSec
+                val sign = if (dir == MoveDir.BACK) -1.0 else 1.0
+                val rad = Math.toRadians(headingDeg)
+                posEastM += sign * step * kotlin.math.sin(rad)
+                posNorthM += sign * step * kotlin.math.cos(rad)
+                odo = odo.copy(
+                    traveledM = odo.traveledM + step,
+                    leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
+                    rightPulse = odo.rightPulse + (step * PULSE_PER_M).toLong(),
+                    speedMps = MANUAL_SPEED_MPS,
+                )
+            }
         }
 
         // 任务推进：手动微调期间暂停，松手（manual_stop）后从当前进度继续
@@ -502,10 +522,14 @@ class FakeDeviceRepository : DeviceRepository {
         val seg = routeSegments[idx]
         when (seg.action) {
             SegmentAction.FWD -> {
-                val step = MOVE_SPEED_MPS * dtSec
+                val remaining = (seg.value * (1 - seg.progress)).coerceAtLeast(0.0)
+                val step = kotlin.math.min(MOVE_SPEED_MPS * dtSec, remaining)
                 val done = (seg.value * seg.progress) + step
                 val progress = (done / seg.value).toFloat().coerceAtMost(1f)
                 routeSegments[idx] = seg.copy(progress = progress)
+                val rad = Math.toRadians(headingDeg)
+                posEastM += step * kotlin.math.sin(rad)
+                posNorthM += step * kotlin.math.cos(rad)
                 odo = odo.copy(
                     traveledM = odo.traveledM + step,
                     leftPulse = odo.leftPulse + (step * PULSE_PER_M).toLong(),
@@ -518,12 +542,13 @@ class FakeDeviceRepository : DeviceRepository {
 
             SegmentAction.TURN -> {
                 val target = abs(seg.value)
-                val stepDeg = TURN_SPEED_DPS * dtSec
+                val remaining = (target - turnDoneDeg).coerceAtLeast(0.0)
+                val stepDeg = kotlin.math.min(TURN_SPEED_DPS * dtSec, remaining)
                 turnDoneDeg += stepDeg
                 val progress = (turnDoneDeg / target).toFloat().coerceAtMost(1f)
                 routeSegments[idx] = seg.copy(progress = progress)
                 // 只改 heading，不动位置、不计里程
-                headingDeg += if (seg.value < 0) -stepDeg else stepDeg
+                headingDeg = (headingDeg + (if (seg.value < 0) -stepDeg else stepDeg) + 360.0) % 360.0
                 motion = MotionState.MOVING
                 odo = odo.copy(speedMps = 0.0)
                 if (progress >= 1f) completeSegment(idx)
@@ -574,11 +599,23 @@ class FakeDeviceRepository : DeviceRepository {
             speedMps = RECOVER_SPEED_MPS,
         )
         motion = MotionState.MOVING
+        // 沿当前位置指向锚点 A 的方向回收
+        val mag = kotlin.math.hypot(posEastM, posNorthM)
+        if (mag > 0) {
+            val f = ((mag - step).coerceAtLeast(0.0)) / mag
+            val hx = posEastM
+            val hy = posNorthM
+            posEastM *= f
+            posNorthM *= f
+            headingDeg = (Math.toDegrees(kotlin.math.atan2(-hx, -hy)) + 360.0) % 360.0
+        }
         if (traveled <= 0.01) {
             task = task.copy(state = TaskRunState.DONE, resultNote = "recovered")
             motion = MotionState.IDLE
             mode = VehicleMode.STANDBY
             odo = odo.copy(traveledM = 0.0, speedMps = 0.0)
+            posEastM = 0.0
+            posNorthM = 0.0
         }
     }
 
@@ -604,11 +641,10 @@ class FakeDeviceRepository : DeviceRepository {
 
     private fun buildGps(): VehicleGps? {
         if (!gpsEnabled) return null
-        val driftedGcj = CoordTransform.projectGcj02(
-            start = gpsBaseGcj02,
-            headingDeg = headingDeg,
-            distanceM = odo.traveledM,
-        )
+        // 位置 = 锚点 A + 车辆局部坐标（x=东，y=北，米）
+        val dLat = posNorthM / 111_320.0
+        val dLng = posEastM / (111_320.0 * kotlin.math.cos(Math.toRadians(gpsBaseGcj02.lat)))
+        val driftedGcj = GeoPoint(gpsBaseGcj02.lat + dLat, gpsBaseGcj02.lng + dLng)
         val wgs = CoordTransform.gcj02ToWgs84(driftedGcj) // 故意给 WGS-84，走真实转换链路
         return VehicleGps(
             wgs84Lat = wgs.lat,
@@ -630,9 +666,9 @@ class FakeDeviceRepository : DeviceRepository {
 
         private const val NETWORK_DELAY_MS = 50L
         private const val WATCHDOG_MS = 800L
-        private const val MANUAL_SPEED_MPS = 0.25
-        private const val MOVE_SPEED_MPS = 0.25
-        private const val RECOVER_SPEED_MPS = 0.5
+        private const val MANUAL_SPEED_MPS = 1.0
+        private const val MOVE_SPEED_MPS = 1.0
+        private const val RECOVER_SPEED_MPS = 1.0
         private const val TURN_SPEED_DPS = 60.0
         private const val PULSE_PER_M = 500.0
 

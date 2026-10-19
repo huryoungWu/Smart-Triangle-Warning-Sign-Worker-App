@@ -17,8 +17,10 @@ import com.example.myapplication.core.geo.EstimateAnchor
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.geo.MapRenderModel
 import com.example.myapplication.core.geo.VehicleMapPoint
+import com.example.myapplication.core.geo.resolveTaskDestination
 import com.example.myapplication.core.geo.resolveVehicleMapPoint
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
+import com.example.myapplication.core.model.vehicle.TaskRunState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,6 +36,8 @@ data class MapUiState(
     val vehicleTrail: List<GeoPoint> = emptyList(),
     val anchor: EstimateAnchor? = null,
     val lastVehiclePoint: VehicleMapPoint = VehicleMapPoint.Unknown,
+    /** 任务路线终点（以作业人员当前位置 A 为起点、默认正北）；无任务时为 null */
+    val destination: GeoPoint? = null,
 )
 
 /**
@@ -63,6 +67,9 @@ class MapViewModel(
 
     /** 作业人员方向（度，正北=0）。未知时保持默认正北 */
     private var operatorHeadingDeg: Double = 0.0
+
+    /** 上一帧任务 id：新任务时清空小车轨迹，避免跨任务连线 */
+    private var lastTaskId: String? = null
 
     init {
         viewModelScope.launch {
@@ -127,10 +134,9 @@ class MapViewModel(
             }
         }
 
-        // 模拟车端（Fake 设备）的推算基准与方向跟随作业人员
+        // 模拟车端（Fake 设备）的推算基准跟随作业人员；方向由任务/手动控制（默认正北）
         (deviceRepository as? com.example.myapplication.core.data.device.FakeDeviceRepository)?.let { fake ->
             fake.gpsBaseGcj02 = fix.point
-            fake.headingDeg = operatorHeadingDeg
         }
         // 服务端实现：把手机位置随状态查询上报（服务端据此把"车端 GPS"锚定在作业人员附近，联调约定）
         (deviceRepository as? com.example.myapplication.core.data.device.ServerDeviceRepository)?.let { srv ->
@@ -140,10 +146,16 @@ class MapViewModel(
 
         appendPhoneTrail(fix)
         recomputeVehiclePoint()
+        updateDestination()
     }
 
     /** 车端快照更新（任务页面每次推进都推入） */
     fun onVehicleSnapshot(snapshot: DeviceSnapshot) {
+        // 新任务：轨迹从新起点重新开始
+        if (snapshot.task.id != lastTaskId) {
+            lastTaskId = snapshot.task.id
+            _uiState.update { it.copy(vehicleTrail = emptyList()) }
+        }
         lastSnapshot.value = snapshot
 
         // 无锚点时，用当前手机定位兜底建锚点（保证小车起点=作业人员位置）
@@ -162,6 +174,28 @@ class MapViewModel(
             }
         }
         recomputeVehiclePoint()
+        updateDestination()
+    }
+
+    /**
+     * 任务目的地：以作业人员当前位置 A 为起点、默认正北（0°），
+     * 按路线段的「前进/转向」依次推算终点；回收/无路线任务的目的地就是 A。
+     */
+    private fun updateDestination() {
+        val snapshot = lastSnapshot.value
+        val start = _phoneFix.value?.point ?: _uiState.value.anchor?.gcj02
+        if (snapshot == null || start == null) {
+            _uiState.update { it.copy(destination = null) }
+            return
+        }
+        val origin: GeoPoint = start
+        val task = snapshot.task
+        val destination = when {
+            task.segments.isEmpty() && task.state == TaskRunState.IDLE -> null
+            task.segments.isEmpty() -> origin
+            else -> resolveTaskDestination(origin, task.segments)
+        }
+        _uiState.update { it.copy(destination = destination) }
     }
 
     private fun recomputeVehiclePoint() {
@@ -198,11 +232,10 @@ class MapViewModel(
     ): List<GeoPoint> {
         if (reset || trail.isEmpty()) return listOf(point)
         val last = trail.last()
-        return if (CoordTransform.distanceM(last, point) >= TRAIL_MIN_STEP_M) {
-            trail + point
-        } else {
-            trail
-        }
+        val distance = CoordTransform.distanceM(last, point)
+        // 位置大幅跳变（如首次拿到手机锚点 A、换设备/换任务）不作为轨迹连线
+        if (distance > TRAIL_RESET_JUMP_M) return listOf(point)
+        return if (distance >= TRAIL_MIN_STEP_M) trail + point else trail
     }
 
     private fun appendPhoneTrail(fix: PhoneFix) {
@@ -234,6 +267,7 @@ class MapViewModel(
             vehicleGpsTrail = if (vp is VehicleMapPoint.Gps) s.vehicleTrail else emptyList(),
             vehicleEstimate = (vp as? VehicleMapPoint.Estimated)?.gcj02,
             estimateAnchor = (vp as? VehicleMapPoint.Estimated)?.anchor,
+            destination = s.destination,
             followPhone = s.followPhone,
             vehicleHasGps = vp is VehicleMapPoint.Gps,
         )
@@ -243,6 +277,8 @@ class MapViewModel(
         private const val TRAIL_MAX = 2000
         /** 小车轨迹最小采样距离（米）：小于该距离不追加点，过滤静止抖动 */
         private const val TRAIL_MIN_STEP_M = 1.0
+        /** 位置跳变阈值（米）：超过则重置轨迹，避免锚点切换/换任务时拉出长直线 */
+        private const val TRAIL_RESET_JUMP_M = 50.0
 
         val Factory = viewModelFactory {
             initializer {

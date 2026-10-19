@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.awaitCancellation
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.util.TimeFormat
@@ -88,7 +90,7 @@ import com.example.myapplication.ui.theme.WarningRedBg
  * 任务执行页（取代原「一键布置」）。
  *
  * **页面上没有「启动」按钮 —— 任务在「发布」时已开始**，本页纯监控 + 少量干预。
- * 进度由连接时/手动刷新读取的设备回报（分段状态）驱动。
+ * 进度由页面可见期间的 1Hz 状态读取（设备回报）驱动。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,10 +110,18 @@ fun TaskExecScreen(
     val localTaskActive = ticket?.let {
         it.kind == CommandKind.TASK_START && !it.phase.isTerminal
     } == true
-    // 进入执行页先读一次状态，保证小车位置/进度不是旧快照
-    LaunchedEffect(Unit) { vm.refreshStatus() }
-
     val lifecycleOwner = LocalLifecycleOwner.current
+    // 页面可见期间 1Hz 读取状态：小车位置、轨迹和任务进度实时更新；切后台/离开页面自动停止
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            vm.acquireLiveStatus()
+            try {
+                awaitCancellation()
+            } finally {
+                vm.releaseLiveStatus()
+            }
+        }
+    }
     var showCancelConfirm by remember { mutableStateOf(false) }
     var showBackConfirm by remember { mutableStateOf(false) }
     var showManualPad by remember { mutableStateOf(false) }
@@ -154,7 +164,14 @@ fun TaskExecScreen(
             refreshing = state.refreshing,
             onRefresh = vm::refreshStatus,
         )
-        MapPanel(vm = vm, mapVm = mapVm, height = 200.dp, title = "小车实时位置", showLegend = false)
+        MapPanel(
+            vm = vm,
+            mapVm = mapVm,
+            height = 200.dp,
+            title = "小车实时位置",
+            showLegend = false,
+            showPhoneMarker = true,   // 蓝星 = 我的实时位置 A（任务起点）
+        )
 
         // ── 实时视频与快照捕捉 ──
         SectionCard(title = "实时视频") {

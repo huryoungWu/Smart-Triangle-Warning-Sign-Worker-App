@@ -40,11 +40,14 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 // ══════════════════════════ 小车状态机（对应 FakeDeviceRepository） ══════════════════════════
 
-const SPEED = { move: 0.25, recover: 0.5, turnDps: 60 }; // 米/秒、度/秒（与 APP Fake 一致）
+const SPEED = { move: 1.0, recover: 1.0, turnDps: 60 }; // 米/秒、度/秒（小车默认 1m/s，正北=0°）
 const LIMIT = { segMax: 10, mMin: 1, mMax: 50, degMin: 5, degMax: 180, totalMax: 200 };
 const WATCHDOG_MS = 800;
 /** 车端状态机定时推进间隔（不依赖 APP 的状态查询节奏；250ms 足够让 800ms 看门狗及时生效） */
 const TICK_INTERVAL_MS = 250;
+/** 状态轮询日志限频：默认每 10 次打印 1 次；设 1 可打印每一次（1Hz 轮询避免刷屏） */
+const STATUS_LOG_EVERY = Number(process.env.STATUS_LOG_EVERY || 10);
+let statusPollCount = 0;
 
 /** 设备类型（连接设备时上报的 device_type）：当前唯一取值，APP 端为默认常量 */
 const DEVICE_TYPE_TRIANGLE = 'triangle';
@@ -85,6 +88,8 @@ function newDevice(id, name, opts = {}) {
     lastTick: Date.now(),
     lastMoveAt: 0,
     movingDir: null,
+    /** 相对作业人员锚点 A 的局部坐标（米）：x=东，y=北，默认正北 */
+    pos: { x: 0, y: 0 },
   };
 }
 
@@ -194,13 +199,23 @@ function tick(dev) {
     if (dev.task.state !== 'running' && dev.mode === 'manual') dev.mode = 'standby';
   }
 
-  // 手动微调移动
+  // 手动微调移动：前进/后退沿当前航向位移；左转/右转只改航向
   if (dev.movingDir && dev.motion === 'moving') {
-    const step = SPEED.move * dt;
-    dev.odo.traveledM += step;
-    dev.odo.leftPulse += Math.round(step * 500);
-    dev.odo.rightPulse += Math.round(step * 500);
-    dev.odo.speedMps = SPEED.move;
+    if (dev.movingDir === 'left' || dev.movingDir === 'right') {
+      const d = SPEED.turnDps * dt;
+      dev.task.heading = (dev.task.heading + (dev.movingDir === 'left' ? -d : d) + 360) % 360;
+      dev.odo.speedMps = 0;
+    } else {
+      const step = SPEED.move * dt;
+      const sign = dev.movingDir === 'back' ? -1 : 1;
+      const rad = (dev.task.heading * Math.PI) / 180;
+      dev.pos.x += sign * step * Math.sin(rad);
+      dev.pos.y += sign * step * Math.cos(rad);
+      dev.odo.traveledM += step;
+      dev.odo.leftPulse += Math.round(step * 500);
+      dev.odo.rightPulse += Math.round(step * 500);
+      dev.odo.speedMps = SPEED.move;
+    }
   }
 
   // 任务推进：手动微调期间暂停，松手（manual_stop）后从当前进度继续
@@ -214,6 +229,16 @@ function tick(dev) {
       dev.odo.rightPulse = dev.odo.leftPulse;
       dev.odo.speedMps = SPEED.recover;
       dev.motion = 'moving';
+      // 沿当前位置指向锚点 A 的方向回收
+      const mag = Math.hypot(dev.pos.x, dev.pos.y);
+      if (mag > 0) {
+        const f = Math.max(0, mag - step) / mag;
+        const hx = dev.pos.x;
+        const hy = dev.pos.y;
+        dev.pos.x *= f;
+        dev.pos.y *= f;
+        dev.task.heading = (Math.atan2(-hx, -hy) * 180 / Math.PI + 360) % 360;
+      }
       if (dev.task.traveledM <= 0.01) {
         dev.task.state = 'done';
         dev.task.resultNote = 'recovered';
@@ -221,6 +246,7 @@ function tick(dev) {
         dev.mode = 'standby';
         dev.odo.traveledM = 0;
         dev.odo.speedMps = 0;
+        dev.pos = { x: 0, y: 0 };
       }
     } else {
       tickRoute(dev, dt);
@@ -248,7 +274,9 @@ function tickRoute(dev, dt) {
   }
   const seg = dev.task.segments[idx];
   if (seg.action === 'fwd') {
-    const step = SPEED.move * dt;
+    // 只走到本段终点，避免位置/里程越过目标
+    const remaining = Math.max(0, seg.value * (1 - seg.progress));
+    const step = Math.min(SPEED.move * dt, remaining);
     seg.progress = Math.min(1, seg.progress + step / seg.value);
     dev.task.traveledM += step; // 任务里程随进度增长（完成时按路线合计校正）
     dev.odo.traveledM += step;
@@ -256,9 +284,13 @@ function tickRoute(dev, dt) {
     dev.odo.rightPulse += Math.round(step * 500);
     dev.odo.speedMps = SPEED.move;
     dev.motion = 'moving';
+    const rad = (dev.task.heading * Math.PI) / 180;
+    dev.pos.x += step * Math.sin(rad);
+    dev.pos.y += step * Math.cos(rad);
     if (seg.progress >= 1) completeSegment(dev, idx);
   } else {
-    const stepDeg = SPEED.turnDps * dt;
+    const remainingDeg = Math.max(0, Math.abs(seg.value) * (1 - seg.progress));
+    const stepDeg = Math.min(SPEED.turnDps * dt, remainingDeg);
     seg.progress = Math.min(1, seg.progress + stepDeg / Math.abs(seg.value));
     dev.task.heading = (dev.task.heading + (seg.value < 0 ? -stepDeg : stepDeg) + 360) % 360;
     dev.motion = 'moving';
@@ -453,6 +485,8 @@ function startTask(dev, body) {
   }
 
   const mode = body.mode;
+  // 新任务从作业人员位置 A 出发：局部坐标归零、默认正北
+  dev.pos = { x: 0, y: 0 };
   dev.task = {
     id: nid('t'),
     kind: body.kind,
@@ -463,7 +497,7 @@ function startTask(dev, body) {
     state: 'running',
     stage: null,
     resultNote: null,
-    heading: dev.task.heading,
+    heading: 0,
     lane,   // 作业车道：随任务保存并在 /status 的 task.lane 回显
     segments: segments.map((s) => ({ action: s.action, value: Number(s.value), state: 'pending', progress: 0 })),
   };
@@ -501,12 +535,12 @@ function statusJson(dev, anchor = null) {
   };
   // 车端 GPS（可选字段）：EMIT_GPS=false 时省略整个字段，APP 自动走「行程估算」路径
   if (EMIT_GPS) {
-    // 位置 = 基准点（APP 上报的手机位置，或默认点）沿航向投影 odo 里程 —— 车动则坐标动（1Hz 实时）
+    // 位置 = 作业人员锚点 A + 车辆局部坐标（x=东，y=北，米）
+    // A 由 APP 随状态上报；小车从 A 出发，默认正北，按 1m/s 沿任务/手动方向移动。
     const base = anchor || DEFAULT_GPS_BASE;
     const heading = dev.task.heading || 0;
-    const rad = (heading * Math.PI) / 180;
-    const dLat = (dev.odo.traveledM * Math.cos(rad)) / 111320;
-    const dLng = (dev.odo.traveledM * Math.sin(rad)) / (111320 * Math.cos((base.lat * Math.PI) / 180));
+    const dLat = dev.pos.y / 111320;
+    const dLng = dev.pos.x / (111320 * Math.cos((base.lat * Math.PI) / 180));
     const wgs = gcj02ToWgs84(base.lat + dLat, base.lng + dLng);
     out.gps = {
       lat: +wgs.lat.toFixed(7),   // WGS-84（APP 端 wgs84ToGcj02 后上高德地图）
@@ -772,8 +806,10 @@ function makeFrame(fi = frameIndex(), w = 320, h = 180, deviceCode = 'TC-001') {
 
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
-  // 每次 JSON 响应都打印（含错误体），紧跟在对应的请求日志之后
-  console.log(`${new Date().toLocaleTimeString('zh-CN')}  ← 响应 ${code}: ${body}`);
+  // 每次 JSON 响应都打印（含错误体）；状态轮询按 STATUS_LOG_EVERY 限频
+  if (!res.__quietLog) {
+    console.log(`${new Date().toLocaleTimeString('zh-CN')}  ← 响应 ${code}: ${body}`);
+  }
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': CORS_ORIGIN,
@@ -899,7 +935,15 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://x`);
   const path = url.pathname;
-  const log = (extra) => console.log(`${new Date().toLocaleTimeString('zh-CN')}  ${req.method} ${path}${url.search}  ${extra || ''}`);
+  const isStatusPoll = path === '/api/v1/device/status' && req.method === 'GET';
+  const quietStatusLog = isStatusPoll && STATUS_LOG_EVERY > 1 &&
+    (++statusPollCount % STATUS_LOG_EVERY !== 0);
+  res.__quietLog = quietStatusLog;
+  const log = (extra) => {
+    if (!quietStatusLog) {
+      console.log(`${new Date().toLocaleTimeString('zh-CN')}  ${req.method} ${path}${url.search}  ${extra || ''}`);
+    }
+  };
 
   const read = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : { raw: Buffer.alloc(0) };
   if (read.tooLarge) {

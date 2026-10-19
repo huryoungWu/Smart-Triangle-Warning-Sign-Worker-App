@@ -46,6 +46,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 /**
@@ -88,6 +90,11 @@ class VehicleViewModel(
     /** 手动刷新状态协程（同一时刻只允许一个） */
     private var refreshJob: Job? = null
     private var keepaliveJob: Job? = null
+    /** 实时状态轮询（任务执行页/地图页可见时启用，设备端 1Hz） */
+    private var pollJob: Job? = null
+    private var liveStatusRefs = 0
+    /** 串行化轮询与手动刷新，避免同一时刻发出两条状态请求 */
+    private val statusMutex = Mutex()
     private var cmdSeq = 1
 
     /** 进行中任务的本地记录 id（任务结束时落库） */
@@ -280,9 +287,39 @@ class VehicleViewModel(
                 }
                 return@launch
             }
-            // 连接成功后的初始状态：只读这一次，不启动任何定时任务
+            // 连接成功后的初始状态
             fetchStatusOnce()
+            // 如果当前页面已请求实时状态（如重连），恢复轮询
+            startStatusPollingIfNeeded()
         }
+    }
+
+    /** 任务执行页/地图页可见时申请实时状态（引用计数，支持页面切换）。 */
+    fun acquireLiveStatus() {
+        liveStatusRefs += 1
+        startStatusPollingIfNeeded()
+    }
+
+    /** 对应页面离开/切后台时释放实时状态。 */
+    fun releaseLiveStatus() {
+        liveStatusRefs = (liveStatusRefs - 1).coerceAtLeast(0)
+        if (liveStatusRefs == 0) stopStatusPolling()
+    }
+
+    private fun startStatusPollingIfNeeded() {
+        if (liveStatusRefs <= 0 || pollJob?.isActive == true) return
+        if (_uiState.value.connection == ConnectionPhase.DISCONNECTED) return
+        pollJob = viewModelScope.launch {
+            while (isActive) {
+                statusMutex.withLock { fetchStatusOnce() }
+                delay(STATUS_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopStatusPolling() {
+        pollJob?.cancel()
+        pollJob = null
     }
 
     /**
@@ -304,7 +341,7 @@ class VehicleViewModel(
         refreshJob = viewModelScope.launch {
             _uiState.update { it.copy(refreshing = true) }
             try {
-                fetchStatusOnce()
+                statusMutex.withLock { fetchStatusOnce() }
             } finally {
                 _uiState.update { it.copy(refreshing = false) }
             }
@@ -327,6 +364,7 @@ class VehicleViewModel(
         keepaliveJob = null
         refreshJob?.cancel()
         refreshJob = null
+        stopStatusPolling()
         connectJob?.cancel()
         connectJob = null
         _uiState.update {
@@ -1226,9 +1264,12 @@ class VehicleViewModel(
         super.onCleared()
         connectJob?.cancel()
         refreshJob?.cancel()
+        stopStatusPolling()
     }
 
     companion object {
+        /** 实时状态轮询间隔（任务执行页/地图页可见时） */
+        private const val STATUS_POLL_INTERVAL_MS = 1000L
         /** 按住移动时的保持包间隔（须短于设备看门狗 800ms） */
         private const val MOVE_KEEPALIVE_MS = 300L
         /** 添加设备编号最大长度 */

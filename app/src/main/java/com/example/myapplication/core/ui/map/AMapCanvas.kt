@@ -139,6 +139,18 @@ private fun renderMap(
         markers.remove(KEY_PHONE_SELF)?.remove()
     }
 
+    // ---- 任务目的地（路线终点）：以作业人员位置 A 为起点计算 ----
+    val destination = model.destination
+    if (destination != null) {
+        putMarker(
+            aMap, markers, KEY_DESTINATION, destination,
+            "目的地", "任务路线终点", COLOR_DESTINATION,
+            icon = circleBitmap(COLOR_DESTINATION, 64), // 比小车球大一圈，终点被小车压住时仍可见
+        )
+    } else {
+        markers.remove(KEY_DESTINATION)?.remove()
+    }
+
     // ---- 小车（GPS）橙点：车端上报，已转 GCJ-02 ----
     // 地图只保留小车一颗位置球（作业人员点位/轨迹不再单独渲染；相机仍以人员位置为中心）
     val gpsPoint = model.vehicleGps
@@ -287,9 +299,8 @@ private fun updateTrail(
     }
 }
 
-/** 位置球位图：**小尺寸**（48px），避免大球盖住轨迹线 */
-private fun circleBitmap(color: Int): Bitmap {
-    val size = 48
+/** 位置球位图：默认 **小尺寸**（48px），避免大球盖住轨迹线；目的地用 64px 外圈 */
+private fun circleBitmap(color: Int, size: Int = 48): Bitmap {
     val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bmp)
     val paint = Paint().apply {
@@ -312,10 +323,12 @@ private const val KEY_VEHICLE_EST = "vehicle_est"
 private const val KEY_GPS_TRAIL = "gps_trail"
 private const val KEY_EST_LINE = "est_line"
 private const val KEY_PHONE_SELF = "phone_self"
+private const val KEY_DESTINATION = "destination"
 private val COLOR_VEHICLE_GPS = android.graphics.Color.parseColor("#E65100")
 private val COLOR_ESTIMATE = android.graphics.Color.parseColor("#757575")
 private val COLOR_ESTIMATE_LINE = android.graphics.Color.parseColor("#9E9E9E")
 private val COLOR_PHONE_SELF = android.graphics.Color.parseColor("#1565C0")
+private val COLOR_DESTINATION = android.graphics.Color.parseColor("#2E7D32")
 
 /** 默认相机缩放级别（作业页近景） */
 const val DEFAULT_CAMERA_ZOOM = 17f

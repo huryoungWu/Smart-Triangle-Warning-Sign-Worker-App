@@ -64,7 +64,7 @@ fun HomeScreen(
     val snapshot = state.snapshot
     val task = snapshot?.task
     val spec = state.activeSpec
-    // 状态接口现在只在连接时/手动刷新时读取：发布任务后快照可能仍是 IDLE。
+    // 首页不参与实时轮询：发布任务后快照可能仍是 IDLE。
     // 因此这里同时参考本地命令票据 —— 任务已下发且票据未进入终态，也算「正在执行」。
     val localTaskActive = state.activeTicket?.let {
         it.kind == CommandKind.TASK_START && !it.phase.isTerminal

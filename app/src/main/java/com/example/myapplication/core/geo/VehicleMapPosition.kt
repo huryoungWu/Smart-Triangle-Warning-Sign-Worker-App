@@ -2,6 +2,8 @@ package com.example.myapplication.core.geo
 
 import com.example.myapplication.core.model.vehicle.DeviceSnapshot
 import com.example.myapplication.core.model.vehicle.GpsFixState
+import com.example.myapplication.core.model.vehicle.SegmentAction
+import com.example.myapplication.core.model.vehicle.SegmentState
 
 /**
  * 小车在地图上的位置语义 —— **数据真实性的唯一裁决点**（规格第 4 节）。
@@ -42,7 +44,7 @@ const val ESTIMATE_BASIS = "由车轮编码器估算行驶距离推算 · 非地
  * 判定顺序：
  * 1. 无快照 → Unknown
  * 2. `gps.state == FIXED` → Gps（唯一合法的小车地图位置，此处做 WGS-84→GCJ-02）
- * 3. 其余且有锚点 → Estimated（从锚点沿 heading 直线投影 `traveledM - traveledAtAnchorM` 米）
+ * 3. 其余且有锚点 → Estimated（从锚点沿**车端 heading**（默认正北）直线投影 `traveledM - traveledAtAnchorM` 米）
  * 4. 无锚点 → Unknown
  */
 fun resolveVehicleMapPoint(
@@ -62,13 +64,31 @@ fun resolveVehicleMapPoint(
     if (anchor == null) return VehicleMapPoint.Unknown
 
     val deltaM = (snapshot.odo.traveledM - anchor.traveledAtAnchorM).coerceAtLeast(0.0)
-    val projected = CoordTransform.projectGcj02(anchor.gcj02, anchor.headingDeg, deltaM)
+    // 方向以车端回报的 heading 为准（0=正北）；不再使用手机朝向
+    val projected = CoordTransform.projectGcj02(anchor.gcj02, snapshot.task.headingDeg, deltaM)
     return VehicleMapPoint.Estimated(
         gcj02 = projected,
         basis = ESTIMATE_BASIS,
         anchor = anchor.gcj02,
         at = now,
     )
+}
+
+/**
+ * 从作业人员位置 A 推算任务终点：
+ * - 默认航向正北（0°）
+ * - `fwd` 沿当前航向累加距离；`turn` 只改航向（负=左，正=右，与 RouteSegment 一致）
+ */
+fun resolveTaskDestination(start: GeoPoint, segments: List<SegmentState>): GeoPoint {
+    var heading = 0.0
+    var point = start
+    segments.forEach { seg ->
+        when (seg.action) {
+            SegmentAction.FWD -> point = CoordTransform.projectGcj02(point, heading, seg.value)
+            SegmentAction.TURN -> heading = (heading + seg.value + 360.0) % 360.0
+        }
+    }
+    return point
 }
 
 /** 地图渲染模型（全部 GCJ-02，SDK 无关） */
@@ -79,6 +99,8 @@ data class MapRenderModel(
     val vehicleGpsTrail: List<GeoPoint> = emptyList(),
     val vehicleEstimate: GeoPoint? = null,
     val estimateAnchor: GeoPoint? = null,
+    /** 任务路线终点（以作业人员位置为起点、默认正北计算） */
+    val destination: GeoPoint? = null,
     val followPhone: Boolean = false,
     val vehicleHasGps: Boolean = false,
 )
