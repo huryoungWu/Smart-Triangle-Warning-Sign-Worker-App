@@ -105,6 +105,9 @@ class ServiceLocator(context: Context) {
     val warningUploadRepository: WarningUploadRepository =
         com.example.myapplication.core.data.warning.StubWarningUploadRepository()
 
+    /** 新风险弹窗的本地已读表（仅本机，不上传服务端） */
+    val riskReadStore = com.example.myapplication.core.data.risk.RiskReadStore(context)
+
     /** 道路风险数据源（SERVER 模式自动走服务端 /api/v1/risks；含作业人员上传登记的风险事件） */
     val riskRepository: RiskRepository =
         when (RISK_SOURCE) {
@@ -152,6 +155,8 @@ class ServiceLocator(context: Context) {
         if (changed) {
             authRepository.clearSession()
             (deviceRepository as? ServerDeviceRepository)?.resetForNewServer()
+            // 不同服务端的风险 id 会重复（如 r-1000…），旧的已读表会让新服务端的新事故被误判为已读
+            riskReadStore.clear()
         }
         return if (changed) ServerUrlApplyResult.CHANGED else ServerUrlApplyResult.UNCHANGED
     }
@@ -163,6 +168,7 @@ class ServiceLocator(context: Context) {
         if (restored == before) return ServerUrlApplyResult.UNCHANGED
         authRepository.clearSession()
         (deviceRepository as? ServerDeviceRepository)?.resetForNewServer()
+        riskReadStore.clear()
         return ServerUrlApplyResult.CHANGED
     }
 

@@ -26,10 +26,14 @@ class FakeRiskRepository : RiskRepository {
         val now = System.currentTimeMillis()
         val todayStart = startOfTodayShanghai(now)
         return seeds
-            .filter { it.km <= radiusKm }
-            .mapIndexed { index, s ->
+            .withIndex()
+            .filter { it.value.km <= radiusKm }
+            .map { (index, s) ->
                 val point = CoordTransform.projectGcj02(center, s.headingDeg, s.km * 1000.0)
                 Accident(
+                    // 固定 id（与 Mock 服务端 r-1000… 一致）：新风险弹窗靠 id 判定已读，
+                    // 每次随机 id 会被当成"永远的新风险"反复弹窗
+                    id = "r-${1000 + index}",
                     title = s.title,
                     type = s.type,
                     distanceM = s.km * 1000.0,

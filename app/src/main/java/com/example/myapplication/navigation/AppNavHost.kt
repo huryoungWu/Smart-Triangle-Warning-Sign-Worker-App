@@ -13,14 +13,21 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.myapplication.core.ui.NewRiskAlertDialog
+import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
+import com.example.myapplication.feature.risk.RiskAlertViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -46,6 +53,7 @@ import com.example.myapplication.feature.settings.SettingsScreen
 import com.example.myapplication.feature.task.TaskExecScreen
 import com.example.myapplication.feature.task.TaskPublishScreen
 import com.example.myapplication.feature.vehicle.VehicleViewModel
+import kotlinx.coroutines.awaitCancellation
 
 private data class TabItem(val route: String, val label: String, val icon: ImageVector)
 
@@ -69,11 +77,42 @@ fun AppNavHost() {
     val mapVm: MapViewModel = viewModel(factory = MapViewModel.Factory)
     val state by vm.uiState.collectAsStateWithLifecycle()
 
+    // 新风险轮询（Activity 级，跨页面共享；必须在 NavHost 外创建）
+    val riskAlertVm: RiskAlertViewModel = viewModel(
+        factory = RiskAlertViewModel.factory {
+            mapVm.phoneFix.value?.point ?: RiskAlertViewModel.FALLBACK_CENTER
+        },
+    )
+    val pendingAlert by riskAlertVm.pendingAlert.collectAsStateWithLifecycle()
+
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
     // 事故详情传参（简单场景用内存传递，避免序列化）
     var pendingAccident by remember { mutableStateOf<com.example.myapplication.core.model.risk.Accident?>(null) }
+
+    // 仅前台轮询：STARTED 启动，进入后台停止
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, riskAlertVm) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            riskAlertVm.start()
+            try {
+                awaitCancellation()
+            } finally {
+                riskAlertVm.stop()
+            }
+        }
+    }
+
+    // 隐私同意 + 定位权限就绪后全局启动定位（与 MapPanel 同一门控），
+    // 保证用户停在非地图页面时，新风险查询也有真实中心点
+    val mapState by mapVm.uiState.collectAsStateWithLifecycle()
+    val locationPermission = rememberLocationPermissionState()
+    LaunchedEffect(mapState.privacyAccepted, locationPermission.granted) {
+        if (mapState.privacyAccepted && locationPermission.granted) {
+            mapVm.startLocating()
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -246,6 +285,22 @@ fun AppNavHost() {
 
     state.dialog?.let { dialog ->
         AppDialogRenderer(dialog = dialog, onDismiss = vm::dismissDialog)
+    }
+
+    // 新风险弹窗：安全弹窗优先，互不叠加
+    if (state.dialog == null) {
+        pendingAlert?.let { alert ->
+            NewRiskAlertDialog(
+                accident = alert.accident,
+                extraCount = alert.extraCount,
+                onOpenDetail = {
+                    riskAlertVm.onAlertClosed()   // 先同步清弹窗，再导航
+                    pendingAccident = alert.accident
+                    navController.navigate(Routes.ACCIDENT_DETAIL)
+                },
+                onDismiss = riskAlertVm::onAlertClosed,
+            )
+        }
     }
 
 }
