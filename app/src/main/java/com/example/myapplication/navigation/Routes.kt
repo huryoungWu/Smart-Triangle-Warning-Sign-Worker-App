@@ -20,6 +20,12 @@ object Routes {
     // 压栈页
     const val TASK_PUBLISH = "task_publish"
     const val TASK_EXEC = "task_exec"
+
+    /** 锥桶协同布设：向导 / 执行 / 记录 */
+    const val DEPLOYMENT_CREATE = "deployment_create"
+    const val DEPLOYMENT_EXEC = "deployment_exec"
+    const val DEPLOYMENT_RECORDS = "deployment_records"
+
     const val MAP = "map"
     const val DEBUG = "debug"
     const val DEVICE_INFO = "device_info"
@@ -41,6 +47,10 @@ object Routes {
     val tabs = setOf(HOME, RISK, RECORDS, SETTINGS)
 
     /** 显示底部导航栏的页面：**除登录页外全部显示** */
-    val bottomBarPages = setOf(CONNECT, HOME, RISK, RECORDS, SETTINGS, TASK_PUBLISH, TASK_EXEC, MAP, DEBUG, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL, SERVER_CONFIG)
+    val bottomBarPages = setOf(
+        CONNECT, HOME, RISK, RECORDS, SETTINGS, TASK_PUBLISH, TASK_EXEC,
+        DEPLOYMENT_CREATE, DEPLOYMENT_EXEC, DEPLOYMENT_RECORDS,
+        MAP, DEBUG, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL, SERVER_CONFIG,
+    )
 
 }

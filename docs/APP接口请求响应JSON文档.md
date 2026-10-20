@@ -1433,3 +1433,343 @@ APP 以 multipart 表单发送，逻辑字段如下：
 - `GET /`：Mock 人工自检页。
 - `GET /media/{name}`：快照图片回放。
 - 文档中预留但 Mock 未实现的接口：`POST /tasks/register`、`GET /device/video/live.m3u8`、`GET /device/track`。
+
+---
+
+# 四、锥桶协同布设（2026-10-20 新增）
+
+> 完整需求见 `docs/锥桶协同布设功能需求规格说明书.md`；协议设计见 `docs/后端接口设计文档.md` 第 18 节。
+> 以下均为 **APP 实际调用**的接口；Base/鉴权/错误信封同上。
+
+## 22. 设备台账扩展
+
+`GET /api/v1/devices` 原字段不变，新增：
+
+```json
+{
+  "devices": [
+    {
+      "device_code": "CONE-M-001",
+      "name": "锥桶主桶一号",
+      "bound": true,
+      "online": true,
+      "started": true,
+      "available": true,
+      "batteryPercent": 92,
+      "deviceType": "cone",
+      "fw": "0.3.1",
+      "lastSeenAt": 1760083200000,
+      "role": "master",
+      "setId": "SET-CONE-001",
+      "masterCode": null,
+      "occupied": false,
+      "occupiedByEvent": null,
+      "activeTaskId": null,
+      "estopLocked": false
+    }
+  ]
+}
+```
+
+查询参数：`role=master|slave`、`available_for_deployment=1`。
+
+## 23. 套装从桶
+
+```http
+GET /api/v1/device-sets?master_code=CONE-M-001
+```
+
+```json
+{
+  "setId": "SET-CONE-001",
+  "master": { "device_code": "CONE-M-001", "role": "master", "online": true, "occupied": false },
+  "slaves": [
+    {
+      "device_code": "CONE-S-001",
+      "name": "锥桶从桶1号",
+      "role": "slave",
+      "order": 1,
+      "online": true,
+      "available": true,
+      "occupied": false
+    }
+  ]
+}
+```
+
+> 套装接口是精简字段；APP 需与 `/devices` 的完整摘要按 `device_code` 合并（保留 `setId`/电量/占用）。套装从桶可加入任意主桶。
+
+## 24. 创建布设事件
+
+```http
+POST /api/v1/deployments
+```
+
+请求：
+
+```json
+{
+  "clientRequestId": "uuid",
+  "name": "锥桶协同布设-1020-1930",
+  "lane": 2,
+  "masterCode": "CONE-M-001",
+  "slaves": [
+    { "deviceCode": "CONE-S-001", "order": 1 },
+    { "deviceCode": "CONE-S-002", "order": 2 },
+    { "deviceCode": "CONE-S-003", "order": 3 }
+  ],
+  "L": 60.0,
+  "d": 10.0,
+  "note": ""
+}
+```
+
+响应 `201`：
+
+```json
+{
+  "deploymentId": "dep-7f3a",
+  "eventId": null,
+  "name": "锥桶协同布设-1020-1930",
+  "lane": 2,
+  "state": "ready",
+  "result": null,
+  "params": { "L": 60.0, "d": 10.0, "N": 3, "unit": "m" },
+  "devices": [
+    { "device_code": "CONE-M-001", "role": "master", "order": 0, "targetM": 60.0, "traveledM": 0, "phase": "not_started", "arrived": false },
+    { "device_code": "CONE-S-001", "role": "slave", "order": 1, "targetM": 50.0, "traveledM": 0, "phase": "not_started", "arrived": false },
+    { "device_code": "CONE-S-002", "role": "slave", "order": 2, "targetM": 40.0, "traveledM": 0, "phase": "not_started", "arrived": false },
+    { "device_code": "CONE-S-003", "role": "slave", "order": 3, "targetM": 30.0, "traveledM": 0, "phase": "not_started", "arrived": false }
+  ],
+  "warnings": []
+}
+```
+
+错误：
+
+```json
+400 { "error": { "code": "invalid_params", "message": "L 必须 ≥ N×d（39 < 4×10）" } }
+409 { "error": { "code": "device_occupied", "message": "部分设备不可用",
+                 "detail": { "conflicts": [{ "deviceCode": "CONE-S-002", "reason": "device_occupied" }] } } }
+409 { "error": { "code": "active_deployment_exists", "message": "你有一个进行中的布设事件",
+                 "detail": { "deploymentId": "dep-1234" } } }
+```
+
+## 25. 启动
+
+```http
+POST /api/v1/deployments/{deploymentId}/start
+```
+
+```json
+{
+  "commandId": "uuid",
+  "confirmed": true,
+  "precheck": { "startLineConfirmed": true, "orderConfirmed": true, "safetyConfirmed": true }
+}
+```
+
+响应 `202`：
+
+```json
+{ "deploymentId": "dep-7f3a", "state": "starting", "startedAt": 1760083200000, "commandId": "cmd-start-1" }
+```
+
+> 请求 `commandId` 是本次启动请求的幂等 ID；响应 `commandId` 是设备启动指令 ID。
+
+## 26. 聚合状态
+
+```http
+GET /api/v1/deployments/{deploymentId}
+```
+
+```json
+{
+  "deploymentId": "dep-7f3a",
+  "name": "锥桶协同布设",
+  "lane": 2,
+  "state": "running",
+  "result": null,
+  "params": { "L": 60.0, "d": 10.0, "N": 3, "unit": "m" },
+  "devices": [
+    {
+      "device_code": "CONE-M-001",
+      "name": "锥桶主桶一号",
+      "role": "master",
+      "order": 0,
+      "online": true,
+      "targetM": 60.0,
+      "traveledM": 12.4,
+      "phase": "moving",
+      "startState": "moving",
+      "startCommand": { "state": "acked", "commandId": "cmd-1", "sentAt": 1760083200000, "ackedAt": 1760083200100, "reason": null },
+      "report": { "state": "not_applicable", "seq": 0, "sentAt": null, "ackedAt": null },
+      "trigger": { "to": "CONE-S-001", "seq": 1, "state": "acked", "commandId": "cmd-2" },
+      "reachedInterval": true,
+      "arrived": false,
+      "skip": null,
+      "verify": { "state": "not_done", "note": null, "verifiedAt": null },
+      "anomaly": null
+    }
+  ],
+  "chain": {
+    "nextExpected": { "type": "report", "deviceCode": "CONE-S-001", "thresholdM": 10.0, "afterReportTrigger": "CONE-S-002", "state": "waiting" },
+    "steps": [
+      { "seq": 1, "type": "start", "from": "server", "to": "CONE-M-001", "cause": "start", "state": "acked", "at": 1760083200000 }
+    ]
+  },
+  "anomalies": [],
+  "startedAt": 1760083200000,
+  "updatedAt": 1760083201000,
+  "completedAt": null
+}
+```
+
+字段取值见 `docs/后端接口设计文档.md` 第 18.3 节。
+
+## 27. 暂停 / 继续 / 终止
+
+```http
+POST /api/v1/deployments/{deploymentId}/pause
+{ "commandId": "uuid", "reason": "现场人员穿越" }
+→ 202 { "deploymentId": "dep-7f3a", "state": "paused" }
+
+POST /api/v1/deployments/{deploymentId}/resume
+{ "commandId": "uuid", "confirmed": true, "note": "现场已核查" }
+→ 202 { "deploymentId": "dep-7f3a", "state": "running" }
+
+POST /api/v1/deployments/{deploymentId}/abort
+{ "commandId": "uuid", "reason": "无法恢复" }
+→ 202 { "deploymentId": "dep-7f3a", "state": "aborted" }
+```
+
+## 28. 重试当前步骤
+
+```http
+POST /api/v1/deployments/{deploymentId}/retry
+```
+
+启动指令重试（复用原设备指令 ID）：
+
+```json
+{
+  "requestId": "uuid",
+  "type": "start_command",
+  "deviceCode": "CONE-S-002",
+  "stepSeq": 4,
+  "originalCommandId": "cmd-trigger-1"
+}
+```
+
+上报重试（复用同一 reportId）：
+
+```json
+{
+  "requestId": "uuid",
+  "type": "report",
+  "deviceCode": "CONE-S-001",
+  "reportId": "dep-7f3a:CONE-S-001:interval:1"
+}
+```
+
+响应 `202 { "deploymentId": "dep-7f3a", "state": "running" }`。
+
+## 29. 人工跳过（仅异常阻断、仅从桶）
+
+```http
+POST /api/v1/deployments/{deploymentId}/skip
+```
+
+```json
+{
+  "skipRequestId": "uuid",
+  "deviceCode": "CONE-S-001",
+  "reason": "设备卡滞，已移出路线",
+  "disposition": "removed_from_route",
+  "confirmations": {
+    "deviceStoppedOrRemoved": true,
+    "nextPathSafe": true,
+    "understandException": true
+  },
+  "note": ""
+}
+```
+
+响应 `202`：
+
+```json
+{
+  "deploymentId": "dep-7f3a",
+  "state": "running",
+  "skippedDevice": "CONE-S-001",
+  "skippedPhase": "skipped_manual",
+  "nextTriggered": "CONE-S-002",
+  "resultHint": "completed_with_exception"
+}
+```
+
+错误：
+
+```json
+409 { "error": { "code": "cannot_skip_master", "message": "主桶不可人工跳过" } }
+409 { "error": { "code": "skip_not_allowed", "message": "只能跳过当前异常阻断步骤对应的从桶" } }
+400 { "error": { "code": "skip_confirmation_required", "message": "必须完成三项现场安全确认" } }
+400 { "error": { "code": "skip_disposition_required", "message": "必须选择处置方式" } }
+```
+
+## 30. 逐只核验与完成
+
+```http
+POST /api/v1/deployments/{deploymentId}/verify
+{
+  "deviceCode": "CONE-S-001",
+  "result": "pass",
+  "note": "位置/朝向正常",
+  "revision": 1
+}
+→ 200 { "deploymentId": "dep-7f3a", "verify": { "state": "pass", "note": "...", "verifiedAt": 1760083200000 }, "state": "pending_verify" }
+
+POST /api/v1/deployments/{deploymentId}/complete
+{ "commandId": "uuid" }
+→ 200 { "deploymentId": "dep-7f3a", "state": "completed", "result": "completed" }
+```
+
+- 人工跳过设备核验的是处置方式，不是“到达”；
+- 有人工跳过时完成结果为 `completed_with_exception`；
+- 未全部 `verify=pass` → `409 not_all_verified`。
+
+## 31. 列表 / 详情 / 取消
+
+```http
+GET /api/v1/deployments?state=active&page=1&size=20
+GET /api/v1/deployments?page=1&size=20&state=completed
+GET /api/v1/deployments/{deploymentId}/record
+DELETE /api/v1/deployments/{deploymentId}     # 仅 READY
+```
+
+列表项：
+
+```json
+{
+  "items": [
+    {
+      "deploymentId": "dep-7f3a",
+      "name": "锥桶协同布设",
+      "lane": 2,
+      "state": "completed",
+      "result": "completed_with_exception",
+      "L": 60.0,
+      "d": 10.0,
+      "N": 3,
+      "masterCode": "CONE-M-001",
+      "createdAt": 1760083200000,
+      "startedAt": 1760083201000,
+      "completedAt": 1760083300000,
+      "hasSkip": true
+    }
+  ],
+  "page": 1,
+  "size": 20,
+  "total": 1
+}
+```

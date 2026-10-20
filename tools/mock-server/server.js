@@ -29,6 +29,7 @@ const os = require('os');
 const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
+const deploymentSim = require('./deployment');
 
 const PORT = Number(process.env.PORT || process.argv[2] || 8080);
 /** 监听网卡：默认全部（0.0.0.0 + ::），即局域网/公网可直接访问；限制只监听内网时设 HOST */
@@ -85,6 +86,19 @@ function newDevice(id, name, opts = {}) {
     owner: opts.owner || DEFAULT_USER,
     started: opts.started ?? true,
     available: opts.available ?? true,
+    /** 锥桶角色：none（三角牌/普通设备）| master | slave */
+    role: opts.role || 'none',
+    /** 套装 ID / 主桶编号（仅从桶有意义） */
+    setId: opts.setId || null,
+    masterCode: opts.masterCode || null,
+    /** 套装内默认顺序（仅用于默认候选排序，不限制加入其他主桶） */
+    setOrder: opts.setOrder || 0,
+    online: opts.online !== false,
+    /** 是否被进行中的布设事件占用 */
+    occupied: !!opts.occupied,
+    occupiedByEvent: null,
+    /** 协同布设运行视图（由 deployment.js 维护；非空时单设备 tick 跳过该设备） */
+    deployment: null,
     lastTick: Date.now(),
     lastMoveAt: 0,
     movingDir: null,
@@ -154,9 +168,34 @@ const devices = new Map([
   ['TC-002', newDevice('TC-002', '三角警示牌二号车', { battery: null, started: false, available: false, owner: DEFAULT_USER })],
 ]);
 
+// ── 锥桶套装（协同布设联调）：1 主桶 + 5 从桶 ──
+// 套装关联只作为默认候选/排序，不限制从桶加入其他主桶（对应 Q-4 已确认）。
+const CONE_SET_ID = 'SET-CONE-001';
+const CONE_MASTER_CODE = 'CONE-M-001';
+const coneDevices = [
+  newDevice(CONE_MASTER_CODE, '锥桶主桶一号', {
+    role: 'master', setId: CONE_SET_ID, deviceType: 'cone', battery: 92, owner: DEFAULT_USER,
+  }),
+  ...Array.from({ length: 5 }, (_, i) => {
+    const code = `CONE-S-${String(i + 1).padStart(3, '0')}`;
+    return newDevice(code, `锥桶从桶${i + 1}号`, {
+      role: 'slave', setId: CONE_SET_ID, masterCode: CONE_MASTER_CODE, setOrder: i + 1,
+      deviceType: 'cone', battery: 80 - i * 3, owner: DEFAULT_USER,
+    });
+  }),
+];
+for (const d of coneDevices) devices.set(d.id, d);
+
 function getDevice(id, owner = DEFAULT_USER) {
   if (!devices.has(id)) {
-    devices.set(id, newDevice(id, '自定义设备', { custom: true, battery: null, owner }));
+    const cone = /^CONE-([MS])-/i.exec(id);
+    devices.set(id, newDevice(id, cone ? (cone[1].toUpperCase() === 'M' ? '自定义主桶' : '自定义从桶') : '自定义设备', {
+      custom: true,
+      battery: null,
+      owner,
+      role: cone ? (cone[1].toUpperCase() === 'M' ? 'master' : 'slave') : 'none',
+      deviceType: cone ? 'cone' : DEVICE_TYPE_TRIANGLE,
+    }));
   }
   return devices.get(id);
 }
@@ -185,6 +224,8 @@ function failRoute(dev, note, finalState = 'failed') {
 }
 
 function tick(dev) {
+  // 协同布设中的设备由 deployment.js 独立推进，避免与本状态机互相覆盖 odo/motion
+  if (dev.deployment && dev.deployment.id) return;
   const now = Date.now();
   let dt = (now - dev.lastTick) / 1000;
   dev.lastTick = now;
@@ -263,6 +304,7 @@ function tick(dev) {
  */
 setInterval(() => {
   for (const dev of devices.values()) tick(dev);
+  deploymentSim.tick();
 }, TICK_INTERVAL_MS).unref();
 
 function tickRoute(dev, dt) {
@@ -520,7 +562,7 @@ function statusJson(dev, anchor = null) {
   const out = {
     device_code: dev.id,
     fw: dev.fw,
-    online: true,
+    online: dev.online !== false,
     mode: dev.mode,
     motion: dev.motion,
     estopLocked: dev.estopLocked,
@@ -551,6 +593,10 @@ function statusJson(dev, anchor = null) {
       state: 'fixed',
       at: Date.now(),
     };
+  }
+  // 协同布设运行视图（仅锥桶会话期间出现；APP 单设备状态页可忽略）
+  if (dev.deployment && dev.deployment.id) {
+    out.deployment = { ...dev.deployment };
   }
   return out;
 }
@@ -917,6 +963,20 @@ function baseUrl(req) {
   return `http://${req.headers.host || `localhost:${PORT}`}`;
 }
 
+// 协同布设会话模块：共用 devices Map，独立维护 deployments（见 deployment.js）
+deploymentSim.init({
+  devices,
+  getDevice,
+  currentUser,
+  sendJson,
+  sendError,
+  nid,
+  defaultUser: DEFAULT_USER,
+  dataDir: DATA_DIR,
+  corsOrigin: CORS_ORIGIN,
+  log: (...args) => console.log(...args),
+});
+
 // ══════════════════════════ 路由 ══════════════════════════
 
 const server = http.createServer(async (req, res) => {
@@ -1023,13 +1083,31 @@ const server = http.createServer(async (req, res) => {
   // ── 设备台账（按登录用户过滤：设备信息根据用户登录状态获取）──
   if (path === '/api/v1/devices' && req.method === 'GET') {
     const user = currentUser(req);
-    const mine = [...devices.values()].filter((d) => d.owner === user);
-    log(`[设备] u=${user} 共 ${mine.length} 台`);
+    const roleFilter = url.searchParams.get('role');
+    const onlyAvailable = url.searchParams.get('available_for_deployment') === '1';
+    let mine = [...devices.values()].filter((d) => d.owner === user);
+    if (roleFilter) mine = mine.filter((d) => d.role === roleFilter);
+    if (onlyAvailable) {
+      mine = mine.filter((d) =>
+        d.role !== 'none' && d.online !== false && d.available !== false &&
+        !d.occupied && !d.estopLocked && !(d.task && d.task.state === 'running'),
+      );
+    }
+    log(`[设备] u=${user} 共 ${mine.length} 台${roleFilter ? ` role=${roleFilter}` : ''}${onlyAvailable ? ' 仅可用' : ''}`);
     return sendJson(res, 200, {
       devices: mine.map((d) => ({
-        device_code: d.id, name: d.name, bound: true, online: true,
+        device_code: d.id, name: d.name, bound: true,
+        online: d.online !== false,
         started: d.started, available: d.available, batteryPercent: d.batteryPercent,
         deviceType: d.deviceType, fw: d.fw, lastSeenAt: Date.now(),
+        // 锥桶协同布设扩展字段（旧客户端可忽略）
+        role: d.role || 'none',
+        setId: d.setId || null,
+        masterCode: d.masterCode || null,
+        occupied: !!d.occupied,
+        occupiedByEvent: d.occupiedByEvent || null,
+        activeTaskId: d.task && d.task.state === 'running' ? (d.task.id || null) : null,
+        estopLocked: !!d.estopLocked,
       })),
     });
   }
@@ -1071,20 +1149,33 @@ const server = http.createServer(async (req, res) => {
     }
     const d = getDevice(id, user); // 未知编号自动注册到当前用户（Mock 便利行为，正式服务端应按 doc 返回 404）
     d.owner = user;
-    d.deviceType = deviceType;
+    // 锥桶角色由平台/编号决定，不能被单设备连接按 triangle 覆盖
+    d.deviceType = (d.role === 'master' || d.role === 'slave') ? 'cone' : deviceType;
     d.bindingCode = bindingCode;
+    // 锥桶角色：预置设备已带角色；自定义 CONE-* 由 getDevice 推断；其他保持 none
+    if (deviceType === 'cone' && (!d.role || d.role === 'none')) {
+      d.role = /^CONE-M-/i.test(id) ? 'master' : /^CONE-S-/i.test(id) ? 'slave' : 'none';
+    }
     log(
       `[设备] u=${user} 连接/绑定 ${id}（${d.custom ? '自动注册为自定义设备' : '内置设备'}）` +
         ` 账号=${loginName} 绑定码=已提供 类型=${deviceType}`,
     );
-    return sendJson(res, 201, { device: { device_code: d.id, name: d.name, bound: true, deviceType: d.deviceType } });
+    return sendJson(res, 201, {
+      device: {
+        device_code: d.id, name: d.name, bound: true, deviceType: d.deviceType,
+        role: d.role || 'none', setId: d.setId || null, masterCode: d.masterCode || null,
+      },
+    });
   }
   let mDev = /^\/api\/v1\/devices\/([^/]+)$/.exec(path);
   if (mDev && req.method === 'GET') {
     const d = getDevice(decodeURIComponent(mDev[1]), currentUser(req));
     return sendJson(res, 200, {
       device_code: d.id, name: d.name, deviceType: d.deviceType, fw: d.fw, sn: 'ESP32-MOCK', boundAt: Date.now() - 86400000,
-      lastSeenAt: Date.now(), online: true,
+      lastSeenAt: Date.now(), online: d.online !== false,
+      role: d.role || 'none', setId: d.setId || null, masterCode: d.masterCode || null,
+      occupied: !!d.occupied, occupiedByEvent: d.occupiedByEvent || null,
+      estopLocked: !!d.estopLocked,
       capabilities: { gps: EMIT_GPS, camera: true, battery: d.batteryPercent !== null, tilt: false, obstacle: false },
     });
   }
@@ -1117,6 +1208,9 @@ const server = http.createServer(async (req, res) => {
     log(`[cmd] u=${currentUser(req)} ${id} ${body.type}${body.dir ? '/' + body.dir : ''}${body.mode ? '/' + body.mode : ''}${body.segments ? ` (${body.segments.length} 段)` : ''}${body.lane ? ` 车道=${body.lane}` : ''} → ${r.accepted ? 'accepted' : 'rejected: ' + r.reason}`);
     return sendJson(res, 200, r.accepted ? { accepted: true, cmdId: nid('c') } : { accepted: false, reason: r.reason });
   }
+
+  // ── 锥桶协同布设（deployment.js）：套装、事件会话、人工跳过、模拟异常 ──
+  if (deploymentSim.handle(req, res, path, url, body, log)) return;
 
   // ── 作业记录上传 / 查询 ──
   if (path === '/api/v1/tasks' && req.method === 'POST') {

@@ -47,6 +47,7 @@ import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.ui.AppIcons
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
+import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
@@ -76,6 +77,7 @@ import com.example.myapplication.ui.theme.WarningRedBg
 fun ConnectScreen(
     vm: VehicleViewModel,
     onEnterWork: () -> Unit,
+    onOpenDeployment: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snapshot = state.snapshot
@@ -298,12 +300,24 @@ fun ConnectScreen(
         )
         if (!connected) {
             Text(
-                text = "连接成功后方可进入作业",
+                text = "连接成功后方可进入单设备作业",
                 style = MaterialTheme.typography.labelSmall,
                 color = WarnOrange,
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
+
+        Spacer(Modifier.height(16.dp))
+        SecondaryActionButton(
+            text = "锥桶协同布设（多设备）",
+            onClick = onOpenDeployment,
+        )
+        Text(
+            text = "不要求先连接单台设备；在事件向导内选择主桶/从桶并完成绑定。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
 
         Spacer(Modifier.height(24.dp))
     }

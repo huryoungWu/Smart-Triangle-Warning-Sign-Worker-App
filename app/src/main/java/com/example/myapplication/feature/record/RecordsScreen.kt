@@ -31,6 +31,7 @@ import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.SafetyNoticeBanner
 import com.example.myapplication.core.ui.BannerVariant
+import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.feature.vehicle.VehicleViewModel
@@ -48,7 +49,10 @@ import java.util.Locale
  * STUB 模式下标注"仅本机保存"，不得宣称已上传平台。
  */
 @Composable
-fun RecordsScreen(vm: VehicleViewModel) {
+fun RecordsScreen(
+    vm: VehicleViewModel,
+    onOpenDeployments: () -> Unit,
+) {
     val records by vm.records.collectAsStateWithLifecycle(initialValue = emptyList())
     val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
 
@@ -59,6 +63,11 @@ fun RecordsScreen(vm: VehicleViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PageTitle("作业记录")
+
+        SecondaryActionButton(
+            text = "布设事件记录（锥桶协同）",
+            onClick = onOpenDeployments,
+        )
 
         if (records.isEmpty()) {
             SectionCard(title = "暂无作业记录") {

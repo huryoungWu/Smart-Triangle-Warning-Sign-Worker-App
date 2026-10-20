@@ -1,0 +1,135 @@
+package com.example.myapplication
+
+import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
+import com.example.myapplication.core.model.deployment.DeploymentDraft
+import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.SelectedSlave
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** 锥桶协同布设参数/顺序/预览校验（对应 TC-DEP-001～004、022、023、031 的纯函数部分） */
+class DeploymentDraftTest {
+
+    private fun dev(code: String, role: DeploymentRole) = DeploymentDeviceSummary(
+        deviceCode = code,
+        name = code,
+        role = role,
+        online = true,
+        available = true,
+    )
+
+    private fun draft(
+        L: String,
+        d: String,
+        n: Int,
+        lane: Int? = 2,
+        orders: List<Int>? = null,
+    ): DeploymentDraft {
+        val slaves = (1..n).map { i ->
+            SelectedSlave(dev("S$i", DeploymentRole.SLAVE), orders?.getOrNull(i - 1) ?: i)
+        }
+        return DeploymentDraft(
+            name = "test",
+            lane = lane,
+            master = dev("M", DeploymentRole.MASTER),
+            slaves = slaves,
+            lText = L,
+            dText = d,
+            precheckSafety = true,
+            precheckOrder = true,
+        )
+    }
+
+    @Test
+    fun `targets are L minus k times d`() {
+        val d = draft("60", "10", 3)
+        assertTrue(d.validate().isEmpty())
+        assertEquals(60.0, d.targetFor(0)!!, 1e-9)
+        assertEquals(50.0, d.targetFor(1)!!, 1e-9)
+        assertEquals(40.0, d.targetFor(2)!!, 1e-9)
+        assertEquals(30.0, d.targetFor(3)!!, 1e-9)
+        assertEquals(listOf(60.0, 50.0, 40.0, 30.0), d.preview.map { it.targetM })
+    }
+
+    @Test
+    fun `d must be greater than zero`() {
+        val errors = draft("60", "0", 3).validate()
+        assertTrue(errors.any { it.contains("d 必须大于 0") })
+    }
+
+    @Test
+    fun `L must be at least N times d`() {
+        val errors = draft("39", "10", 4).validate()
+        assertTrue(errors.any { it.contains("L 必须 ≥ N×d") })
+    }
+
+    @Test
+    fun `L equal N times d allows last slave target zero`() {
+        val d = draft("40", "10", 4)
+        assertTrue(d.validate().isEmpty())
+        assertEquals(0.0, d.targetFor(4)!!, 1e-9)
+        assertTrue(d.preview.last().targetM == 0.0)
+    }
+
+    @Test
+    fun `last slave target may be below d`() {
+        val d = draft("53", "10", 5)
+        assertTrue(d.validate().isEmpty())
+        assertEquals(3.0, d.targetFor(5)!!, 1e-9)
+    }
+
+    @Test
+    fun `orders must be contiguous from one`() {
+        val errors = draft("60", "10", 3, orders = listOf(1, 2, 4)).validate()
+        assertTrue(errors.any { it.contains("连续的 1..3") })
+    }
+
+    @Test
+    fun `duplicate slave order is rejected`() {
+        val errors = draft("60", "10", 2, orders = listOf(1, 1)).validate()
+        assertTrue(errors.any { it.contains("连续的 1..2") })
+    }
+
+    @Test
+    fun `master cannot be a slave`() {
+        val master = dev("M", DeploymentRole.MASTER)
+        val d = DeploymentDraft(
+            lane = 2,
+            master = master,
+            slaves = listOf(SelectedSlave(master, 1)),
+            lText = "60",
+            dText = "10",
+            precheckSafety = true,
+            precheckOrder = true,
+        )
+        assertTrue(d.validate().any { it.contains("主桶不能同时作为从桶") })
+    }
+
+    @Test
+    fun `lane is required and bounded`() {
+        assertTrue(draft("60", "10", 1, lane = null).validate().any { it.contains("作业车道") })
+        assertTrue(draft("60", "10", 1, lane = 9).validate().any { it.contains("作业车道") })
+    }
+
+    @Test
+    fun `precision is at most 0_1 m`() {
+        assertTrue(draft("60.05", "10", 1).validate().any { it.contains("精度") })
+    }
+
+    @Test
+    fun `canStart requires both precheck confirmations`() {
+        val d = draft("60", "10", 1).copy(precheckSafety = false)
+        assertFalse(d.canStart())
+        assertTrue(draft("60", "10", 1).canStart())
+    }
+
+    @Test
+    fun `N must be between one and five`() {
+        val none = draft("60", "10", 0)
+        assertTrue(none.validate().any { it.contains("至少选择 1 只从桶") })
+        val tooMany = draft("100", "10", 6)
+        assertTrue(tooMany.validate().any { it.contains("不能超过 5") })
+    }
+}

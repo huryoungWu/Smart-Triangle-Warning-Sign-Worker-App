@@ -38,6 +38,10 @@ import androidx.navigation.navArgument
 import com.example.myapplication.core.ui.AppDialogRenderer
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.feature.connect.ConnectScreen
+import com.example.myapplication.feature.deployment.DeploymentCreateScreen
+import com.example.myapplication.feature.deployment.DeploymentExecScreen
+import com.example.myapplication.feature.deployment.DeploymentRecordsScreen
+import com.example.myapplication.feature.deployment.DeploymentViewModel
 import com.example.myapplication.feature.login.LoginScreen
 import com.example.myapplication.feature.debug.DebugScreen
 import com.example.myapplication.feature.home.HomeScreen
@@ -75,6 +79,7 @@ fun AppNavHost() {
     val navController = rememberNavController()
     val vm: VehicleViewModel = viewModel(factory = VehicleViewModel.Factory)
     val mapVm: MapViewModel = viewModel(factory = MapViewModel.Factory)
+    val deploymentVm: DeploymentViewModel = viewModel(factory = DeploymentViewModel.Factory)
     val state by vm.uiState.collectAsStateWithLifecycle()
 
     // 新风险轮询（Activity 级，跨页面共享；必须在 NavHost 外创建）
@@ -157,6 +162,9 @@ fun AppNavHost() {
                             popUpTo(Routes.CONNECT) { inclusive = true }
                         }
                     },
+                    onOpenDeployment = {
+                        navController.navigate(Routes.DEPLOYMENT_CREATE)
+                    },
                 )
             }
 
@@ -164,6 +172,7 @@ fun AppNavHost() {
             composable(Routes.HOME) {
                 HomeScreen(
                     vm = vm,
+                    deploymentVm = deploymentVm,
                     onOpenPublishFixed = {
                         navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
                     },
@@ -173,6 +182,11 @@ fun AppNavHost() {
                         }
                     },
                     onOpenExec = { navController.navigate(Routes.TASK_EXEC) },
+                    onOpenDeployment = { navController.navigate(Routes.DEPLOYMENT_CREATE) },
+                    onOpenDeploymentExec = { id ->
+                        deploymentVm.openEvent(id)
+                        navController.navigate(Routes.DEPLOYMENT_EXEC)
+                    },
                 )
             }
 
@@ -200,7 +214,12 @@ fun AppNavHost() {
                 }
             }
 
-            composable(Routes.RECORDS) { RecordsScreen(vm = vm) }
+            composable(Routes.RECORDS) {
+                RecordsScreen(
+                    vm = vm,
+                    onOpenDeployments = { navController.navigate(Routes.DEPLOYMENT_RECORDS) },
+                )
+            }
 
             composable(Routes.SETTINGS) {
                 SettingsScreen(
@@ -261,6 +280,37 @@ fun AppNavHost() {
                     onOpenMap = { navController.navigate(Routes.MAP) },
                     onRepublish = {
                         navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
+                    },
+                )
+            }
+
+            // ── 锥桶协同布设：向导 → 执行 → 记录 ──
+            composable(Routes.DEPLOYMENT_CREATE) {
+                DeploymentCreateScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                    onStarted = {
+                        navController.navigate(Routes.DEPLOYMENT_EXEC) {
+                            popUpTo(Routes.DEPLOYMENT_CREATE) { inclusive = true }
+                        }
+                    },
+                )
+            }
+
+            composable(Routes.DEPLOYMENT_EXEC) {
+                DeploymentExecScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(Routes.DEPLOYMENT_RECORDS) {
+                DeploymentRecordsScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                    onOpen = { id ->
+                        deploymentVm.openEvent(id)
+                        navController.navigate(Routes.DEPLOYMENT_EXEC)
                     },
                 )
             }

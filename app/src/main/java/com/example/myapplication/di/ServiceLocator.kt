@@ -138,6 +138,16 @@ class ServiceLocator(context: Context) {
     }
 
     /**
+     * 锥桶协同布设仓库：多设备会话必须由服务端编排，因此始终走服务端。
+     * （FAKE/HTTP 模式下也指向服务端；无服务端时向导会展示可读的连接错误。）
+     */
+    val deploymentRepository: com.example.myapplication.core.data.api.DeploymentRepository =
+        com.example.myapplication.core.data.deployment.ServerDeploymentRepository(
+            baseUrlProvider,
+            tokenProvider = { authRepository.currentToken },
+        )
+
+    /**
      * 应用新的服务端地址（**唯一写入入口**）。顺序不可调换：
      *
      * 1. 落库 + 更新内存缓存 → 此后所有仓库立即指向新地址

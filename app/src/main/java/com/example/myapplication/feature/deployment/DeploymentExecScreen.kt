@@ -1,0 +1,662 @@
+package com.example.myapplication.feature.deployment
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import com.example.myapplication.core.model.deployment.CommandResultState
+import com.example.myapplication.core.model.deployment.DeploymentDeviceState
+import com.example.myapplication.core.model.deployment.DeploymentEvent
+import com.example.myapplication.core.model.deployment.DeploymentPhase
+import com.example.myapplication.core.model.deployment.DeploymentResult
+import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentState
+import com.example.myapplication.core.model.deployment.ReportResultState
+import com.example.myapplication.core.model.deployment.SkipDisposition
+import com.example.myapplication.core.model.deployment.VerifyResultState
+import com.example.myapplication.core.ui.ConfirmDialog
+import com.example.myapplication.core.ui.DangerActionButton
+import com.example.myapplication.core.ui.PageTitle
+import com.example.myapplication.core.ui.PrimaryActionButton
+import com.example.myapplication.core.ui.SecondaryActionButton
+import com.example.myapplication.core.ui.SectionCard
+import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.util.TimeFormat
+import com.example.myapplication.ui.theme.InfoBlue
+import com.example.myapplication.ui.theme.InfoBlueBg
+import com.example.myapplication.ui.theme.NeutralGrey
+import com.example.myapplication.ui.theme.NeutralGreyBg
+import com.example.myapplication.ui.theme.SafeGreen
+import com.example.myapplication.ui.theme.SafeGreenBg
+import com.example.myapplication.ui.theme.WarnOrange
+import com.example.myapplication.ui.theme.WarnOrangeBg
+import com.example.myapplication.ui.theme.WarningRed
+import com.example.myapplication.ui.theme.WarningRedBg
+import kotlinx.coroutines.awaitCancellation
+
+/**
+ * 锥桶协同布设执行页：1Hz 聚合状态、逐设备卡片、异常处置、逐只核验。
+ *
+ * 页面上的「人工跳过」只在异常阻断时出现，且必须完成现场确认与二次确认。
+ */
+@Composable
+fun DeploymentExecScreen(
+    vm: DeploymentViewModel,
+    onBack: () -> Unit,
+) {
+    val state by vm.uiState.collectAsStateWithLifecycle()
+    val event = state.event
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(Unit) {
+        if (vm.uiState.value.event == null) vm.loadActiveEvent()
+    }
+
+    // 页面可见时 1Hz 聚合状态；切后台/离开停止
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            vm.startPolling()
+            try {
+                awaitCancellation()
+            } finally {
+                vm.stopPolling()
+            }
+        }
+    }
+
+    var showPauseConfirm by remember { mutableStateOf(false) }
+    var showAbortConfirm by remember { mutableStateOf(false) }
+    var showRetryConfirm by remember { mutableStateOf(false) }
+    var skipTarget by remember { mutableStateOf<DeploymentDeviceState?>(null) }
+    var verifyTarget by remember { mutableStateOf<DeploymentDeviceState?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PageTitle(
+            text = event?.name ?: "布设执行",
+            subtitle = event?.let {
+                "L=${fmt(it.params.L)} m · d=${fmt(it.params.d)} m · N=${it.params.N}" +
+                    (it.lane?.let { lane -> " · 第 $lane 车道" } ?: "")
+            },
+            onBack = onBack,
+        )
+
+        if (event == null) {
+            SectionCard(title = "暂无布设事件") {
+                Text("当前没有可展示的布设事件。", color = NeutralGrey)
+                Spacer(Modifier.height(8.dp))
+                SecondaryActionButton("刷新", onClick = vm::refreshEvent)
+            }
+            Spacer(Modifier.height(24.dp))
+            return@Column
+        }
+
+        EventStateBanner(event)
+
+        // 异常横幅：一旦出现必须显性展示
+        if (event.anomalies.isNotEmpty()) {
+            SectionCard(title = "异常（系统不会自动跳过）") {
+                event.anomalies.forEach { a ->
+                    Text(
+                        "• ${a.deviceCode ?: ""} ${a.label}（${a.code}）",
+                        color = WarningRed,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "请先暂停/现场处置，再按安全流程重试；无法恢复时可人工跳过当前从桶（仅异常阻断时）。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = WarningRed,
+                )
+            }
+        }
+
+        // 当前链路下一步
+        event.nextExpected?.let { next ->
+            SectionCard(title = "当前链路") {
+                val text = when (next.type) {
+                    "trigger" -> "等待主桶自身行程达到 ${fmt(next.thresholdM)} m 后触发 ${next.afterReportTrigger ?: "从 1"}"
+                    "report" -> "等待 ${next.deviceCode} 自身行程达到 ${fmt(next.thresholdM)} m 后上报" +
+                        (next.afterReportTrigger?.let { "，随后触发 $it" } ?: "")
+                    else -> "等待 ${next.deviceCode}"
+                }
+                Text(text, color = InfoBlue, fontWeight = FontWeight.Bold)
+                Text(
+                    "注意：是设备自身行程达到 d，不是主桶走到 (k+1)×d；从桶之间不直接发启动指令。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+            }
+        }
+
+        SectionCard(title = "整体进度") {
+            ProgressSummary(event)
+        }
+
+        SectionCard(title = "设备状态（主桶在前，从桶按顺序）") {
+            event.ordered.forEach { dev ->
+                DeviceStateCard(
+                    device = dev,
+                    eventState = event.state,
+                    onVerify = { verifyTarget = dev },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+
+        // 操作区
+        when (event.state) {
+            DeploymentState.RUNNING -> {
+                PrimaryActionButton("暂停全部", onClick = { showPauseConfirm = true })
+                Spacer(Modifier.height(8.dp))
+                if (canRetry(event)) {
+                    SecondaryActionButton("重试当前步骤", onClick = { showRetryConfirm = true })
+                    Spacer(Modifier.height(8.dp))
+                }
+                val blocked = blockedDevice(event)
+                if (blocked != null && blocked.role != DeploymentRole.MASTER) {
+                    DangerActionButton(
+                        text = "人工跳过 ${blocked.deviceCode}（受控）",
+                        onClick = { skipTarget = blocked },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "人工跳过会绕过逐级启动链路；仅在已现场确认设备停止/移出、下一只路径安全时使用。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningRed,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                SecondaryActionButton("终止事件", onClick = { showAbortConfirm = true })
+            }
+
+            DeploymentState.PAUSED -> {
+                PrimaryActionButton("继续", onClick = { vm.resume() })
+                Spacer(Modifier.height(8.dp))
+                DangerActionButton("终止事件", onClick = { showAbortConfirm = true })
+            }
+
+            DeploymentState.PENDING_VERIFY, DeploymentState.VERIFY_FAILED -> {
+                Text(
+                    if (event.allVerified) "全部设备核验通过，可以完成布设。" else "请逐只核对实际位置/处置方式并完成核验。",
+                    color = if (event.allVerified) SafeGreen else WarnOrange,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(8.dp))
+                PrimaryActionButton(
+                    text = if (event.hasSkip) "完成布设（带异常）" else "完成布设",
+                    onClick = vm::complete,
+                    enabled = event.allVerified && !state.busy,
+                )
+                Spacer(Modifier.height(8.dp))
+                SecondaryActionButton("终止事件", onClick = { showAbortConfirm = true })
+            }
+
+            DeploymentState.STARTING -> {
+                SectionCard(title = "启动中") {
+                    Text("正在等待主桶确认启动指令。", color = InfoBlue)
+                    Text(
+                        "若长时间无确认，请刷新状态；系统不会自动重发运动指令。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NeutralGrey,
+                    )
+                }
+                SecondaryActionButton("刷新状态", onClick = vm::refreshEvent)
+                Spacer(Modifier.height(8.dp))
+                DangerActionButton("终止事件", onClick = { showAbortConfirm = true })
+            }
+
+            DeploymentState.COMPLETED, DeploymentState.ABORTED, DeploymentState.FAILED -> {
+                SecondaryActionButton("刷新记录", onClick = vm::refreshEvent)
+            }
+
+            else -> {
+                SecondaryActionButton("刷新状态", onClick = vm::refreshEvent)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "最后更新：${event.updatedAt.takeIf { it > 0 }?.let { TimeFormat.hhmmss(it) } ?: "-"}",
+            style = MaterialTheme.typography.labelSmall,
+            color = NeutralGrey,
+        )
+        if (state.busy) {
+            Text("处理中…", style = MaterialTheme.typography.labelSmall, color = InfoBlue)
+        }
+    }
+
+    if (showPauseConfirm) {
+        ConfirmDialog(
+            title = "暂停全部锥桶？",
+            message = "将立即停止所有正在移动的锥桶，并冻结逐级启动。确认现场安全后可继续。",
+            confirmText = "暂停全部",
+            onConfirm = {
+                showPauseConfirm = false
+                vm.pause("作业人员暂停")
+            },
+            onDismiss = { showPauseConfirm = false },
+        )
+    }
+
+    if (showAbortConfirm) {
+        ConfirmDialog(
+            title = "终止本次布设？",
+            message = "将停止所有锥桶并结束事件；离线设备需现场处置。事件不会标记为完成。",
+            confirmText = "终止事件",
+            onConfirm = {
+                showAbortConfirm = false
+                vm.abort("作业人员终止")
+            },
+            onDismiss = { showAbortConfirm = false },
+        )
+    }
+
+    if (showRetryConfirm) {
+        ConfirmDialog(
+            title = "按安全流程重试？",
+            message = "将复用同一指令 ID 重试当前阻断步骤；若设备已执行，不会二次移动。请先确认设备状态与现场安全。",
+            confirmText = "重试",
+            danger = false,
+            onConfirm = {
+                showRetryConfirm = false
+                vm.retryCurrent()
+            },
+            onDismiss = { showRetryConfirm = false },
+        )
+    }
+
+    skipTarget?.let { dev ->
+        SkipDeviceDialog(
+            device = dev,
+            busy = state.busy,
+            onDismiss = { skipTarget = null },
+            onConfirm = { reason, disposition, note ->
+                vm.skip(dev.deviceCode, reason, disposition, note)
+                skipTarget = null
+            },
+        )
+    }
+
+    verifyTarget?.let { dev ->
+        VerifyDeviceDialog(
+            device = dev,
+            busy = state.busy,
+            onDismiss = { verifyTarget = null },
+            onConfirm = { pass, note ->
+                vm.verify(dev.deviceCode, pass, note)
+                verifyTarget = null
+            },
+        )
+    }
+
+    state.error?.let { msg ->
+        AlertDialog(
+            onDismissRequest = vm::dismissError,
+            title = { Text("操作未完成") },
+            text = { Text(msg) },
+            confirmButton = { Button(onClick = vm::dismissError) { Text("知道了") } },
+        )
+    }
+    state.message?.let { msg ->
+        AlertDialog(
+            onDismissRequest = vm::dismissMessage,
+            title = { Text("提示") },
+            text = { Text(msg) },
+            confirmButton = { Button(onClick = vm::dismissMessage) { Text("知道了") } },
+        )
+    }
+}
+
+@Composable
+private fun EventStateBanner(event: DeploymentEvent) {
+    val (fg, bg) = when (event.state) {
+        DeploymentState.COMPLETED -> SafeGreen to SafeGreenBg
+        DeploymentState.ABORTED, DeploymentState.FAILED, DeploymentState.VERIFY_FAILED -> WarningRed to WarningRedBg
+        DeploymentState.PAUSED, DeploymentState.PENDING_VERIFY -> WarnOrange to WarnOrangeBg
+        else -> InfoBlue to InfoBlueBg
+    }
+    SectionCard(title = "事件状态") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusChip(event.state.label, fg, bg)
+            if (event.result == DeploymentResult.COMPLETED_WITH_EXCEPTION) {
+                Spacer(Modifier.width(6.dp))
+                StatusChip("带异常完成", WarnOrange, WarnOrangeBg)
+            }
+            Spacer(Modifier.weight(1f))
+            Text(event.deploymentId, style = MaterialTheme.typography.labelSmall, color = NeutralGrey)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "已到达 ${event.arrivedCount}/${event.devices.size} · 已核验 ${event.verifiedCount}/${event.devices.size}" +
+                if (event.hasSkip) " · 人工跳过 ${event.devices.count { it.skipped }}" else "",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun ProgressSummary(event: DeploymentEvent) {
+    EventProgressBar(event)
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "主桶与从桶可同时移动；到达数量与核验数量分开统计。",
+        style = MaterialTheme.typography.labelSmall,
+        color = NeutralGrey,
+    )
+}
+
+@Composable
+private fun EventProgressBar(event: DeploymentEvent) {
+    val total = event.devices.size.coerceAtLeast(1)
+    // 人工跳过的设备已完成处置，进度上计入“已结束”，但不计入“已到达”
+    val done = event.devices.count { it.arrived || it.skipped }
+    val fraction = done.toFloat() / total
+    SimpleProgress(fraction, InfoBlue)
+}
+
+@Composable
+private fun DeviceStateCard(
+    device: DeploymentDeviceState,
+    eventState: DeploymentState,
+    onVerify: () -> Unit,
+) {
+    val canVerify = (eventState == DeploymentState.PENDING_VERIFY || eventState == DeploymentState.VERIFY_FAILED) &&
+        device.verify.state == VerifyResultState.NOT_DONE
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (device.anomaly != null) WarningRedBg else NeutralGreyBg.copy(alpha = 0.35f))
+            .padding(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusChip(
+                if (device.isMaster) "主桶" else "从 ${device.order}",
+                if (device.isMaster) InfoBlue else NeutralGrey,
+                if (device.isMaster) InfoBlueBg else NeutralGreyBg,
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(device.name.ifBlank { device.deviceCode }, fontWeight = FontWeight.Bold)
+                Text(device.deviceCode, style = MaterialTheme.typography.labelSmall, color = NeutralGrey)
+            }
+            StatusChip(
+                if (device.online) device.phase.label else "离线",
+                when {
+                    !device.online || device.phase == DeploymentPhase.FAILED -> WarningRed
+                    device.phase == DeploymentPhase.ARRIVED || device.phase == DeploymentPhase.NO_MOVE -> SafeGreen
+                    device.phase == DeploymentPhase.SKIPPED_MANUAL -> WarnOrange
+                    else -> InfoBlue
+                },
+                when {
+                    !device.online || device.phase == DeploymentPhase.FAILED -> WarningRedBg
+                    device.phase == DeploymentPhase.ARRIVED || device.phase == DeploymentPhase.NO_MOVE -> SafeGreenBg
+                    device.phase == DeploymentPhase.SKIPPED_MANUAL -> WarnOrangeBg
+                    else -> InfoBlueBg
+                },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "目标 ${fmt(device.targetM)} m · 累计 ${fmt(device.traveledM)} m" +
+                if (device.targetM <= 0.001) " · 无需移动" else "",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(4.dp))
+        SimpleProgress(device.progress, if (device.arrived) SafeGreen else InfoBlue)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            buildString {
+                append("已过启动间隔 d：").append(if (device.reachedInterval) "是" else "否")
+                append(" · 已到达：").append(if (device.arrived) "是" else "否")
+                if (device.skipped) append(" · 人工跳过：").append(device.skip?.disposition?.label ?: "待处置")
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = NeutralGrey,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "启动指令：${device.startCommand.state.label}（${device.startCommand.commandId ?: "-"}）",
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+            "上报结果：${if (device.isMaster) "—（主桶）" else device.report.state.label}" +
+                if (device.isMaster && device.trigger != null) " · 触发：${device.trigger.state}" else "",
+            style = MaterialTheme.typography.labelSmall,
+        )
+        if (device.verify.state != VerifyResultState.NOT_DONE) {
+            Text(
+                "核验：${device.verify.state.label}" + (device.verify.note?.let { " · $it" } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (device.verify.state == VerifyResultState.PASS) SafeGreen else WarningRed,
+            )
+        }
+        device.anomaly?.let {
+            Text("异常：${it.label}（${it.code}）", style = MaterialTheme.typography.labelSmall, color = WarningRed)
+        }
+        if (canVerify) {
+            Spacer(Modifier.height(6.dp))
+            SecondaryActionButton("现场核验", onClick = onVerify)
+        }
+    }
+}
+
+@Composable
+private fun SimpleProgress(progress: Float, color: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(NeutralGreyBg),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progress.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .background(color),
+        )
+    }
+}
+
+private fun canRetry(event: DeploymentEvent): Boolean =
+    event.devices.any {
+        it.startCommand.state == CommandResultState.TIMEOUT ||
+            it.startCommand.state == CommandResultState.REJECTED ||
+            it.phase == DeploymentPhase.FAILED ||
+            it.report.state == ReportResultState.LOST
+    }
+
+private fun blockedDevice(event: DeploymentEvent): DeploymentDeviceState? {
+    for (device in event.ordered) {
+        if (device.phase == DeploymentPhase.FAILED ||
+            device.startCommand.state == CommandResultState.TIMEOUT ||
+            device.startCommand.state == CommandResultState.REJECTED ||
+            device.report.state == ReportResultState.LOST
+        ) {
+            return device
+        }
+        if (!device.online &&
+            device.phase != DeploymentPhase.ARRIVED &&
+            device.phase != DeploymentPhase.SKIPPED_MANUAL &&
+            device.phase != DeploymentPhase.NO_MOVE
+        ) {
+            // 尚未轮到的离线从桶不算“当前阻断”：只有前序已到 d/已到达/已跳过，
+            // 或它自己已经启动，才视为当前步骤。
+            val prev = event.ordered.firstOrNull { it.order == device.order - 1 }
+            val predecessorReady = device.isMaster ||
+                prev?.let { it.reachedInterval || it.arrived || it.skipped } == true
+            if (device.phase != DeploymentPhase.NOT_STARTED || predecessorReady) return device
+        }
+    }
+    return null
+}
+
+@Composable
+private fun SkipDeviceDialog(
+    device: DeploymentDeviceState,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String, SkipDisposition, String) -> Unit,
+) {
+    var stopped by remember { mutableStateOf(false) }
+    var nextSafe by remember { mutableStateOf(false) }
+    var understood by remember { mutableStateOf(false) }
+    var reason by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var disposition by remember { mutableStateOf(SkipDisposition.REMOVED_FROM_ROUTE) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("人工跳过 ${device.deviceCode}？") },
+        text = {
+            Column {
+                Text(
+                    "该操作仅在异常阻断时可用，且会绕过逐级启动链路；被跳过设备不计为到达，事件将记录为“带异常完成”。",
+                    color = WarningRed,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                CheckboxRow("已确认该设备已停止或已移出运动路径", stopped) { stopped = !stopped }
+                CheckboxRow("已确认下一只从桶的启动路径安全", nextSafe) { nextSafe = !nextSafe }
+                CheckboxRow("已了解将记录为带异常完成", understood) { understood = !understood }
+                Spacer(Modifier.height(6.dp))
+                Text("处置方式", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SkipDisposition.entries.forEach { d ->
+                        FilterChip(
+                            selected = disposition == d,
+                            onClick = { disposition = d },
+                            label = { Text(d.label, style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it.take(100) },
+                    label = { Text("跳过原因（必填）") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it.take(100) },
+                    label = { Text("备注（可选）") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(reason.trim(), disposition, note) },
+                enabled = !busy && stopped && nextSafe && understood && reason.isNotBlank(),
+            ) { Text(if (busy) "处理中…" else "确认人工跳过") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun VerifyDeviceDialog(
+    device: DeploymentDeviceState,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (Boolean, String) -> Unit,
+) {
+    var pass by remember { mutableStateOf(true) }
+    var note by remember {
+        mutableStateOf(
+            if (device.skipped) "已核对跳过处置方式" else "位置/朝向/间距/灯光正常",
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("现场核验 ${device.deviceCode}") },
+        text = {
+            Column {
+                Text(
+                    if (device.skipped) "该设备为人工跳过，请核验其处置方式（人工摆放/移出路线/不参与）。"
+                    else "请核对实际位置、朝向、间距、灯光与现场安全条件；App 数字不能替代现场核验。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = pass, onClick = { pass = true }, label = { Text("核验通过") })
+                    FilterChip(selected = !pass, onClick = { pass = false }, label = { Text("发现异常") })
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it.take(120) },
+                    label = { Text("核验备注") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(pass, note) }, enabled = !busy) {
+                Text(if (busy) "记录中…" else "提交核验")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun CheckboxRow(text: String, checked: Boolean, onToggle: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+        Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+    }
+}
+
+private fun fmt(v: Double): String =
+    if (v == v.toInt().toDouble()) v.toInt().toString() else String.format("%.1f", v)

@@ -176,3 +176,77 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 ｜ 风险 `risks`（含 `lane` 占用车道） ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`（均按 `?device_code=` 区分设备）
 
 字段与错误码详见 `docs/后端接口设计文档.md`。**正式服务端开发（后端同学）请看 [`docs/后端开发对接文档.md`](../../docs/后端开发对接文档.md)**——按 APP 实际解析口径整理，含 Mock 禁止照搬清单（视频必须接真实摄像头）与验收清单。
+
+---
+
+## 锥桶协同布设联调（2026-10-20 新增）
+
+> 需求/状态机/测试用例：`docs/锥桶协同布设功能需求规格说明书.md`
+> 协议：`docs/后端接口设计文档.md` 第 18 节、`docs/APP接口请求响应JSON文档.md` 第四节
+> 实现：`tools/mock-server/deployment.js`（独立模块，不影响单设备状态机）
+
+### 预置设备
+
+| 设备 | 角色 | 套装 |
+|---|---|---|
+| `CONE-M-001` | 主桶 | `SET-CONE-001` |
+| `CONE-S-001..005` | 从桶 | `SET-CONE-001` |
+
+- 套装关联**只用于默认候选**；任意从桶可加入任意主桶。
+- 同一作业人员（Mock 默认 `demo`）同一时间只允许 **1 个**非终态布设事件。
+- 一键正常联调（L=8 m、d=2 m、N=3，约 10 秒走完）：
+
+```bash
+# 1) 创建
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments \
+  -H 'Content-Type: application/json' \
+  -d '{"clientRequestId":"demo-1","name":"demo","lane":2,"masterCode":"CONE-M-001",
+       "slaves":[{"deviceCode":"CONE-S-001","order":1},{"deviceCode":"CONE-S-002","order":2},{"deviceCode":"CONE-S-003","order":3}],
+       "L":8,"d":2}'
+
+# 2) 启动（把 <id> 换成上一步返回的 deploymentId）
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/start \
+  -H 'Content-Type: application/json' -d '{"confirmed":true}'
+
+# 3) 轮询聚合状态（设备自身行程/触发/上报/到达）
+curl -s http://127.0.0.1:8080/api/v1/deployments/<id>
+```
+
+### 异常注入（仅 Mock）
+
+```bash
+# 从1达到 d 时不上报 → 链路阻断，从2不会启动
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployment-sim/anomaly \
+  -H 'Content-Type: application/json' \
+  -d '{"device_code":"CONE-S-001","type":"report_lost","enabled":true}'
+
+# 其他 type：offline / ack_timeout / reject / slow / overshoot
+# 关闭：enabled=false
+```
+
+异常阻断后可人工跳过（仅从桶）：
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/skip \
+  -H 'Content-Type: application/json' \
+  -d '{"skipRequestId":"s1","deviceCode":"CONE-S-001","reason":"stuck",
+       "disposition":"removed_from_route",
+       "confirmations":{"deviceStoppedOrRemoved":true,"nextPathSafe":true,"understandException":true}}'
+```
+
+- 被跳过设备 `skipped_manual`、不计到达；仍需核验处置方式；
+- 事件完成结果 `completed_with_exception`。
+
+### 自动化验收
+
+```bash
+node tools/mock-server/test-deployment.js
+```
+
+覆盖：正常逐级触发与目标行程、单进行中事件、上报丢失→人工跳过→`completed_with_exception`。
+
+### 数据持久化
+
+- 布设会话落盘 `tools/mock-server/data/deployments.json`（gitignore）；重启恢复；
+- 测试可用 `DEPLOY_DATA_FILE` 指向临时文件，避免污染本地联调数据；
+- 设备运行视图也写入 `/api/v1/device/status` 的可选 `deployment` 块，便于调试。

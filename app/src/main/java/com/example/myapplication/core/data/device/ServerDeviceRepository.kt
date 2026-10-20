@@ -76,7 +76,8 @@ class ServerDeviceRepository(
     override suspend fun listDevices(): List<DeviceSummary> = withContext(Dispatchers.IO) {
         // 服务端不可达时按空列表降级（连接页显示「暂无可用设备」，连接操作会被禁用）
         runCatching {
-            val arr = JSONObject(request("GET", "$baseUrl/api/v1/devices", null))
+            // 单设备连接页只列普通三角牌设备；锥桶（role=master/slave）走协同布设向导
+            val arr = JSONObject(request("GET", "$baseUrl/api/v1/devices?role=none", null))
                 .optJSONArray("devices") ?: JSONArray()
             buildList {
                 for (i in 0 until arr.length()) {

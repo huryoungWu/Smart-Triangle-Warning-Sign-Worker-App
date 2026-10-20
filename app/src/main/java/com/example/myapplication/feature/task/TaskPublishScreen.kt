@@ -31,6 +31,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +55,7 @@ import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
+import com.example.myapplication.ui.theme.WarnOrange
 import com.example.myapplication.ui.theme.WarningRed
 import com.example.myapplication.ui.theme.WarningRedBg
 import kotlin.math.abs
@@ -75,12 +79,21 @@ fun TaskPublishScreen(
     val draft = state.draft
     val errors = draft.validate()
     val deviceOk = state.deviceConditions().all { it.second }
-    // 作业车道未填写或越界（必填项，随任务下发/上传）
-    val laneInvalid = draft.lane == null || draft.lane !in LaneRange.MIN..LaneRange.MAX
+    // 作业车道未填写或越界（必填项，随任务下发/上传）。
+    // 初始空白不报红：用户输入过、或输入了越界值后才显示错误。
+    var laneTouched by remember { mutableStateOf(false) }
+    val laneMissing = draft.lane == null
+    val laneInvalid = laneMissing || draft.lane !in LaneRange.MIN..LaneRange.MAX
+    val showLaneError = laneTouched && laneInvalid
+    // 未触碰车道前，先不把“请填写作业车道”展示在顶部错误卡里
+    val visibleErrors = if (laneTouched) errors else errors.filterNot { it.contains("作业车道") }
 
     // 进入发布页先读一次状态，保证「现场位置」不是旧快照
     LaunchedEffect(Unit) { vm.refreshStatus() }
-    LaunchedEffect(kind) { vm.initDraft(kind) }
+    LaunchedEffect(kind) {
+        vm.initDraft(kind)
+        laneTouched = false
+    }
 
     Column(
         modifier = Modifier
@@ -115,13 +128,14 @@ fun TaskPublishScreen(
             OutlinedTextField(
                 value = draft.lane?.toString() ?: "",
                 onValueChange = { text ->
+                    laneTouched = true
                     val digits = text.filter { it.isDigit() }.take(2)
                     vm.updateDraft { s -> s.copy(lane = digits.toIntOrNull()) }
                 },
                 label = { Text("作业车道（第几车道）") },
                 placeholder = { Text("${LaneRange.MIN}~${LaneRange.MAX}") },
                 singleLine = true,
-                isError = laneInvalid,
+                isError = showLaneError,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -129,7 +143,7 @@ fun TaskPublishScreen(
             Text(
                 text = "填写 ${LaneRange.MIN}~${LaneRange.MAX} 的整数（如 2 = 第 2 车道）；发布任务必填，随任务一并上报。",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (laneInvalid) WarningRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (showLaneError) WarningRed else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
@@ -262,7 +276,8 @@ fun TaskPublishScreen(
 
         // ⑥ 发布（表单校验错误统一在发布按钮上方列出：任务信息 / 路线设计）
         val canPublish = errors.isEmpty() && draft.precheck.allChecked && deviceOk && state.taskStartEnabled
-        if (errors.isNotEmpty()) {
+        val formError = visibleErrors.isNotEmpty() || (laneTouched && laneInvalid)
+        if (visibleErrors.isNotEmpty()) {
             Card(colors = CardDefaults.cardColors(containerColor = WarningRedBg)) {
                 Column(Modifier.padding(10.dp)) {
                     Text(
@@ -272,7 +287,7 @@ fun TaskPublishScreen(
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(4.dp))
-                    errors.forEach {
+                    visibleErrors.forEach {
                         Text("• $it", color = WarningRed, style = MaterialTheme.typography.labelSmall)
                     }
                 }
@@ -289,12 +304,13 @@ fun TaskPublishScreen(
         if (!canPublish) {
             Text(
                 text = when {
-                    errors.isNotEmpty() -> "请先修正表单中的错误项"
+                    visibleErrors.isNotEmpty() -> "请先修正表单中的错误项"
+                    laneMissing && !laneTouched -> "请填写作业车道（第几车道）"
                     !draft.precheck.allChecked -> "请完成预检勾选"
                     !deviceOk -> "设备条件未满足，无法发布"
                     else -> "当前状态不允许发布（急停锁定／任务运行中／命令未确认）"
                 },
-                color = WarningRed,
+                color = if (formError) WarningRed else WarnOrange,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
