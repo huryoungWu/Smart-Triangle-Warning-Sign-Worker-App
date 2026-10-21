@@ -819,7 +819,7 @@ class VehicleViewModel(
             return
         }
         val spec = draft.copy(
-            // 留空自动生成任务名（「自动布置」），避免出现「1014-0930」这类只有数字、含义不明的标题
+            // 留空自动生成任务名（「三角架自动布置」），避免出现「1014-0930」这类只有数字、含义不明的标题
             name = draft.name.ifBlank { defaultTaskName(draft) },
         )
         _uiState.update { it.copy(draft = spec, activeSpec = spec, taskCompletedByUser = false) }
@@ -833,9 +833,9 @@ class VehicleViewModel(
         }
     }
 
-    /** 默认任务名（留空自动生成）：「自动布置」 */
+    /** 默认任务名（留空自动生成）：「三角架自动布置」 */
     private fun defaultTaskName(spec: TaskSpec): String =
-        if (spec.kind == TaskKind.FIXED_DISTANCE) "自动布置" else spec.kind.label
+        if (spec.kind == TaskKind.FIXED_DISTANCE) "三角架自动布置" else spec.kind.label
 
     /** 发布失败后「重新下发」：用同一份规格再发一次（走 taskStartEnabled 门） */
     fun retryPublish() {

@@ -29,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.myapplication.core.geo.GeoPoint
+import com.example.myapplication.core.geo.resolveDeploymentConePins
 import com.example.myapplication.core.model.deployment.CommandResultState
 import com.example.myapplication.core.model.deployment.DeploymentDeviceState
 import com.example.myapplication.core.model.deployment.DeploymentEvent
@@ -60,7 +64,10 @@ import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.map.MapPin
+import com.example.myapplication.core.ui.map.PhoneMapPanel
 import com.example.myapplication.core.util.TimeFormat
+import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -72,6 +79,7 @@ import com.example.myapplication.ui.theme.WarnOrangeBg
 import com.example.myapplication.ui.theme.WarningRed
 import com.example.myapplication.ui.theme.WarningRedBg
 import kotlinx.coroutines.awaitCancellation
+import kotlin.math.abs
 
 /**
  * 锥桶协同布设执行页：1Hz 聚合状态、逐设备卡片、异常处置、逐只核验。
@@ -81,6 +89,7 @@ import kotlinx.coroutines.awaitCancellation
 @Composable
 fun DeploymentExecScreen(
     vm: DeploymentViewModel,
+    mapVm: MapViewModel,
     onBack: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
@@ -99,6 +108,56 @@ fun DeploymentExecScreen(
                 awaitCancellation()
             } finally {
                 vm.stopPolling()
+            }
+        }
+    }
+
+    // ── 锥桶地图锚点：优先取事件开始时刻附近的手机定位，其次实时手机位置 ──
+    val mapState by mapVm.uiState.collectAsStateWithLifecycle()
+    val phoneFix by mapVm.phoneFix.collectAsStateWithLifecycle()
+    var coneAnchor by remember(event?.deploymentId) { mutableStateOf<GeoPoint?>(null) }
+    LaunchedEffect(event?.deploymentId, event?.startedAt, phoneFix, mapState.phoneTrail) {
+        if (coneAnchor == null && event != null) {
+            val startedAt = event.startedAt ?: 0L
+            val nearest = if (startedAt > 0) {
+                mapState.phoneTrail.minByOrNull { abs(it.at - startedAt) }
+            } else {
+                null
+            }
+            // 进行中事件要求轨迹点足够新，避免用很久以前的点当起点；历史事件可放宽
+            val window = if (event.terminal) ANCHOR_HISTORY_WINDOW_MS else ANCHOR_LIVE_WINDOW_MS
+            val nearEnough = nearest != null && abs(nearest.at - startedAt) <= window
+            coneAnchor = when {
+                nearEnough -> nearest!!.point
+                // 历史事件没有当时的手机定位时，不拿当前位置硬凑
+                !event.terminal -> phoneFix?.point
+                else -> null
+            }
+        }
+    }
+    val conePins = remember(event, coneAnchor) {
+        val anchor = coneAnchor
+        if (event == null || anchor == null) {
+            emptyList()
+        } else {
+            resolveDeploymentConePins(event, anchor).map { pin ->
+                MapPin(
+                    id = "cone:${pin.deviceCode}",
+                    point = pin.point,
+                    title = if (pin.isMaster) "主桶 ${pin.deviceCode}" else "从 ${pin.order} ${pin.deviceCode}",
+                    snippet = buildString {
+                        append("已行进 ${fmt(pin.traveledM)} m / 目标 ${fmt(pin.targetM)} m")
+                        if (pin.arrived) append(" · 已到位")
+                        if (pin.skipped) append(" · 已跳过")
+                        append("（位置为估算）")
+                    },
+                    colorArgb = when {
+                        pin.skipped -> NeutralGrey.toArgb()
+                        pin.arrived -> SafeGreen.toArgb()
+                        pin.isMaster -> InfoBlue.toArgb()
+                        else -> WarnOrange.toArgb()
+                    },
+                )
             }
         }
     }
@@ -136,6 +195,26 @@ fun DeploymentExecScreen(
         }
 
         EventStateBanner(event)
+
+        // 主/从桶实时位置（无逐桶 GPS，按各桶 traveledM 沿正北方向估算）
+        if (coneAnchor != null || !event.terminal) {
+            key(event.deploymentId) {
+                PhoneMapPanel(
+                    mapVm = mapVm,
+                    height = 220.dp,
+                    title = "主/从桶实时位置",
+                    extraMarkers = conePins,
+                    showPhoneMarker = false,
+                    cameraCenter = coneAnchor,
+                    followPhone = false,
+                    caption = if (coneAnchor == null) {
+                        "暂无手机定位锚点，无法估算锥桶位置；请允许定位后重试。"
+                    } else {
+                        "蓝点=主桶，橙点=从桶，绿点=已到位，灰点=已跳过；按各桶已行进距离沿正北方向估算（非 GPS）。"
+                    },
+                )
+            }
+        }
 
         // 异常横幅：一旦出现必须显性展示
         if (event.anomalies.isNotEmpty()) {
@@ -657,6 +736,11 @@ private fun CheckboxRow(text: String, checked: Boolean, onToggle: () -> Unit) {
         Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
     }
 }
+
+/** 进行中事件：手机轨迹点与开始时刻的匹配窗口；超过则用当前手机位置 */
+private const val ANCHOR_LIVE_WINDOW_MS = 2 * 60 * 1000L
+/** 历史事件：允许从轨迹里找更早的起点；找不到就不显示估算点位 */
+private const val ANCHOR_HISTORY_WINDOW_MS = 30 * 60 * 1000L
 
 private fun fmt(v: Double): String =
     if (v == v.toInt().toDouble()) v.toInt().toString() else String.format("%.1f", v)

@@ -21,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myapplication.core.geo.GeoPoint
+import com.example.myapplication.core.geo.MapRenderModel
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
@@ -120,6 +122,91 @@ fun MapPanel(
             if (showLegend) {
                 Spacer(Modifier.height(8.dp))
                 MapLegend(vehicleHasGps = renderModel.vehicleHasGps)
+            }
+        }
+    }
+}
+
+/**
+ * 只依赖定位的轻量地图面板（无 VehicleViewModel）：
+ * 用于锥桶发布页「现场位置」和执行页「主/从桶实时位置」。
+ *
+ * - [extraMarkers] 可放主桶/从桶等点位；
+ * - [cameraCenter] 非空时相机以它为中心（执行页用手机起点锚点，避免跟随当前手机）；
+ * - [showPhoneMarker] 控制是否画「我的位置」五角星；
+ * - 其他隐私/定位权限门与 [MapPanel] 一致。
+ */
+@Composable
+fun PhoneMapPanel(
+    mapVm: MapViewModel,
+    modifier: Modifier = Modifier,
+    height: Dp = 240.dp,
+    title: String = "现场位置",
+    extraMarkers: List<MapPin> = emptyList(),
+    showPhoneMarker: Boolean = true,
+    caption: String? = null,
+    cameraCenter: GeoPoint? = null,
+    followPhone: Boolean? = null,
+    cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
+) {
+    val mapState by mapVm.uiState.collectAsStateWithLifecycle()
+    val phoneFix by mapVm.phoneFix.collectAsStateWithLifecycle()
+    val permission = rememberLocationPermissionState()
+
+    LaunchedEffect(mapState.privacyAccepted, permission.granted) {
+        if (mapState.privacyAccepted && permission.granted) {
+            mapVm.startLocating()
+        }
+    }
+
+    SectionCard(title = title, modifier = modifier) {
+        if (!mapState.privacyAccepted) {
+            Text(
+                text = "地图与定位由高德 SDK 提供，用于显示作业人员与锥桶位置，不用于安全判断。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            PrimaryActionButton(text = "同意并启用地图", onClick = mapVm::acceptPrivacy)
+        } else {
+            if (!permission.granted) {
+                Card(colors = CardDefaults.cardColors(containerColor = WarnOrangeBg)) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text("未授予定位权限", color = WarnOrange, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "地图可显示，但无法获取作业人员位置，锥桶位置也无法估算。",
+                            color = WarnOrange,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        PrimaryActionButton(text = "申请定位权限", onClick = permission::request)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // cameraCenter（起点锚点）优先；否则只有需要画手机星标时才把手机位置交给相机。
+            val renderPhone = cameraCenter ?: if (showPhoneMarker) phoneFix?.point else null
+            AMapCanvas(
+                model = MapRenderModel(
+                    phone = renderPhone,
+                    followPhone = followPhone ?: mapState.followPhone,
+                ),
+                onMapReady = { },
+                extraMarkers = extraMarkers,
+                showPhoneMarker = showPhoneMarker,
+                cameraZoom = cameraZoom,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(height),
+            )
+
+            if (!caption.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = caption,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

@@ -102,7 +102,7 @@ fun TaskPublishScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        PageTitle("发布任务", onBack = onBack)
+        PageTitle("三角架任务发布", onBack = onBack)
 
         // ① 小车与作业人员位置（发布前确认现场）
         com.example.myapplication.core.ui.map.MapPanel(

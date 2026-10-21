@@ -46,6 +46,8 @@ import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.map.PhoneMapPanel
+import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -65,6 +67,7 @@ import com.example.myapplication.ui.theme.WarningRedBg
 @Composable
 fun DeploymentPublishScreen(
     vm: DeploymentViewModel,
+    mapVm: MapViewModel,
     onBack: () -> Unit,
     onEditDevices: () -> Unit,
     onStarted: (String) -> Unit,
@@ -90,6 +93,15 @@ fun DeploymentPublishScreen(
             text = "布设任务发布",
             subtitle = "事件参数与现场预检",
             onBack = onBack,
+        )
+
+        // 发布前确认现场：当前高德地图位置（与三角架发布页一致）
+        PhoneMapPanel(
+            mapVm = mapVm,
+            height = 220.dp,
+            title = "现场位置",
+            showPhoneMarker = true,
+            caption = "蓝星为当前作业人员位置（高德定位）。",
         )
 
         SectionCard(title = "事件信息") {

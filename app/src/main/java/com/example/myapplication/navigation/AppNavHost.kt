@@ -271,6 +271,7 @@ fun AppNavHost() {
             composable(Routes.DEPLOYMENT_PUBLISH) {
                 DeploymentPublishScreen(
                     vm = deploymentVm,
+                    mapVm = mapVm,
                     onBack = { navController.popBackStack() },
                     onEditDevices = {
                         // 回到设备连接页时移除发布页，避免「完成设备连接」后重复叠页
@@ -289,6 +290,7 @@ fun AppNavHost() {
             composable(Routes.DEPLOYMENT_EXEC) {
                 DeploymentExecScreen(
                     vm = deploymentVm,
+                    mapVm = mapVm,
                     onBack = { navController.popBackStack() },
                 )
             }
