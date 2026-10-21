@@ -125,7 +125,7 @@ fun ServerConfigScreen(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "编译期默认值：$compileTimeDefault\n（来自 local.properties 的 SERVER_BASE_URL）",
+                text = "默认：$compileTimeDefault",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -277,11 +277,7 @@ fun ServerConfigScreen(
             })
         }
 
-        SafetyText(
-            "切换服务器会断开当前设备连接并要求重新登录。\n" +
-                "IP 直连（如 192.168.43.120:8080）不写 http:// 也能识别；IPv6 请写成 " +
-                "[2408:xxxx::1]:8080。",
-        )
+        SafetyText("切换服务器会断开连接并需重新登录。")
         Spacer(Modifier.height(24.dp))
     }
 }

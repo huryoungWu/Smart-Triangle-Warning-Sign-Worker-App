@@ -38,7 +38,7 @@ fun DeploymentActiveCard(event: DeploymentEvent, onOpen: () -> Unit) {
             WarnOrange to WarnOrangeBg
         else -> InfoBlue to InfoBlueBg
     }
-    SectionCard(title = "已有进行中的布设事件") {
+    SectionCard(title = "进行中的布设事件") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = event.name,

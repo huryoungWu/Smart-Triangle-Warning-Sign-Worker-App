@@ -21,8 +21,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.util.TimeFormat
-import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
-import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.di.DeviceTransport
@@ -57,7 +55,7 @@ fun DeviceInfoScreen(
             InfoRow("设备编号", snapshot?.deviceCode ?: "未连接")
             InfoRow("固件版本", snapshot?.fw ?: "-")
             InfoRow("连接方式", "本地 Wi-Fi · 192.168.4.1")
-            InfoRow("通信模式", if (transport == DeviceTransport.FAKE) "模拟设备（演示）" else "真实设备（HTTP + UDP 视频）")
+            InfoRow("通信模式", if (transport == DeviceTransport.FAKE) "本机模式" else "服务端设备")
             InfoRow(
                 "最近状态更新",
                 if (state.lastUpdateAt > 0) TimeFormat.format("HH:mm:ss", state.lastUpdateAt) else "-",
@@ -65,25 +63,9 @@ fun DeviceInfoScreen(
         }
 
         SectionCard(title = "维护提示") {
-            SafetyText("样机仅供有人看护的室内或封闭场地测试。")
+            SafetyText("设备仅供封闭场地测试。")
             Spacer(Modifier.height(6.dp))
-            SafetyText("不具备自动识别道路安全位置、障碍或来车的能力；作业前须人工现场确认。")
-            Spacer(Modifier.height(6.dp))
-            SafetyText("车身实体急停不由 APP 软件按钮替代。")
-        }
-
-        SectionCard(title = "待验收能力（C 阶段）") {
-            LockedFeatureCard(
-                title = "电池百分比",
-                reason = "待可靠数据来源验收后开放",
-                onClick = { vm.showInfo("电池百分比", "电池百分比须待可靠数据来源及车端能力验收后开放。") },
-            )
-            Spacer(Modifier.height(8.dp))
-            LockedFeatureCard(
-                title = "远程升级",
-                reason = "待车端能力验收后开放",
-                onClick = { vm.showInfo("远程升级", "远程升级须待车端能力验收后开放。") },
-            )
+            SafetyText("车身实体急停不由 APP 替代。")
         }
 
         Spacer(Modifier.height(24.dp))

@@ -132,12 +132,6 @@ fun ConnectScreen(
     ) {
         PageTitle("设备连接", subtitle = "三脚架布设", onBack = onBack)
 
-        Text(
-            "请选择设备并连接，连接成功后开始作业",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
         SectionCard(title = "选择设备") {
             // 下拉菜单选择设备
             Box {
@@ -207,7 +201,7 @@ fun ConnectScreen(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "请输入设备铭牌上的绑定码；连接时与登录账号、设备编号一并校验。",
+                text = "设备铭牌上的绑定码",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

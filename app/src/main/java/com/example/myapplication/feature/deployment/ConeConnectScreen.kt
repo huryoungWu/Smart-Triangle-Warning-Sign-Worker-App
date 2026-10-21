@@ -123,7 +123,7 @@ fun ConeConnectScreen(
             if (state.loading && state.masterCandidates.isEmpty()) {
                 SkeletonDeviceRows()
             } else if (state.masterCandidates.isEmpty()) {
-                EmptyState("暂无已绑定且可用的主桶。请先扫码或输入编号绑定主桶。")
+                EmptyState("暂无可用主桶，请先绑定。")
             } else {
                 state.masterCandidates.forEach { dev ->
                     DeviceSelectRow(
@@ -150,7 +150,7 @@ fun ConeConnectScreen(
             if (state.loading && state.slaveCandidates.isEmpty()) {
                 SkeletonDeviceRows()
             } else if (state.slaveCandidates.isEmpty()) {
-                EmptyState("暂无已绑定且可用的从桶。请先扫码或输入编号绑定。")
+                EmptyState("暂无可用从桶，请先绑定。")
             } else {
                 val setName = draft.master?.setId ?: state.deviceSet?.setId
                 val setSlaves = state.slaveCandidates.filter { setName != null && it.setId == setName }
@@ -451,12 +451,6 @@ private fun BindDeviceDialog(
         title = { Text("绑定${deviceType.label}") },
         text = {
             Column {
-                Text(
-                    "device_type = ${deviceType.token}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
-                Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
                     value = code,
                     onValueChange = { code = it.take(32) },
@@ -476,12 +470,6 @@ private fun BindDeviceDialog(
                 OutlinedButton(onClick = ::launchScan, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
                     Text("扫码填写设备编号")
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "绑定只是加入可选列表；绑定成功后请勾选加入本次布设。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
             }
         },
         confirmButton = {

@@ -28,9 +28,9 @@ fun MapLegend(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         if (vehicleHasGps) {
-            LegendRow(Color(0xFFE65100), "小车（GPS）", "车端 GPS 上报（WGS-84 转 GCJ-02 显示）")
+            LegendRow(Color(0xFFE65100), "小车（GPS）", "车端 GPS")
         }
-        LegendRow(Color(0xFF757575), "小车（行程估算）", "由车轮编码器估算行驶距离推算 · 非地图定位", dashed = true)
+        LegendRow(Color(0xFF757575), "小车（行程估算）", "编码器估算 · 非定位", dashed = true)
     }
 }
 

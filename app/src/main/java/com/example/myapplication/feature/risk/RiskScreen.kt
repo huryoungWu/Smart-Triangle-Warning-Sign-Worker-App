@@ -185,10 +185,7 @@ fun RiskScreen(
             item {
                 EmptyStateCard(
                     title = "暂无风险事件",
-                    message = when (timeScope) {
-                        RiskTimeScope.TODAY -> "今天周边 ${radiusKm} 公里内暂无风险事件（可切「全部」查看更早的）"
-                        RiskTimeScope.ALL -> "周边 ${radiusKm} 公里内暂无风险事件"
-                    },
+                    message = "周边 ${radiusKm} 公里内暂无风险事件。",
                 )
             }
         }

@@ -48,9 +48,7 @@ fun AboutScreen(onBack: () -> Unit) {
 
         SectionCard(title = "应用简介") {
             Text(
-                text = "面向现场作业人员的三角警示牌小车控制应用。" +
-                    "支持设备连接、任务发布（手动遥控／定距布置）、路线分段执行、" +
-                    "进度监控、人工核验与作业记录本地存档。",
+                text = "三角警示牌小车现场控制应用。",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -58,19 +56,14 @@ fun AboutScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         SectionCard(title = "使用说明") {
             Text(
-                text = "1. 登录后连接设备\n" +
-                    "2. 选择作业类型并填写路线\n" +
-                    "3. 发布任务后自动执行\n" +
-                    "4. 完成后核验并上传记录",
+                text = "连接设备 → 选择作业 → 发布任务 → 核验记录",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
 
         Spacer(Modifier.height(12.dp))
         SectionCard(title = "安全提示") {
-            SafetyText("仅供有人看护的室内或封闭场地使用，不具备自动识别道路安全位置、障碍或来车的能力。")
-            Spacer(Modifier.height(6.dp))
-            SafetyText("作业前须人工现场确认环境安全。")
+            SafetyText("仅供有人看护的封闭场地使用；作业前须人工确认现场安全。")
         }
 
         Spacer(Modifier.height(12.dp))

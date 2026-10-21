@@ -29,7 +29,6 @@ import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
-import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
 import com.example.myapplication.ui.theme.WarnOrange
@@ -72,7 +71,7 @@ fun ConeHomeScreen(
     ) {
         PageTitle(
             text = "锥桶协同布设",
-            subtitle = "1 主桶 + 0~5 从桶 · 按自身行程逐级启动",
+            subtitle = "1 主桶 · 0~5 从桶",
             onBack = onSwitchWorkType,
         )
 
@@ -99,11 +98,6 @@ fun ConeHomeScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(
-                        "已绑定主桶 ${state.masterCandidates.size} · 已绑定从桶 ${state.slaveCandidates.size}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = NeutralGrey,
-                    )
                 }
                 if (ready) {
                     StatusChip("设备已就绪", SafeGreen, SafeGreenBg)
@@ -121,7 +115,7 @@ fun ConeHomeScreen(
 
         if (active != null) {
             Text(
-                "已有进行中的布设事件。请进入执行页完成或终止后再发布新任务。",
+                "已有进行中事件，请先完成或终止。",
                 color = WarnOrange,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -142,7 +136,7 @@ fun ConeHomeScreen(
         )
 
         if (state.loading) {
-            Text("正在加载设备与事件…", style = MaterialTheme.typography.labelSmall, color = InfoBlue)
+            Text("正在加载…", style = MaterialTheme.typography.labelSmall, color = InfoBlue)
         }
 
         Spacer(Modifier.height(24.dp))

@@ -41,7 +41,6 @@ import com.example.myapplication.core.ui.permission.rememberLocationPermissionSt
 import com.example.myapplication.di.DeviceTransport
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.feature.connect.ConnectScreen
-import com.example.myapplication.feature.debug.DebugScreen
 import com.example.myapplication.feature.deployment.ConeConnectScreen
 import com.example.myapplication.feature.deployment.ConeHomeScreen
 import com.example.myapplication.feature.deployment.DeploymentExecScreen
@@ -120,7 +119,7 @@ fun AppNavHost() {
         }
     }
 
-    // 登录/跳过登录统一入口：两个业务的会话状态都复位，再进入类型选择
+    // 登录成功入口：两个业务的会话状态都复位，再进入类型选择
     val onSessionReady: () -> Unit = {
         vm.onSessionStarted()
         deploymentVm.onSessionStarted()
@@ -189,13 +188,10 @@ fun AppNavHost() {
             startDestination = Routes.LOGIN,
             modifier = Modifier.padding(innerPadding),
         ) {
-            // ⓪ 登录页：接入服务端登录（默认账号 demo/123456 已预填），可跳过
+            // ⓪ 登录页
             composable(Routes.LOGIN) {
                 LaunchedEffect(Unit) { workTypeToken = null }
-                LoginScreen(
-                    onLoggedIn = onSessionReady,
-                    onSkip = onSessionReady,
-                )
+                LoginScreen(onLoggedIn = onSessionReady)
             }
 
             // ① 作业类型选择：三角警示牌 / 锥桶协同
@@ -345,7 +341,6 @@ fun AppNavHost() {
                 SettingsScreen(
                     vm = vm,
                     onOpenDeviceInfo = { navController.navigate(Routes.DEVICE_INFO) },
-                    onOpenDebug = { navController.navigate(Routes.DEBUG) },
                     onOpenAbout = { navController.navigate(Routes.ABOUT) },
                     onOpenServerConfig = { navController.navigate(Routes.SERVER_CONFIG) },
                     onBackToLogin = {
@@ -407,10 +402,6 @@ fun AppNavHost() {
                         navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
                     },
                 )
-            }
-
-            composable(Routes.DEBUG) {
-                DebugScreen(vm = vm, onBack = { navController.popBackStack() })
             }
 
             composable(Routes.DEVICE_INFO) {

@@ -913,7 +913,7 @@ class DeploymentViewModel(
 
     // ────────────────────────── 会话生命周期 ──────────────────────────
 
-    /** 登录成功/跳过登录后调用：清掉旧会话状态，再按新身份加载。 */
+    /** 登录成功后调用：清掉旧会话状态，再按新身份加载。 */
     fun onSessionStarted() {
         resetForNewSession()
         reloadDevices()

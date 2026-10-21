@@ -111,7 +111,7 @@ fun AccidentDetailScreen(
 
                 accident.hasPhoto -> MediaPlaceholder(
                     title = "事故现场照片",
-                    subtitle = "演示占位 · 未接入真实事故数据源",
+                    subtitle = "暂无照片",
                     icon = Icons.Default.Warning,
                     height = 180.dp,
                 )

@@ -140,7 +140,7 @@ fun TaskPublishScreen(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "填写 ${LaneRange.MIN}~${LaneRange.MAX} 的整数（如 2 = 第 2 车道）；发布任务必填，随任务一并上报。",
+                text = "第 ${LaneRange.MIN}~${LaneRange.MAX} 车道",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (showLaneError) WarningRed else MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -243,7 +243,7 @@ fun TaskPublishScreen(
             if (!draft.precheck.allChecked) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "请勾选现场安全确认后才能发布",
+                    "请先完成现场确认",
                     color = WarningRed,
                     style = MaterialTheme.typography.labelSmall,
                 )

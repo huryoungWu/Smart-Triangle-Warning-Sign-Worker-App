@@ -66,7 +66,7 @@ class VehicleViewModel(
     private val settingsRepository: SettingsRepository,
     private val taskUploadRepository: TaskUploadRepository,
     private val snapshotRepository: com.example.myapplication.core.data.media.SnapshotRepository,
-    /** 快照上传（SERVER 模式启用；演示模式为 null，仅存本机） */
+    /** 快照上传（SERVER 模式启用；未配置服务端时为 null，仅存本机） */
     private val snapshotUploadRepository: SnapshotUploadRepository?,
     private val deviceRegistryRepository: com.example.myapplication.core.data.device.DeviceRegistryRepository,
     /** 登录会话：连接设备时把**登录账号与密码**随绑定请求上报（见 [connect]） */
@@ -396,7 +396,7 @@ class VehicleViewModel(
     }
 
     /**
-     * 新登录会话开始（登录成功或跳过登录）：
+     * 新登录会话开始（登录成功）：
      * 先清掉上一账号的连接/任务状态，再按新身份刷新设备列表。
      */
     fun onSessionStarted() {
@@ -868,7 +868,7 @@ class VehicleViewModel(
 
     /**
      * 执行上传：`UPLOAD_MODE=HTTP`（TRANSPORT=SERVER）时 POST 服务端 `/api/v1/tasks`，
-     * STUB 时仅占位模拟。成功后服务端单号写回本机记录（记录页可见）。
+     * STUB 时仅保存本机。成功后服务端单号写回本机记录（记录页可见）。
      * [auto] = true 表示核验通过后的自动上传，完成提示与手动提交区分文案。
      */
     private fun performUpload(id: String, auto: Boolean) {
@@ -893,11 +893,11 @@ class VehicleViewModel(
                         dialog = AppDialog.Alert(
                             when {
                                 auto && userConfirmed && serverUpload -> "任务完成 · 已上传"
-                                auto && userConfirmed -> "任务完成 · 已模拟上传"
+                                auto && userConfirmed -> "任务完成 · 已保存本机"
                                 auto && serverUpload -> "核验通过 · 已自动上传"
-                                auto -> "核验通过 · 已模拟上传"
+                                auto -> "核验通过 · 已保存本机"
                                 serverUpload -> "上传成功"
-                                else -> "已模拟上传"
+                                else -> "已保存本机"
                             },
                             buildString {
                                 if (auto) {
@@ -908,9 +908,7 @@ class VehicleViewModel(
                                     append("服务端单号：").append(r.serverId)
                                     append("\n上传时间：").append(TimeFormat.format("HH:mm:ss", r.uploadedAt))
                                 } else {
-                                    append("任务记录已保存本机，并完成模拟上传（演示占位）。\n\n")
-                                    append("占位单号：").append(r.serverId)
-                                    append("\n未接入真实服务器，不构成正式上传。")
+                                    append("任务记录已保存本机。")
                                 }
                             },
                         ),
@@ -1111,7 +1109,7 @@ class VehicleViewModel(
      */
     fun captureSnapshot(eventLabel: String) {
         val uploaded = snapshotUploadRepository != null
-        saveSnapshot(eventLabel, "人工抓拍（演示占位快照）")
+        saveSnapshot(eventLabel, "人工抓拍")
         _uiState.update {
             it.copy(
                 dialog = AppDialog.Alert(

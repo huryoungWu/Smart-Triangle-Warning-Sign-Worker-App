@@ -76,7 +76,7 @@ fun MapPanel(
     SectionCard(title = title, modifier = modifier) {
         if (!mapState.privacyAccepted) {
             Text(
-                text = "地图与定位由高德 SDK 提供，用于显示小车与作业人员位置，不用于安全判断。",
+                text = "地图仅用于显示位置，不用于安全判断。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
@@ -87,7 +87,7 @@ fun MapPanel(
                     Column(Modifier.padding(10.dp)) {
                         Text("未授予定位权限", color = WarnOrange, fontWeight = FontWeight.Bold)
                         Text(
-                            text = "地图可显示，但不显示作业人员定位点；小车估算点位不受影响。",
+                            text = "地图可显示，但不显示手机定位点。",
                             color = WarnOrange,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -165,7 +165,7 @@ fun PhoneMapPanel(
     SectionCard(title = title, modifier = modifier) {
         if (!mapState.privacyAccepted) {
             Text(
-                text = "地图与定位由高德 SDK 提供，用于显示作业人员与锥桶位置，不用于安全判断。",
+                text = "地图仅用于显示位置，不用于安全判断。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
@@ -176,7 +176,7 @@ fun PhoneMapPanel(
                     Column(Modifier.padding(10.dp)) {
                         Text("未授予定位权限", color = WarnOrange, fontWeight = FontWeight.Bold)
                         Text(
-                            text = "地图可显示，但无法获取作业人员位置，锥桶位置也无法估算。",
+                            text = "地图可显示，但无法估算手机/锥桶位置。",
                             color = WarnOrange,
                             style = MaterialTheme.typography.bodySmall,
                         )

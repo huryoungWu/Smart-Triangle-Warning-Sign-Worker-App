@@ -83,7 +83,7 @@ fun DeploymentRecordsScreen(
             state.records.isEmpty() -> {
                 EmptyStateCard(
                     title = "暂无布设事件",
-                    message = "完成或终止一次锥桶协同布设后，事件记录会显示在这里。",
+                    message = "完成或终止布设后显示记录。",
                 )
             }
 

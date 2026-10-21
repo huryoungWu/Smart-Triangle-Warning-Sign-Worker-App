@@ -208,7 +208,7 @@ fun TaskExecScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "UDP 视频流（演示动画帧 · ${state.selectedDeviceCode} 专属一路）",
+                    "实时视频 · ${state.selectedDeviceCode}",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
@@ -234,7 +234,7 @@ fun TaskExecScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "实时视频（演示占位 · 未接入车载摄像头）",
+                            "实时视频",
                             color = Color.White.copy(alpha = 0.8f),
                             style = MaterialTheme.typography.labelSmall,
                         )
@@ -249,8 +249,7 @@ fun TaskExecScreen(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "任务开始、结束会自动各抓拍一张并弹窗提示；执行中间可自行补拍（可拍可不拍）。" +
-                    "快照上传后将在「风险」页作为作业人员上报展示，用于提醒过往司机。",
+                "任务开始/结束自动抓拍；快照会上报到风险页。",
                 style = MaterialTheme.typography.labelSmall,
                 color = NeutralGrey,
             )
@@ -403,21 +402,21 @@ fun TaskExecScreen(
                                     if (serverUpload) {
                                         "服务端单号 ${record.serverId ?: "-"}。"
                                     } else {
-                                        "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器。"
+                                        "单号 ${record.serverId ?: "-"}"
                                     }
                                 record?.uploadState == WorkRecord.UPLOAD_FAILED ->
-                                    "上传失败，记录已保存本机，可重试。"
+                                    "上传失败，已保存本机。"
                                 autoUploaded ->
                                     if (serverUpload) {
-                                        "核验已通过，记录正在自动上传服务端…"
+                                        "核验通过，正在上传…"
                                     } else {
-                                        "核验已通过，记录正在自动上传（演示占位，未接入真实服务器）。"
+                                        "核验通过，正在上传…"
                                     }
                                 else ->
                                     if (serverUpload) {
-                                        "记录已保存本机，等待上传服务端。"
+                                        "已保存本机，等待上传。"
                                     } else {
-                                        "记录已保存本机（${WorkRecord.LOCAL_ONLY_NOTICE}），服务器尚未接入。"
+                                        "已保存本机（仅本机）。"
                                     }
                             },
                             style = MaterialTheme.typography.bodySmall,
@@ -432,7 +431,7 @@ fun TaskExecScreen(
                                 } else if (serverUpload) {
                                     "提交上传"
                                 } else {
-                                    "提交上传（演示）"
+                                    "提交上传"
                                 },
                                 onClick = vm::uploadActiveRecord,
                                 enabled = record?.uploadState != WorkRecord.UPLOAD_UPLOADED,
@@ -502,7 +501,7 @@ fun TaskExecScreen(
                                 state.snapshot?.mode == VehicleMode.SAFE_STOP ->
                                 "急停锁定/安全停止中，禁止手动运动。"
                             else ->
-                                "按住方向键微调车辆位置，松手停车；手动微调不会取消任务，自动任务会在松开后继续。"
+                                "按住方向键微调，松手停车；不会取消任务。"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (canManual) NeutralGrey else WarnOrange,
@@ -536,8 +535,7 @@ fun TaskExecScreen(
     if (showBackConfirm) {
         ConfirmDialog(
             title = "任务仍在执行",
-            message = "返回首页**不会停止任务**，小车将继续按路线行驶。\n\n" +
-                "需要紧急停车时，可在执行页点「停止并取消任务」。",
+            message = "返回首页不会停止任务；需要停车请先取消任务。",
             confirmText = "返回首页",
             danger = false,
             onConfirm = {

@@ -93,7 +93,7 @@ fun DeploymentPublishScreen(
     ) {
         PageTitle(
             text = "布设任务发布",
-            subtitle = "事件参数与现场预检",
+            subtitle = "参数与预检",
             onBack = onBack,
         )
 
@@ -103,7 +103,7 @@ fun DeploymentPublishScreen(
             height = 220.dp,
             title = "现场位置",
             showPhoneMarker = true,
-            caption = "蓝星为当前作业人员位置（高德定位）。",
+            caption = "蓝星=我的位置",
             onTouchActiveChange = { mapTouchActive = it },
         )
 
@@ -177,13 +177,13 @@ fun DeploymentPublishScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "L、d 都是沿预定路线的累计行程（米），不是地图直线距离，也不是时间。",
+                    "按累计行程计算，不是直线距离。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
                 Text(
-                    "未选择从桶：无需填写启动间隔 d，仅主桶执行到 L。",
+                    "仅主桶执行到 L。",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
@@ -197,32 +197,19 @@ fun DeploymentPublishScreen(
 
         SectionCard(title = "布设预览（沿路线累计行程）") {
             if (draft.preview.isEmpty()) {
-                Text(
-                    if (draft.n == 0) {
-                        "填写 L 后显示主桶目标行程。"
-                    } else {
-                        "填写 L、d 后显示主桶与各从桶的目标行程。"
-                    },
-                    color = NeutralGrey,
-                )
+                Text("填写参数后显示目标行程。", color = NeutralGrey)
             } else {
                 draft.preview.forEach { p -> TargetRow(p) }
-                Spacer(Modifier.height(8.dp))
-                if (draft.n == 0) {
+                if (draft.n > 0) {
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "仅主桶执行到 L，没有从桶启动链路。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text(
-                        "启动链路：主桶自身到 d → 启动从 1；从 1 自身到 d → 上报主桶 → 启动从 2；依此类推。",
+                        "主桶到 d 启动从 1；从 k 到 d 上报后启动从 k+1。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "注意：从 k 移动到 d 只是达到启动间隔，不是到达最终位置；后续桶不会停在 d 等待。",
+                        "d 是启动间隔，不是最终位置。",
                         style = MaterialTheme.typography.labelSmall,
                         color = WarnOrange,
                     )
@@ -249,15 +236,15 @@ fun DeploymentPublishScreen(
         SectionCard(title = "人工现场确认") {
             CheckRow(
                 if (draft.n == 0) {
-                    "我已现场确认：主桶置于起始线，朝向布设方向，路线无障碍物和人员。"
+                    "已确认主桶位于起始线、朝向正确、路线无障碍。"
                 } else {
-                    "我已现场确认：所有锥桶按编队顺序置于同一起始线，朝向布设方向，路线无障碍物和人员。"
+                    "已确认锥桶位于起始线、朝向正确、路线无障碍。"
                 },
                 draft.precheckSafety,
                 vm::toggleSafety,
             )
             CheckRow(
-                if (draft.n == 0) "我已核对主桶编号与 APP 一致。" else "我已核对主桶/从桶编号与 APP 顺序一致。",
+                if (draft.n == 0) "已核对主桶编号与 APP 一致。" else "已核对锥桶编号与 APP 顺序一致。",
                 draft.precheckOrder,
                 vm::toggleOrder,
             )
@@ -385,8 +372,7 @@ private fun SafetyBanner() {
             .padding(10.dp),
     ) {
         Text(
-            "系统按设备累计行程触发逐级启动。行程反馈不代表精确间距，也不替代现场安全验收。" +
-                "异常时系统不会自动跳过，也不会自动重发运动/启动指令。",
+            "系统不会自动跳过或重发指令；请以现场安全验收为准。",
             color = WarnOrange,
             style = MaterialTheme.typography.bodySmall,
         )

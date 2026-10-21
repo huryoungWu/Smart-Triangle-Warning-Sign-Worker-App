@@ -28,8 +28,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.vehicle.DistanceRange
 import com.example.myapplication.core.model.vehicle.LightMode
 import com.example.myapplication.core.data.prefs.SettingsRepository
-import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
-import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.MenuRow
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
@@ -38,7 +36,6 @@ import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
-import com.example.myapplication.di.LocationSource
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.NeutralGreyBg
@@ -57,7 +54,6 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     vm: VehicleViewModel,
     onOpenDeviceInfo: () -> Unit,
-    onOpenDebug: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenServerConfig: () -> Unit,
     onBackToLogin: () -> Unit,
@@ -87,10 +83,9 @@ fun SettingsScreen(
 
 
 
-        // 权限与定位（FR-502 对应：真实权限状态，不再是模拟）
+        // 权限与定位
         SectionCard(title = "权限与定位") {
             val permission = rememberLocationPermissionState()
-            val locationSource = ServiceLocator.get(LocalContext.current).locationSource
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text("定位权限", modifier = Modifier.weight(1f))
@@ -112,16 +107,6 @@ fun SettingsScreen(
                 SecondaryActionButton(text = "去系统设置", onClick = permission::openAppSettings)
             }
 
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("定位数据来源", modifier = Modifier.weight(1f))
-                Text(
-                    text = if (locationSource == LocationSource.AMAP) "真实高德定位" else "模拟轨迹（演示）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-
             Spacer(Modifier.height(8.dp))
         }
 
@@ -129,20 +114,17 @@ fun SettingsScreen(
         // ── 更多（APP 一切入口）──
         SectionCard(title = "更多") {
             MenuRow("服务器地址", onClick = onOpenServerConfig)
-            MenuRow("调试数据", onClick = onOpenDebug)
             MenuRow("关于我们", onClick = onOpenAbout)
             MenuRow("帮助与反馈", onClick = {
                 vm.showInfo(
                     "帮助与反馈",
-                    "常见问题：\n\n" +
-                        "· 连不上设备：确认手机已连上小车热点，且设备已上电\n" +
-                        "· 任务发不出：检查是否已连接、是否勾选现场安全确认\n" +
-                        "· 遥控不响应：确认设备已连接、未急停锁定/安全停止；任务执行中也可以手动微调\n\n" +
-                        "如需反馈问题，请联系项目组。",
+                    "· 连不上：检查设备热点与上电\n" +
+                        "· 发不出：检查连接与现场确认\n" +
+                        "· 遥控无响应：检查连接/急停状态",
                 )
             })
             MenuRow("检查更新", onClick = {
-                vm.showInfo("检查更新", "当前已是最新版本 V1.0（演示）。")
+                vm.showInfo("检查更新", "当前已是最新版本。")
             })
             MenuRow("切换账号", onClick = {
                 scope.launch { auth.logout() } // 清空本地会话（token），回登录页重新登录

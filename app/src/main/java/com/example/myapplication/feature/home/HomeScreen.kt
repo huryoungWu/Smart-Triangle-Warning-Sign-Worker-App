@@ -80,7 +80,7 @@ fun HomeScreen(
     val linkLabel = when (sl.transport) {
         DeviceTransport.SERVER -> "服务端 $serverUrl"
         DeviceTransport.HTTP -> "本地 Wi-Fi 192.168.4.1"
-        DeviceTransport.FAKE -> "模拟设备"
+        DeviceTransport.FAKE -> "本机模式"
     }
 
     Column(
@@ -91,12 +91,6 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PageTitle("三脚架布设", subtitle = "单设备 · 定距路线", onBack = onSwitchWorkType)
-
-        Text(
-            text = "连接单台三角警示牌设备后发布定距路线任务。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
 
         // ── 当前设备 ──
         SectionCard(title = "当前设备") {
@@ -181,7 +175,7 @@ fun HomeScreen(
         )
         if (connected && !state.taskStartEnabled) {
             Text(
-                text = "当前状态不允许发布（急停锁定／任务运行中／命令未确认）",
+                text = "当前状态不可发布",
                 style = MaterialTheme.typography.labelSmall,
                 color = WarnOrange,
             )

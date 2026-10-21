@@ -6,7 +6,7 @@ package com.example.myapplication.navigation
  * 主流程：登录 → 作业类型选择 →（三角牌 / 锥桶协同）→ 设备连接 → 作业主页 → 任务发布 → 执行
  */
 object Routes {
-    /** 主流程第 ⓪ 站：登录（演示状态可跳过） */
+    /** 主流程第 ⓪ 站：登录 */
     const val LOGIN = "login"
 
     /** 登录后第一站：作业类型选择（三角牌 / 锥桶协同） */
@@ -32,7 +32,6 @@ object Routes {
     const val DEPLOYMENT_RECORDS = "deployment_records"
 
     const val MAP = "map"
-    const val DEBUG = "debug"
     const val DEVICE_INFO = "device_info"
     const val ABOUT = "about"
 
@@ -55,7 +54,7 @@ object Routes {
     val bottomBarPages = setOf(
         WORK_TYPE, CONNECT, HOME, RISK, RECORDS, SETTINGS, TASK_PUBLISH, TASK_EXEC,
         CONE_CONNECT, CONE_HOME, DEPLOYMENT_PUBLISH, DEPLOYMENT_EXEC, DEPLOYMENT_RECORDS,
-        MAP, DEBUG, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL, SERVER_CONFIG,
+        MAP, DEVICE_INFO, ABOUT, ACCIDENT_DETAIL, SERVER_CONFIG,
     )
 
     /**

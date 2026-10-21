@@ -137,11 +137,7 @@ fun RecordsScreen(
                 if (records.isEmpty()) {
                     SectionCard(title = "暂无作业记录") {
                         Text(
-                            if (serverUpload) {
-                                "完成一次定距布置或一键布置后，记录会自动保存到本机并上传服务端。"
-                            } else {
-                                "完成一次定距布置或一键布置后，记录会自动保存到本机（${WorkRecord.LOCAL_ONLY_NOTICE}）。"
-                            },
+                            "完成作业后，记录会自动保存。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -198,7 +194,7 @@ fun RecordsScreen(
                     deploymentState.records.isEmpty() -> {
                         EmptyStateCard(
                             title = "暂无锥桶布设记录",
-                            message = "完成或终止一次锥桶协同布设后，记录会显示在这里。",
+                            message = "完成或终止布设后显示记录。",
                         )
                     }
 
@@ -302,9 +298,9 @@ private fun RecordCard(record: WorkRecord, timeText: String) {
             if (record.uploadState == WorkRecord.UPLOAD_UPLOADED) {
                 Text(
                     if (serverUpload) {
-                        "服务端单号 ${record.serverId ?: "-"}（Mock 联调服务端）"
+                        "服务端单号 ${record.serverId ?: "-"}"
                     } else {
-                        "演示占位单号 ${record.serverId ?: "-"}，未接入真实服务器"
+                        "单号 ${record.serverId ?: "-"}"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,

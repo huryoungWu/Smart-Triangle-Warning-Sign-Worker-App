@@ -98,7 +98,7 @@ fun DebugScreen(
                 )
             }
             Spacer(Modifier.height(8.dp))
-            SafetyText("行程由车轮编码器估算，不代表地图定位、障碍检测或道路安全评分。")
+            SafetyText("行程为编码器估算，非 GPS。")
         }
 
         SectionCard(title = "计数维护") {

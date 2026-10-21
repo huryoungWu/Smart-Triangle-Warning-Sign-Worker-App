@@ -57,4 +57,4 @@ fun LockedFeatureCard(
 }
 
 /** 置灰说明弹窗文案 */
-const val LOCKED_FEATURE_NOTICE = "该能力需新增硬件/定位/通信系统验收后开放，当前版本仅供演示占位。"
+const val LOCKED_FEATURE_NOTICE = "该能力需完成硬件/定位/通信验收后开放。"

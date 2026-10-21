@@ -11,7 +11,7 @@ import com.example.myapplication.ui.theme.MyApplicationTheme
 
 /**
  * 三角警示牌作业人员 APP 入口。
- * 首版不依赖账号/云端（M01），无登录门控，直接进入作业首页。
+ * 登录后进入作业类型选择。
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

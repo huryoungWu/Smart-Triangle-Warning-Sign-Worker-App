@@ -309,7 +309,7 @@ fun DeploymentExecScreen(
                         caption = if (coneAnchor == null) {
                             "暂无手机定位锚点，无法估算锥桶位置；请允许定位后重试。"
                         } else {
-                            "蓝点=主桶，橙点=从桶，绿点=已到位，灰点=已跳过；连线为运行轨迹；按各桶位置/朝向估算（旧数据回退正北投影，非 GPS）。"
+                            "蓝=主桶，橙=从桶，绿=到位，灰=跳过；连线为轨迹（估算，非 GPS）。"
                         },
                     )
                 }
@@ -337,7 +337,7 @@ fun DeploymentExecScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "主桶 ${masterCode} 实时视频（UDP，接口同三角架实时视频）",
+                        "主桶 ${masterCode} 实时视频",
                         style = MaterialTheme.typography.labelSmall,
                         color = NeutralGrey,
                     )
@@ -346,7 +346,7 @@ fun DeploymentExecScreen(
 
             // 异常横幅：一旦出现必须显性展示
             if (event.anomalies.isNotEmpty()) {
-                SectionCard(title = "异常（系统不会自动跳过）") {
+                SectionCard(title = "异常") {
                     event.anomalies.forEach { a ->
                         Text(
                             "• ${a.deviceCode ?: ""} ${a.label}（${a.code}）",
@@ -356,7 +356,7 @@ fun DeploymentExecScreen(
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "请先暂停/现场处置，再按安全流程重试；无法恢复时可人工跳过当前从桶（仅异常阻断时）。",
+                        "请先暂停并现场处置；仅在异常阻断时可人工跳过。",
                         style = MaterialTheme.typography.labelSmall,
                         color = WarningRed,
                     )
@@ -365,16 +365,16 @@ fun DeploymentExecScreen(
 
             // 当前链路下一步
             event.nextExpected?.let { next ->
-                SectionCard(title = "当前链路") {
+                SectionCard(title = "下一步") {
                     val text = when (next.type) {
-                        "trigger" -> "等待主桶自身行程达到 ${fmt(next.thresholdM)} m 后触发 ${next.afterReportTrigger ?: "从 1"}"
-                        "report" -> "等待 ${next.deviceCode} 自身行程达到 ${fmt(next.thresholdM)} m 后上报" +
-                            (next.afterReportTrigger?.let { "，随后触发 $it" } ?: "")
+                        "trigger" -> "主桶到 ${fmt(next.thresholdM)} m → 触发 ${next.afterReportTrigger ?: "从 1"}"
+                        "report" -> "${next.deviceCode} 到 ${fmt(next.thresholdM)} m 后上报" +
+                            (next.afterReportTrigger?.let { " → $it" } ?: "")
                         else -> "等待 ${next.deviceCode}"
                     }
                     Text(text, color = InfoBlue, fontWeight = FontWeight.Bold)
                     Text(
-                        "注意：是设备自身行程达到 d，不是主桶走到 (k+1)×d；从桶之间不直接发启动指令。",
+                        "按设备自身行程达到 d 触发，不是主桶累计 2d。",
                         style = MaterialTheme.typography.labelSmall,
                         color = NeutralGrey,
                     )
@@ -406,7 +406,7 @@ fun DeploymentExecScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "人工跳过会绕过逐级启动链路；仅在已现场确认设备停止/移出、下一只路径安全时使用。",
+                        "仅在现场确认设备已停止/移出时使用。",
                         style = MaterialTheme.typography.labelSmall,
                         color = WarningRed,
                     )
@@ -462,7 +462,7 @@ fun DeploymentExecScreen(
     if (showManualConfirm) {
         ConfirmDialog(
             title = "进入手动干预？",
-            message = "将先暂停全部锥桶，再对选中的一只进行点动。手动移动计入该桶行程；完成后需手动「继续布设」才恢复自动链路。",
+            message = "先暂停全部锥桶，再点动选中的一只；完成后需手动继续布设。",
             confirmText = "暂停并进入",
             onConfirm = {
                 showManualConfirm = false
@@ -489,7 +489,7 @@ fun DeploymentExecScreen(
     if (showResumeConfirm) {
         ConfirmDialog(
             title = "继续布设？",
-            message = "所有锥桶将恢复自动移动。请确认手动点动已停止、现场路径安全。",
+            message = "全部锥桶将恢复自动移动，请确认现场安全。",
             confirmText = "继续布设",
             onConfirm = {
                 showResumeConfirm = false
@@ -502,7 +502,7 @@ fun DeploymentExecScreen(
     if (showPauseConfirm) {
         ConfirmDialog(
             title = "暂停全部锥桶？",
-            message = "将立即停止所有正在移动的锥桶，并冻结逐级启动。确认现场安全后可继续。",
+            message = "将停止全部锥桶并冻结启动链路。",
             confirmText = "暂停全部",
             onConfirm = {
                 showPauseConfirm = false
@@ -515,7 +515,7 @@ fun DeploymentExecScreen(
     if (showAbortConfirm) {
         ConfirmDialog(
             title = "终止本次布设？",
-            message = "将停止所有锥桶并结束事件；离线设备需现场处置。事件不会标记为完成。",
+            message = "将停止全部锥桶并结束事件，不会标记为完成。",
             confirmText = "终止事件",
             onConfirm = {
                 showAbortConfirm = false
@@ -528,7 +528,7 @@ fun DeploymentExecScreen(
     if (showRetryConfirm) {
         ConfirmDialog(
             title = "按安全流程重试？",
-            message = "将复用同一指令 ID 重试当前阻断步骤；若设备已执行，不会二次移动。请先确认设备状态与现场安全。",
+            message = "复用同一指令重试；已执行的设备不会二次移动。",
             confirmText = "重试",
             danger = false,
             onConfirm = {
@@ -941,7 +941,7 @@ private fun SkipDeviceDialog(
         text = {
             Column {
                 Text(
-                    "该操作仅在异常阻断时可用，且会绕过逐级启动链路；被跳过设备不计为到达，事件将记录为“带异常完成”。",
+                    "仅在异常阻断时可用；被跳过设备不计到达，事件记为异常完成。",
                     color = WarningRed,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -1005,8 +1005,8 @@ private fun VerifyDeviceDialog(
         text = {
             Column {
                 Text(
-                    if (device.skipped) "该设备为人工跳过，请核验其处置方式（人工摆放/移出路线/不参与）。"
-                    else "请核对实际位置、朝向、间距、灯光与现场安全条件；App 数字不能替代现场核验。",
+                    if (device.skipped) "人工跳过设备，请核验处置方式。"
+                    else "请核对位置、朝向、间距和现场安全。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -1131,13 +1131,13 @@ private fun ManualJogDialog(
                         selected.arrived -> "所选桶已到位"
                         selected.phase != DeploymentPhase.STOPPED -> "所选桶当前状态 ${selected.phase.label}，不能点动"
                         selected.traveledM >= selected.targetM - 1e-9 -> "目标已达成，继续布设后确认"
-                        else -> "按住方向键点动，松手停车；仅所选桶动作。手动移动计入该桶行程。"
+                        else -> "按住点动，松手停车；仅所选桶动作。"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (canJog) NeutralGrey else WarnOrange,
                 )
                 Text(
-                    "手动干预期间布设已暂停；关闭后保持暂停，需点「继续布设」恢复自动链路。",
+                    "关闭后保持暂停，需手动继续布设。",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )
