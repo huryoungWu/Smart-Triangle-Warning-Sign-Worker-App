@@ -94,6 +94,28 @@ class DeploymentDraftTest {
     }
 
     @Test
+    fun `device errors ignore event info`() {
+        val d = draft("60", "10", 2, lane = null)
+        assertTrue(d.eventErrors().any { it.contains("作业车道") })
+        assertTrue(d.deviceErrors().isEmpty())
+    }
+
+    @Test
+    fun `event errors ignore device selection`() {
+        val d = DeploymentDraft(
+            name = "test",
+            lane = 2,
+            master = null,
+            slaves = emptyList(),
+            lText = "60",
+            dText = "10",
+        )
+        assertTrue(d.eventErrors().isEmpty())
+        assertTrue(d.deviceErrors().any { it.contains("请选择主桶") })
+        assertTrue(d.deviceErrors().any { it.contains("请至少选择 1 只从桶") })
+    }
+
+    @Test
     fun `master cannot be a slave`() {
         val master = dev("M", DeploymentDeviceType.MASTER_CONE)
         val d = DeploymentDraft(

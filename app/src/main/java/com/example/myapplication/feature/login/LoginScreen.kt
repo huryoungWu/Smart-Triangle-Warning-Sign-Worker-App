@@ -77,13 +77,13 @@ fun LoginScreen(
 
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "智能三角警示牌作业",
+            text = "智能道路作业",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
         )
         Text(
-            text = "请登录后继续作业",
+            text = "请登录后选择作业类型（三脚架布设 / 锥桶协同）",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

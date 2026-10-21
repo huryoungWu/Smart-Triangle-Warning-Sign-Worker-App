@@ -395,6 +395,37 @@ class VehicleViewModel(
         reloadDevices()
     }
 
+    /**
+     * 新登录会话开始（登录成功或跳过登录）：
+     * 先清掉上一账号的连接/任务状态，再按新身份刷新设备列表。
+     */
+    fun onSessionStarted() {
+        clearSessionState()
+        reloadDevices()
+    }
+
+    /** 登出/切换账号：断开连接并清空用户相关状态，不再发请求。 */
+    fun onLoggedOut() {
+        clearSessionState()
+    }
+
+    private fun clearSessionState() {
+        disconnect()
+        _uiState.update {
+            it.copy(
+                deviceList = emptyList(),
+                selectedDeviceCode = "",
+                activeSpec = null,
+                taskCompletedByUser = false,
+                pendingVerify = null,
+                uploadRecord = null,
+                pendingResumeConfirm = false,
+                draft = TaskSpec.defaultFixed(),
+                dialog = null,
+            )
+        }
+    }
+
     /** 失联立即显示"已断开／状态未确认"并禁用运动操作（M01） */
     private fun onLinkLost() {
         val wasConnected = _uiState.value.connection == ConnectionPhase.CONNECTED

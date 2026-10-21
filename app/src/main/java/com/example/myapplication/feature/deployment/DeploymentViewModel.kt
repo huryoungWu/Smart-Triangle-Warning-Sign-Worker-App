@@ -30,7 +30,6 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class DeploymentUiState(
-    val step: Int = 1,
     val draft: DeploymentDraft = DeploymentDraft(),
     val allDevices: List<DeploymentDeviceSummary> = emptyList(),
     val masterCandidates: List<DeploymentDeviceSummary> = emptyList(),
@@ -65,18 +64,21 @@ class DeploymentViewModel(
     private var pollJob: Job? = null
     private var createClientId: String? = null
 
-    init {
-        reloadDevices()
-        loadActiveEvent()
-    }
+    /**
+     * 会话代号：登录/切换服务器/登出时递增。
+     * 异步响应回来时若代号已变化，说明是旧会话的请求，直接丢弃，避免旧数据覆盖新会话。
+     */
+    private var sessionEpoch = 0
 
     // ────────────────────────── 设备台账 ──────────────────────────
 
     fun reloadDevices() {
+        val epoch = sessionEpoch
         viewModelScope.launch {
             _uiState.update { it.copy(loading = true) }
             repository.listDevices()
                 .onSuccess { devices ->
+                    if (epoch != sessionEpoch) return@onSuccess
                     _uiState.update { s ->
                         val masters = devices.filter { it.deviceType == DeploymentDeviceType.MASTER_CONE }
                         val slaves = devices.filter { it.deviceType == DeploymentDeviceType.SLAVE_CONE }
@@ -88,6 +90,7 @@ class DeploymentViewModel(
                         }
                         s.copy(
                             loading = false,
+                            error = null,
                             allDevices = devices,
                             masterCandidates = masters,
                             slaveCandidates = mergeSlaveCandidates(slaves, s.deviceSet),
@@ -99,6 +102,7 @@ class DeploymentViewModel(
                     }
                 }
                 .onFailure { e ->
+                    if (epoch != sessionEpoch) return@onFailure
                     _uiState.update { it.copy(loading = false, error = e.message ?: "无法获取设备列表") }
                 }
         }
@@ -251,32 +255,17 @@ class DeploymentViewModel(
         }
     }
 
-    // ────────────────────────── 步骤 ──────────────────────────
+    // ────────────────────────── 设备连接页校验 ──────────────────────────
 
-    fun nextStep() {
-        val s = _uiState.value
-        when (s.step) {
-            1 -> {
-                val errors = s.draft.step1Errors()
-                if (errors.isNotEmpty()) {
-                    _uiState.update { it.copy(error = errors.joinToString("\n")) }
-                    return
-                }
-                _uiState.update { it.copy(step = 2, error = null) }
-            }
-            2 -> {
-                val errors = s.draft.step2Errors()
-                if (errors.isNotEmpty()) {
-                    _uiState.update { it.copy(error = errors.joinToString("\n")) }
-                    return
-                }
-                _uiState.update { it.copy(step = 3, error = null) }
-            }
+    /** 设备连接页「完成设备连接」：只校验设备，不校验事件名/车道/L/d。 */
+    fun validateDevices(): Boolean {
+        val errors = _uiState.value.draft.deviceErrors()
+        if (errors.isNotEmpty()) {
+            _uiState.update { it.copy(error = errors.joinToString("\n")) }
+            return false
         }
-    }
-
-    fun prevStep() {
-        _uiState.update { it.copy(step = (it.step - 1).coerceAtLeast(1), error = null) }
+        _uiState.update { it.copy(error = null) }
+        return true
     }
 
     // ────────────────────────── 启动 / 查询 ──────────────────────────
@@ -301,7 +290,6 @@ class DeploymentViewModel(
                                     event = running,
                                     selectedEventId = running.deploymentId,
                                     activeEvent = if (running.terminal) null else running,
-                                    step = 1,
                                 )
                             }
                             onStarted(running.deploymentId)
@@ -322,9 +310,11 @@ class DeploymentViewModel(
      */
     fun loadActiveEvent(force: Boolean = false) {
         if (!force && _uiState.value.selectedEventId != null) return
+        val epoch = sessionEpoch
         viewModelScope.launch {
             repository.activeDeployment()
                 .onSuccess { event ->
+                    if (epoch != sessionEpoch) return@onSuccess
                     _uiState.update { s ->
                         if (!force && s.selectedEventId != null) s
                         else s.copy(
@@ -521,10 +511,17 @@ class DeploymentViewModel(
     }
 
     fun loadRecords() {
+        val epoch = sessionEpoch
         viewModelScope.launch {
             repository.listDeployments()
-                .onSuccess { list -> _uiState.update { it.copy(records = list) } }
-                .onFailure { e -> _uiState.update { it.copy(error = e.message ?: "加载布设记录失败") } }
+                .onSuccess { list ->
+                    if (epoch != sessionEpoch) return@onSuccess
+                    _uiState.update { it.copy(records = list) }
+                }
+                .onFailure { e ->
+                    if (epoch != sessionEpoch) return@onFailure
+                    _uiState.update { it.copy(error = e.message ?: "加载布设记录失败") }
+                }
         }
     }
 
@@ -550,7 +547,6 @@ class DeploymentViewModel(
         createClientId = null
         _uiState.update {
             it.copy(
-                step = 1,
                 draft = DeploymentDraft(),
                 deviceSet = null,
                 event = null,
@@ -561,6 +557,33 @@ class DeploymentViewModel(
         }
         reloadDevices()
         loadActiveEvent()
+    }
+
+    // ────────────────────────── 会话生命周期 ──────────────────────────
+
+    /** 登录成功/跳过登录后调用：清掉旧会话状态，再按新身份加载。 */
+    fun onSessionStarted() {
+        resetForNewSession()
+        reloadDevices()
+        loadActiveEvent(force = true)
+    }
+
+    /** 服务器地址已切换：旧服务端的数据全部作废，重新加载。 */
+    fun onServerChanged() {
+        resetForNewSession()
+        reloadDevices()
+    }
+
+    /** 登出/切换账号：清空状态，不再发请求。 */
+    fun clearSession() {
+        resetForNewSession()
+    }
+
+    private fun resetForNewSession() {
+        sessionEpoch++
+        stopPolling()
+        createClientId = null
+        _uiState.value = DeploymentUiState()
     }
 
     override fun onCleared() {

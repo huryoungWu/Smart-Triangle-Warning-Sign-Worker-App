@@ -1,12 +1,11 @@
 package com.example.myapplication.navigation
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -17,6 +16,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -25,9 +25,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.myapplication.core.ui.NewRiskAlertDialog
-import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
-import com.example.myapplication.feature.risk.RiskAlertViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -35,20 +32,25 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.myapplication.core.ui.AppDialogRenderer
 import com.example.myapplication.core.model.vehicle.TaskKind
+import com.example.myapplication.core.ui.AppDialogRenderer
+import com.example.myapplication.core.ui.NewRiskAlertDialog
+import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
 import com.example.myapplication.feature.connect.ConnectScreen
-import com.example.myapplication.feature.deployment.DeploymentCreateScreen
+import com.example.myapplication.feature.debug.DebugScreen
+import com.example.myapplication.feature.deployment.ConeConnectScreen
+import com.example.myapplication.feature.deployment.ConeHomeScreen
 import com.example.myapplication.feature.deployment.DeploymentExecScreen
+import com.example.myapplication.feature.deployment.DeploymentPublishScreen
 import com.example.myapplication.feature.deployment.DeploymentRecordsScreen
 import com.example.myapplication.feature.deployment.DeploymentViewModel
-import com.example.myapplication.feature.login.LoginScreen
-import com.example.myapplication.feature.debug.DebugScreen
 import com.example.myapplication.feature.home.HomeScreen
+import com.example.myapplication.feature.login.LoginScreen
 import com.example.myapplication.feature.map.MapScreen
 import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.record.RecordsScreen
 import com.example.myapplication.feature.risk.AccidentDetailScreen
+import com.example.myapplication.feature.risk.RiskAlertViewModel
 import com.example.myapplication.feature.risk.RiskScreen
 import com.example.myapplication.feature.settings.AboutScreen
 import com.example.myapplication.feature.settings.DeviceInfoScreen
@@ -57,22 +59,27 @@ import com.example.myapplication.feature.settings.SettingsScreen
 import com.example.myapplication.feature.task.TaskExecScreen
 import com.example.myapplication.feature.task.TaskPublishScreen
 import com.example.myapplication.feature.vehicle.VehicleViewModel
+import com.example.myapplication.feature.worktype.WorkTypeSelectScreen
 import kotlinx.coroutines.awaitCancellation
 
-private data class TabItem(val route: String, val label: String, val icon: ImageVector)
+/** 底栏项：route = null 表示「作业」动态项，目标由当前 WorkType 决定。 */
+private data class TabItem(val route: String?, val label: String, val icon: ImageVector)
 
 private val tabItems = listOf(
-    TabItem(Routes.HOME, "作业", Icons.Default.Home),
+    TabItem(null, "作业", Icons.Default.Home),
     TabItem(Routes.RISK, "风险", Icons.Default.Warning),
-    TabItem(Routes.RECORDS, "记录", Icons.Default.List),
+    TabItem(Routes.RECORDS, "记录", Icons.AutoMirrored.Filled.List),
     TabItem(Routes.SETTINGS, "设置", Icons.Default.Settings),
 )
 
 /**
  * 顶层导航。
  *
- * 主流程：HOME（连接门）→ TASK_PUBLISH（发布表单）→ TASK_EXEC（执行，无启动按钮）。
- * 发布时 `popUpTo(TASK_PUBLISH){inclusive=true}`，表单出栈防重复发布。
+ * 登录后先进入「作业类型选择」：
+ * - 三脚架布设：CONNECT → HOME → TASK_PUBLISH → TASK_EXEC
+ * - 锥桶协同布设：CONE_CONNECT → CONE_HOME → DEPLOYMENT_PUBLISH → DEPLOYMENT_EXEC
+ *
+ * 两条流程的设备连接与任务发布互不依赖；RISK / RECORDS / SETTINGS 为共享页面。
  */
 @Composable
 fun AppNavHost() {
@@ -81,6 +88,11 @@ fun AppNavHost() {
     val mapVm: MapViewModel = viewModel(factory = MapViewModel.Factory)
     val deploymentVm: DeploymentViewModel = viewModel(factory = DeploymentViewModel.Factory)
     val state by vm.uiState.collectAsStateWithLifecycle()
+
+    // 作业类型：会话级选择；配置变更/进程重建可恢复，登出/换服务器/回登录页时清空
+    var workTypeToken by rememberSaveable { mutableStateOf<String?>(null) }
+    val workType = WorkType.fromToken(workTypeToken)
+    val workLanding = workType?.landingRoute ?: Routes.WORK_TYPE
 
     // 新风险轮询（Activity 级，跨页面共享；必须在 NavHost 外创建）
     val riskAlertVm: RiskAlertViewModel = viewModel(
@@ -91,10 +103,28 @@ fun AppNavHost() {
     val pendingAlert by riskAlertVm.pendingAlert.collectAsStateWithLifecycle()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
+    // destination.route 会带查询参数模式（如 task_publish?kind={kind}），统一归一化
+    val currentRoute = backStackEntry?.destination?.route?.substringBefore('?')
 
     // 事故详情传参（简单场景用内存传递，避免序列化）
     var pendingAccident by remember { mutableStateOf<com.example.myapplication.core.model.risk.Accident?>(null) }
+
+    // 返回「作业类型选择」：流程主页都在选择页之上，直接回退即可
+    val switchWorkType: () -> Unit = {
+        if (!navController.popBackStack(Routes.WORK_TYPE, inclusive = false)) {
+            navController.navigate(Routes.WORK_TYPE) { launchSingleTop = true }
+        }
+    }
+
+    // 登录/跳过登录统一入口：两个业务的会话状态都复位，再进入类型选择
+    val onSessionReady: () -> Unit = {
+        vm.onSessionStarted()
+        deploymentVm.onSessionStarted()
+        workTypeToken = null
+        navController.navigate(Routes.WORK_TYPE) {
+            popUpTo(Routes.LOGIN) { inclusive = true }
+        }
+    }
 
     // 仅前台轮询：STARTED 启动，进入后台停止
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -121,10 +151,18 @@ fun AppNavHost() {
 
     Scaffold(
         bottomBar = {
-            if (currentRoute in Routes.bottomBarPages) {
+            if (Routes.showsBottomBar(currentRoute)) {
                 AppBottomBar(
                     currentRoute = currentRoute,
-                    onSelect = { route -> navController.navigateToTab(route) },
+                    workLanding = workLanding,
+                    workType = workType,
+                    onSelect = { route ->
+                        if (route == null) {
+                            navController.navigateToWorkLanding(workLanding)
+                        } else {
+                            navController.navigateToTab(route, workLanding)
+                        }
+                    },
                 )
             }
         },
@@ -136,61 +174,120 @@ fun AppNavHost() {
         ) {
             // ⓪ 登录页：接入服务端登录（默认账号 demo/123456 已预填），可跳过
             composable(Routes.LOGIN) {
+                LaunchedEffect(Unit) { workTypeToken = null }
                 LoginScreen(
-                    onLoggedIn = {
-                        // 设备信息按登录用户获取：登录成功后刷新设备列表
-                        vm.reloadDevices()
-                        navController.navigate(Routes.CONNECT) {
-                            popUpTo(Routes.LOGIN) { inclusive = true }
-                        }
-                    },
-                    onSkip = {
-                        vm.reloadDevices()
-                        navController.navigate(Routes.CONNECT) {
-                            popUpTo(Routes.LOGIN) { inclusive = true }
+                    onLoggedIn = onSessionReady,
+                    onSkip = onSessionReady,
+                )
+            }
+
+            // ① 作业类型选择：三角警示牌 / 锥桶协同
+            composable(Routes.WORK_TYPE) {
+                WorkTypeSelectScreen(
+                    current = workType,
+                    onSelect = { type ->
+                        workTypeToken = type.token
+                        navController.navigate(type.startRoute) {
+                            launchSingleTop = true
                         }
                     },
                 )
             }
 
-            // ① 设备连接页：独立页，连接成功才放行
+            // ── 三角警示牌流程 ──
             composable(Routes.CONNECT) {
                 ConnectScreen(
                     vm = vm,
+                    onBack = { navController.popBackStack() },
                     onEnterWork = {
                         navController.navigate(Routes.HOME) {
                             popUpTo(Routes.CONNECT) { inclusive = true }
+                            launchSingleTop = true
                         }
-                    },
-                    onOpenDeployment = {
-                        navController.navigate(Routes.DEPLOYMENT_CREATE)
                     },
                 )
             }
 
-            // ② 开始作业页：单一入口「开始新任务」（定距布置 · 全自动驾驶）
             composable(Routes.HOME) {
                 HomeScreen(
                     vm = vm,
-                    deploymentVm = deploymentVm,
                     onOpenPublishFixed = {
                         navController.navigate("${Routes.TASK_PUBLISH}?${Routes.ARG_KIND}=${Routes.KIND_FIXED}")
                     },
-                    onBackToConnect = {
-                        navController.navigate(Routes.CONNECT) {
-                            popUpTo(Routes.HOME) { inclusive = true }
+                    onBackToConnect = { navController.navigate(Routes.CONNECT) },
+                    onOpenExec = { navController.navigate(Routes.TASK_EXEC) },
+                    onSwitchWorkType = switchWorkType,
+                )
+            }
+
+            // ── 锥桶协同布设流程 ──
+            composable(Routes.CONE_CONNECT) {
+                ConeConnectScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                    onDevicesReady = {
+                        navController.navigate(Routes.CONE_HOME) {
+                            popUpTo(Routes.CONE_CONNECT) { inclusive = true }
+                            launchSingleTop = true
                         }
                     },
-                    onOpenExec = { navController.navigate(Routes.TASK_EXEC) },
-                    onOpenDeployment = { navController.navigate(Routes.DEPLOYMENT_CREATE) },
-                    onOpenDeploymentExec = { id ->
+                    onOpenActiveDeployment = { id ->
                         deploymentVm.openEvent(id)
                         navController.navigate(Routes.DEPLOYMENT_EXEC)
                     },
                 )
             }
 
-            // 风险提示（新增 Tab）：半径可设 + 高德地图 + 距离排序事故列表
+            composable(Routes.CONE_HOME) {
+                ConeHomeScreen(
+                    vm = deploymentVm,
+                    onOpenDeviceConnect = { navController.navigate(Routes.CONE_CONNECT) },
+                    onOpenCreate = { navController.navigate(Routes.DEPLOYMENT_PUBLISH) },
+                    onOpenExec = { id ->
+                        deploymentVm.openEvent(id)
+                        navController.navigate(Routes.DEPLOYMENT_EXEC)
+                    },
+                    onSwitchWorkType = switchWorkType,
+                )
+            }
+
+            composable(Routes.DEPLOYMENT_PUBLISH) {
+                DeploymentPublishScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                    onEditDevices = {
+                        // 回到设备连接页时移除发布页，避免「完成设备连接」后重复叠页
+                        navController.navigate(Routes.CONE_CONNECT) {
+                            popUpTo(Routes.DEPLOYMENT_PUBLISH) { inclusive = true }
+                        }
+                    },
+                    onStarted = {
+                        navController.navigate(Routes.DEPLOYMENT_EXEC) {
+                            popUpTo(Routes.DEPLOYMENT_PUBLISH) { inclusive = true }
+                        }
+                    },
+                )
+            }
+
+            composable(Routes.DEPLOYMENT_EXEC) {
+                DeploymentExecScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(Routes.DEPLOYMENT_RECORDS) {
+                DeploymentRecordsScreen(
+                    vm = deploymentVm,
+                    onBack = { navController.popBackStack() },
+                    onOpen = { id ->
+                        deploymentVm.openEvent(id)
+                        navController.navigate(Routes.DEPLOYMENT_EXEC)
+                    },
+                )
+            }
+
+            // ── 共享页面 ──
             composable(Routes.RISK) {
                 RiskScreen(
                     vm = vm,
@@ -217,7 +314,12 @@ fun AppNavHost() {
             composable(Routes.RECORDS) {
                 RecordsScreen(
                     vm = vm,
+                    deploymentVm = deploymentVm,
                     onOpenDeployments = { navController.navigate(Routes.DEPLOYMENT_RECORDS) },
+                    onOpenDeploymentExec = { id ->
+                        deploymentVm.openEvent(id)
+                        navController.navigate(Routes.DEPLOYMENT_EXEC)
+                    },
                 )
             }
 
@@ -229,6 +331,9 @@ fun AppNavHost() {
                     onOpenAbout = { navController.navigate(Routes.ABOUT) },
                     onOpenServerConfig = { navController.navigate(Routes.SERVER_CONFIG) },
                     onBackToLogin = {
+                        workTypeToken = null
+                        vm.onLoggedOut()
+                        deploymentVm.clearSession()
                         navController.navigate(Routes.LOGIN) {
                             popUpTo(0) { inclusive = true }
                         }
@@ -239,9 +344,11 @@ fun AppNavHost() {
             composable(Routes.SERVER_CONFIG) {
                 ServerConfigScreen(
                     vm = vm,
+                    deploymentVm = deploymentVm,
                     onBack = { navController.popBackStack() },
                     // 地址已切换 → 旧会话作废，回登录页重新登录（同「切换账号」的写法）
                     onSaved = {
+                        workTypeToken = null
                         navController.navigate(Routes.LOGIN) {
                             popUpTo(0) { inclusive = true }
                         }
@@ -284,37 +391,6 @@ fun AppNavHost() {
                 )
             }
 
-            // ── 锥桶协同布设：向导 → 执行 → 记录 ──
-            composable(Routes.DEPLOYMENT_CREATE) {
-                DeploymentCreateScreen(
-                    vm = deploymentVm,
-                    onBack = { navController.popBackStack() },
-                    onStarted = {
-                        navController.navigate(Routes.DEPLOYMENT_EXEC) {
-                            popUpTo(Routes.DEPLOYMENT_CREATE) { inclusive = true }
-                        }
-                    },
-                )
-            }
-
-            composable(Routes.DEPLOYMENT_EXEC) {
-                DeploymentExecScreen(
-                    vm = deploymentVm,
-                    onBack = { navController.popBackStack() },
-                )
-            }
-
-            composable(Routes.DEPLOYMENT_RECORDS) {
-                DeploymentRecordsScreen(
-                    vm = deploymentVm,
-                    onBack = { navController.popBackStack() },
-                    onOpen = { id ->
-                        deploymentVm.openEvent(id)
-                        navController.navigate(Routes.DEPLOYMENT_EXEC)
-                    },
-                )
-            }
-
             composable(Routes.DEBUG) {
                 DebugScreen(vm = vm, onBack = { navController.popBackStack() })
             }
@@ -352,18 +428,26 @@ fun AppNavHost() {
             )
         }
     }
-
 }
 
 @Composable
 private fun AppBottomBar(
     currentRoute: String?,
-    onSelect: (String) -> Unit,
+    workLanding: String,
+    workType: WorkType?,
+    onSelect: (String?) -> Unit,
 ) {
     NavigationBar {
         tabItems.forEach { tab ->
+            val selected = if (tab.route == null) {
+                currentRoute == workLanding ||
+                    currentRoute == Routes.WORK_TYPE ||
+                    workType?.owns(currentRoute) == true
+            } else {
+                currentRoute == tab.route
+            }
             NavigationBarItem(
-                selected = currentRoute == tab.route,
+                selected = selected,
                 onClick = { onSelect(tab.route) },
                 icon = { Icon(tab.icon, contentDescription = tab.label) },
                 label = { Text(tab.label) },
@@ -372,10 +456,19 @@ private fun AppBottomBar(
     }
 }
 
-private fun NavHostController.navigateToTab(route: String) {
+/** 「作业」Tab：回到当前作业类型的主页；未选择类型时回到选择页。 */
+private fun NavHostController.navigateToWorkLanding(landing: String) {
+    navigate(landing) {
+        launchSingleTop = true
+        popUpTo(Routes.WORK_TYPE) { inclusive = false }
+    }
+}
+
+/** 其他共享 Tab：保留各 Tab 的返回栈状态。 */
+private fun NavHostController.navigateToTab(route: String, workLanding: String) {
     navigate(route) {
         launchSingleTop = true
-        popUpTo(Routes.HOME) { saveState = true }
+        popUpTo(workLanding) { saveState = true }
         restoreState = true
     }
 }

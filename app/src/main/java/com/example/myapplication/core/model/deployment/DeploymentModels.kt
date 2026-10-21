@@ -225,14 +225,20 @@ data class DeploymentDraft(
             }
         }
 
-    /** 步骤 1：设备与事件信息 */
-    fun step1Errors(): List<String> {
+    /** 事件信息校验（锥桶“布设任务发布页”使用，不涉及设备） */
+    fun eventErrors(): List<String> {
         val errors = mutableListOf<String>()
         if (name.length > DeploymentLimits.MAX_NAME_LEN) errors.add("事件名不能超过 ${DeploymentLimits.MAX_NAME_LEN} 字")
         if (note.length > DeploymentLimits.MAX_NOTE_LEN) errors.add("备注不能超过 ${DeploymentLimits.MAX_NOTE_LEN} 字")
         val laneNo = lane
         if (laneNo == null) errors.add("请填写作业车道（${LaneRange.MIN}~${LaneRange.MAX}）")
         else if (laneNo < LaneRange.MIN || laneNo > LaneRange.MAX) errors.add("作业车道须在 ${LaneRange.MIN}~${LaneRange.MAX} 之间")
+        return errors
+    }
+
+    /** 设备校验（锥桶“设备连接页”使用，不涉及事件名/车道/L/d） */
+    fun deviceErrors(): List<String> {
+        val errors = mutableListOf<String>()
         if (master == null) errors.add("请选择主桶")
         if (n < 1) errors.add("请至少选择 1 只从桶")
         if (n > DeploymentLimits.N_MAX) errors.add("从桶数量不能超过 ${DeploymentLimits.N_MAX}")
@@ -260,6 +266,9 @@ data class DeploymentDraft(
         return errors
     }
 
+    /** 兼容旧调用：设备 + 事件信息 */
+    fun step1Errors(): List<String> = eventErrors() + deviceErrors()
+
     /** 步骤 2：参数 L/d 与预览 */
     fun step2Errors(): List<String> {
         val errors = mutableListOf<String>()
@@ -281,11 +290,11 @@ data class DeploymentDraft(
                 errors.add("L 必须 ≥ N×d（当前 ${fmt(l)} < ${n}×${fmt(interval)}=${fmt(need)}）")
             }
         }
-        if (n == 0) errors.add("请先在步骤 1 选择从桶")
+        if (n == 0) errors.add("请先选择从桶")
         return errors
     }
 
-    fun validate(): List<String> = step1Errors() + step2Errors()
+    fun validate(): List<String> = eventErrors() + deviceErrors() + step2Errors()
 
     val precheckDone: Boolean get() = precheckSafety && precheckOrder
 

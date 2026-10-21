@@ -45,9 +45,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.DeviceSummary
 import com.example.myapplication.core.ui.AppIcons
+import androidx.compose.runtime.LaunchedEffect
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
-import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
@@ -76,13 +76,16 @@ import com.example.myapplication.ui.theme.WarningRedBg
 @Composable
 fun ConnectScreen(
     vm: VehicleViewModel,
+    onBack: () -> Unit,
     onEnterWork: () -> Unit,
-    onOpenDeployment: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snapshot = state.snapshot
     val connected = state.connection == ConnectionPhase.CONNECTED
     val connecting = state.connection == ConnectionPhase.CONNECTING
+
+    // 进入三角牌流程时按当前登录身份刷新一次设备列表
+    LaunchedEffect(Unit) { vm.reloadDevices() }
 
     val devices = state.deviceList
     val selected = devices.firstOrNull { it.id == state.selectedDeviceCode } ?: devices.firstOrNull()
@@ -127,7 +130,7 @@ fun ConnectScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        PageTitle("设备连接")
+        PageTitle("设备连接", subtitle = "三脚架布设", onBack = onBack)
 
         Text(
             "请选择设备并连接，连接成功后开始作业",
@@ -306,18 +309,6 @@ fun ConnectScreen(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
-
-        Spacer(Modifier.height(16.dp))
-        SecondaryActionButton(
-            text = "锥桶协同布设（多设备）",
-            onClick = onOpenDeployment,
-        )
-        Text(
-            text = "不要求先连接单台设备；在事件向导内选择主桶/从桶并完成绑定。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
 
         Spacer(Modifier.height(24.dp))
     }

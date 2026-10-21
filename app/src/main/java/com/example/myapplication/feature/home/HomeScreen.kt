@@ -10,21 +10,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -33,9 +24,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.di.DeviceTransport
 import com.example.myapplication.di.ServiceLocator
-import com.example.myapplication.core.model.deployment.DeploymentEvent
-import com.example.myapplication.core.model.deployment.DeploymentResult
-import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.vehicle.CommandKind
 import com.example.myapplication.core.model.vehicle.ConnectionPhase
 import com.example.myapplication.core.model.vehicle.TaskKind
@@ -45,7 +33,6 @@ import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
-import com.example.myapplication.feature.deployment.DeploymentViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
@@ -66,22 +53,16 @@ import com.example.myapplication.ui.theme.WarningRedBg
 @Composable
 fun HomeScreen(
     vm: VehicleViewModel,
-    deploymentVm: DeploymentViewModel,
     onOpenPublishFixed: () -> Unit,
     onBackToConnect: () -> Unit,
     onOpenExec: () -> Unit,
-    onOpenDeployment: () -> Unit,
-    onOpenDeploymentExec: (String) -> Unit,
+    onSwitchWorkType: () -> Unit,
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
-    val deploymentState by deploymentVm.uiState.collectAsStateWithLifecycle()
-    val activeDeployment = deploymentState.activeEvent
-    LaunchedEffect(Unit) { deploymentVm.loadActiveEvent(force = true) }
     val connected = state.connection == ConnectionPhase.CONNECTED
     val snapshot = state.snapshot
     val task = snapshot?.task
     val spec = state.activeSpec
-    var showTaskTypeDialog by remember { mutableStateOf(false) }
     // 首页不参与实时轮询：发布任务后快照可能仍是 IDLE。
     // 因此这里同时参考本地命令票据 —— 任务已下发且票据未进入终态，也算「正在执行」。
     val localTaskActive = state.activeTicket?.let {
@@ -109,10 +90,10 @@ fun HomeScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        PageTitle("开始作业", onBack = onBackToConnect)
+        PageTitle("三脚架布设", subtitle = "单设备 · 定距路线", onBack = onSwitchWorkType)
 
         Text(
-            text = "点击「开始新任务」选择三脚架布设或锥桶协同布设",
+            text = "连接单台三角警示牌设备后发布定距路线任务。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -189,18 +170,13 @@ fun HomeScreen(
             }
         }
 
-        // ── 进行中的锥桶协同布设事件（与「当前任务」并列）──
-        activeDeployment?.let { event ->
-            DeploymentActiveCard(
-                event = event,
-                onOpen = { onOpenDeploymentExec(event.deploymentId) },
-            )
-        }
-
-        // ── 开始新任务：三脚架布设 / 锥桶协同布设 二选一 ──
+        // ── 开始新任务（本流程只有三角牌定距布置）──
         PrimaryActionButton(
-            text = "开始新任务",
-            onClick = { showTaskTypeDialog = true },
+            text = "开始新任务（三脚架布设）",
+            onClick = {
+                vm.initDraft(TaskKind.FIXED_DISTANCE)
+                onOpenPublishFixed()
+            },
             enabled = connected && state.taskStartEnabled,
         )
         if (connected && !state.taskStartEnabled) {
@@ -211,91 +187,13 @@ fun HomeScreen(
             )
         }
 
+        Spacer(Modifier.height(8.dp))
+        SecondaryActionButton(
+            text = "切换作业类型",
+            onClick = onSwitchWorkType,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         Spacer(Modifier.height(24.dp))
     }
-
-    if (showTaskTypeDialog) {
-        AlertDialog(
-            onDismissRequest = { showTaskTypeDialog = false },
-            title = { Text("开始新任务") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("请选择作业类型", style = MaterialTheme.typography.bodyMedium)
-                    Button(
-                        onClick = {
-                            showTaskTypeDialog = false
-                            vm.initDraft(TaskKind.FIXED_DISTANCE)
-                            onOpenPublishFixed()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("三脚架布设", fontWeight = FontWeight.Bold)
-                            Text("单设备 · 定距路线", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            showTaskTypeDialog = false
-                            onOpenDeployment()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("锥桶协同布设", fontWeight = FontWeight.Bold)
-                            Text("1 主桶 + 多从桶 · 逐级启动", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTaskTypeDialog = false }) { Text("取消") }
-            },
-        )
-    }
 }
-
-/** 首页「已有进行中的布设事件」卡片：与「当前任务」同样的信息层级。 */
-@Composable
-private fun DeploymentActiveCard(event: DeploymentEvent, onOpen: () -> Unit) {
-    val (fg, bg) = when (event.state) {
-        DeploymentState.COMPLETED -> SafeGreen to SafeGreenBg
-        DeploymentState.ABORTED, DeploymentState.FAILED, DeploymentState.VERIFY_FAILED ->
-            WarningRed to WarningRedBg
-        DeploymentState.PAUSED, DeploymentState.PENDING_VERIFY ->
-            WarnOrange to WarnOrangeBg
-        else -> InfoBlue to InfoBlueBg
-    }
-    SectionCard(title = "已有进行中的布设事件") {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = event.name,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.weight(1f),
-            )
-            StatusChip(event.state.label, fg, bg)
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "L=${fmt(event.params.L)} m · d=${fmt(event.params.d)} m · N=${event.params.N}" +
-                (event.lane?.let { " · 第 $it 车道" } ?: ""),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            "已到达 ${event.arrivedCount}/${event.devices.size} · 已核验 ${event.verifiedCount}/${event.devices.size}" +
-                if (event.hasSkip) " · 人工跳过 ${event.devices.count { it.skipped }}" else "",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (event.result == DeploymentResult.COMPLETED_WITH_EXCEPTION) {
-            Spacer(Modifier.height(4.dp))
-            StatusChip("带异常完成", WarnOrange, WarnOrangeBg)
-        }
-        Spacer(Modifier.height(10.dp))
-        PrimaryActionButton(text = "进入布设执行", onClick = onOpen)
-    }
-}
-
-private fun fmt(v: Double): String =
-    if (v == v.toInt().toDouble()) v.toInt().toString() else String.format("%.1f", v)

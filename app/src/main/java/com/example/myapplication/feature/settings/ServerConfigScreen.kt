@@ -39,6 +39,7 @@ import com.example.myapplication.core.util.parseServerUrl
 import com.example.myapplication.core.util.ServerUrlResult
 import com.example.myapplication.di.ServerUrlApplyResult
 import com.example.myapplication.di.ServiceLocator
+import com.example.myapplication.feature.deployment.DeploymentViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
@@ -64,6 +65,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ServerConfigScreen(
     vm: VehicleViewModel,
+    deploymentVm: DeploymentViewModel,
     onBack: () -> Unit,
     /** 地址**确实变了**且已保存 → 由 AppNavHost 导航回登录页 */
     onSaved: () -> Unit,
@@ -185,8 +187,9 @@ fun ServerConfigScreen(
                                 }
 
                                 ServerUrlApplyResult.CHANGED -> {
-                                    // 必须在地址已生效之后：它会停掉旧连接并按新服务端拉设备列表
+                                    // 必须在地址已生效之后：停掉旧连接、清空旧服务端设备/布设状态
                                     vm.onServerChanged()
+                                    deploymentVm.onServerChanged()
                                     saving = false
                                     vm.showInfo(
                                         "服务器已切换",
@@ -235,6 +238,7 @@ fun ServerConfigScreen(
                     when (sl.resetServerBaseUrl()) {
                         ServerUrlApplyResult.CHANGED -> {
                             vm.onServerChanged()
+                            deploymentVm.onServerChanged()
                             saving = false
                             vm.showInfo("服务器地址", "已恢复为 $compileTimeDefault")
                             onSaved()

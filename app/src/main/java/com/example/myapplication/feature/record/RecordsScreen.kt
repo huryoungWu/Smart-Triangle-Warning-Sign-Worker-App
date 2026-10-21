@@ -15,6 +15,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +35,8 @@ import com.example.myapplication.core.ui.BannerVariant
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.feature.deployment.DeploymentActiveCard
+import com.example.myapplication.feature.deployment.DeploymentViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
 import com.example.myapplication.ui.theme.NeutralGreyBg
@@ -51,10 +54,15 @@ import java.util.Locale
 @Composable
 fun RecordsScreen(
     vm: VehicleViewModel,
+    deploymentVm: DeploymentViewModel,
     onOpenDeployments: () -> Unit,
+    onOpenDeploymentExec: (String) -> Unit,
 ) {
     val records by vm.records.collectAsStateWithLifecycle(initialValue = emptyList())
+    val deploymentState by deploymentVm.uiState.collectAsStateWithLifecycle()
     val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
+
+    LaunchedEffect(Unit) { deploymentVm.loadActiveEvent(force = true) }
 
     Column(
         modifier = Modifier
@@ -64,6 +72,17 @@ fun RecordsScreen(
     ) {
         PageTitle("作业记录")
 
+        Text(
+            "锥桶协同布设",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        deploymentState.activeEvent?.let { event ->
+            DeploymentActiveCard(
+                event = event,
+                onOpen = { onOpenDeploymentExec(event.deploymentId) },
+            )
+        }
         SecondaryActionButton(
             text = "布设事件记录（锥桶协同）",
             onClick = onOpenDeployments,
