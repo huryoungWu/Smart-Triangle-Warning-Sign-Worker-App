@@ -62,15 +62,24 @@ class ServerProbe(
 
         is UnknownHostException -> ServerProbeResult.Unreachable("主机名解析失败：${e.message.orEmpty()}")
 
+        // Android 17（API 37）本地网络权限：未授权时局域网访问被系统拦截
+        is SecurityException ->
+            ServerProbeResult.Unreachable("缺少本地网络权限（Android 17+），请允许后重试")
+
         // Android 9+ 的明文策略：network_security_config 不放行时，请求在 HttpURLConnection
         // 层就被拒（抛 java.net.UnknownServiceException，是 IOException 的子类），不是服务端的问题。
         // 这是本功能最容易踩的坑，必须给出可读提示。
         is java.io.IOException -> {
             val msg = e.message.orEmpty()
-            if (msg.contains("CLEARTEXT", ignoreCase = true)) {
-                ServerProbeResult.Unreachable("明文 HTTP 被系统安全策略拦截（debug 包已全面放行，见 network_security_config）")
-            } else {
-                ServerProbeResult.Unreachable(msg.ifBlank { e.javaClass.simpleName })
+            when {
+                msg.contains("CLEARTEXT", ignoreCase = true) ->
+                    ServerProbeResult.Unreachable("明文 HTTP 被系统安全策略拦截（debug 包已全面放行，见 network_security_config）")
+
+                msg.contains("EPERM", ignoreCase = true) ||
+                    msg.contains("Operation not permitted", ignoreCase = true) ->
+                    ServerProbeResult.Unreachable("缺少本地网络权限（Android 17+），请允许后重试")
+
+                else -> ServerProbeResult.Unreachable(msg.ifBlank { e.javaClass.simpleName })
             }
         }
 

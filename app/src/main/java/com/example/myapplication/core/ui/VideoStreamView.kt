@@ -31,11 +31,12 @@ import kotlinx.coroutines.delay
 
 /**
  * 实时视频统一入口（按 URL 形态**智能分发**）：
+ * - `udp://...` → 自研 [UdpVideoStreamView]（实时流，UDP 分片 + 逐帧解码）；
  * - **编码视频流**（`.m3u8` HLS / `.flv` HTTP-FLV / `.mp4`）→ ExoPlayer（media3，硬解播放）；
- * - 其余（Mock 服务端的 `multipart/x-mixed-replace` MJPEG 帧流）→ 自研 [MjpegStreamView] 逐帧解码。
+ * - 其他（例如旧版 HTTP MJPEG 地址）→ 不支持的占位提示。
  *
- * 对接真实后端时：后端按《后端接口设计文档》第 11 节提供**编码流**地址
- * （推荐 HTTP-FLV 低延迟 1~3s / HLS 兼容好 5~10s），App 侧仅 URL 变化，本组件无需改动。
+ * 实时流逻辑接口仍是 `/api/v1/device/video/stream?device_code=`，
+ * 只把传输从 HTTP 改成 UDP；事故录像等编码流仍可走 HTTP + ExoPlayer。
  */
 @Composable
 fun VideoStreamView(
@@ -43,14 +44,33 @@ fun VideoStreamView(
     contentDescription: String?,
     modifier: Modifier = Modifier,
 ) {
-    if (isEncodedStreamUrl(url)) {
-        ExoPlayerStreamView(url = url, contentDescription = contentDescription, modifier = modifier)
-    } else {
-        MjpegStreamView(url = url, contentDescription = contentDescription, modifier = modifier)
+    when {
+        url.startsWith("udp://", ignoreCase = true) -> UdpVideoStreamView(
+            url = url,
+            contentDescription = contentDescription,
+            modifier = modifier,
+        )
+
+        isEncodedStreamUrl(url) -> ExoPlayerStreamView(
+            url = url,
+            contentDescription = contentDescription,
+            modifier = modifier,
+        )
+
+        else -> Box(
+            modifier = modifier.background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "视频流不可用（不支持的地址）",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.8f),
+            )
+        }
     }
 }
 
-/** 是否编码视频流（按 URL 路径后缀判断，忽略查询参数；MJPEG 端点无后缀 → 走逐帧解码） */
+/** 是否编码视频流（按 URL 路径后缀判断，忽略查询参数） */
 private fun isEncodedStreamUrl(url: String): Boolean {
     val path = url.substringBefore('?').substringBefore('#').lowercase()
     return path.endsWith(".m3u8") || path.endsWith(".flv") || path.endsWith(".mp4")

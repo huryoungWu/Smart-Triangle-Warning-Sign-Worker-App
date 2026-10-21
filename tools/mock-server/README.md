@@ -24,10 +24,11 @@ IPv6 访问:  http://[2408:xxxx::1]:8080   ← 全局 IPv6 地址（带方括号
 
 | 变量 | 默认 | 用途 |
 |---|---|---|
-| `PORT` | `8080` | 端口（等价于命令行第一个参数） |
-| `HOST` | 不设 = 全部网卡 | 只监听某个网卡时设，如 `HOST=192.168.43.120` |
+| `PORT` | `8080` | 端口（等价于命令行第一个参数）；**TCP HTTP 与 UDP 视频共用该端口号** |
+| `HOST` | 不设 = 全部网卡 | 只监听某个网卡时设，如 `HOST=192.168.43.120`（建议 IP 字面量；UDP 按地址族绑定） |
 | `MAX_BODY_BYTES` | `2097152`（2MB） | 请求体上限，超过回 `413` |
 | `CORS_ORIGIN` | `*` | 允许的来源；公网部署建议收敛成具体来源 |
+| `UDP_SESSION_IDLE_MS` | `6000` | UDP 视频会话空闲超时（测试可设 800 加速） |
 
 ## 默认调试账号
 
@@ -71,9 +72,15 @@ APP 连接页「连接设备」会向 `POST /api/v1/devices/bind` 上报 5 个�
 
    | 运行环境 | 地址 | 额外操作 |
    |---|---|---|
-   | 模拟器 / USB 真机 | `http://127.0.0.1:8080` | 执行一次 `adb reverse tcp:8080 tcp:8080` |
+   | 模拟器（含视频） | `http://10.0.2.2:8080` | 无；**UDP 不能靠 `adb reverse`**，必须用 10.0.2.2 |
+   | USB 真机（仅 HTTP） | `http://127.0.0.1:8080` | `adb reverse tcp:8080 tcp:8080` |
+   | USB 真机（含视频） | `http://<电脑局域网IP>:8080` | 无；`adb reverse` 只转 TCP，UDP 必须走真实局域网 IP |
    | 真机同 Wi-Fi / 同热点（**当前编译期默认值**） | `http://<电脑IP>:8080`（Mock 启动时会打印「局域网访问」行） | 无 —— debug 包已放开明文（见下） |
-   | 公网 IP 服务器 | `http://<公网IP>:8080` 或 `http://[公网IPv6]:8080` | 放行防火墙/安全组 8080；**务必先看下方「公网部署」** |
+   | 公网 IP 服务器 | `http://<公网IP>:8080` 或 `http://[公网IPv6]:8080` | 放行防火墙/安全组 **TCP + UDP 8080**；**务必先看下方「公网部署」** |
+
+   > Android 17（API 37）起，targetSdk 37 的 APP 访问局域网 TCP/UDP 需要运行时
+   > **「本地网络 / Nearby devices」权限**；首次登录/视频前允许即可，拒绝后视频卡片会提示。
+   > 模拟器 `10.0.2.2` 也受该权限约束。
 
    > **IP 直连不用写 `http://`** 也能识别（`192.168.43.120:8080` 等同于 `http://192.168.43.120:8080`）；
    > **IPv6 必须加方括号**：`[2408:8463:2a00:283b:a83c:bc29:1b44:a437]:8080`
@@ -87,7 +94,7 @@ APP 连接页「连接设备」会向 `POST /api/v1/devices/bind` 上报 5 个�
 
 3. **重装运行**：登录（默认账号 `demo/123456` 已预填，可跳过）→ 连接页选设备（按登录账号获取）
    → **输入绑定码**（任意非空即可，如 `123456`）→ 连接 → 发布任务（**填写作业车道 1~8**）
-   → 执行页看进度/视频占位/快照 → 核验通过自动上传 → 记录页看上传状态；
+   → 执行页看进度/UDP 视频/快照 → 核验通过自动上传 → 记录页看上传状态；
    **快照上传后可到「风险」页看到「作业人员上报：…」条目**（统一：上传后才能在风险中展示），
    该条目与发布任务时的作业车道一致（风险页/事故详情页显示「第 N 车道」）。
    服务端控制台会实时打印每条请求与命令（含 `u=账号`、`车道=`）。
@@ -109,8 +116,11 @@ curl -X POST http://127.0.0.1:8080/api/v1/tasks -H "Content-Type: application/js
      -d '{"id":"t1","device_code":"TC-001","kind":"fixed_distance","lane":2,"deviceResult":"done","verifyResult":"pass","targetM":20}'   # 记录上传（核验通过自动上传的同一接口）
 curl "http://127.0.0.1:8080/api/v1/tasks"        # 记录列表（重启后仍在 —— 已落盘保留）
 curl "http://127.0.0.1:8080/api/v1/risks?lat=39.9928&lng=116.4004&radiusKm=2"   # 演示 8 条（今天 6 + 历史 2，均带 lane 车道）+「作业人员上报：…」条目
-curl -o frame.png "http://127.0.0.1:8080/api/v1/device/video/snapshot.jpg?device_code=TC-001"   # 该设备视频流当前帧（快照即取此帧）
-curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | head -c 2000   # TC-001 的 MJPEG 流（Ctrl+C 结束；换 device_code 得不同画面）
+curl -o frame.png "http://127.0.0.1:8080/api/v1/device/video/snapshot.jpg?device_code=TC-001"   # 单帧（HTTP，快照即取此帧）
+node tools/mock-server/udp-probe.js 127.0.0.1 8080 TC-001 tc001.png   # UDP 实时流：收一帧写文件
+node tools/mock-server/udp-probe.js 127.0.0.1 8080 TC-002 tc002.png   # 换 device_code 得不同画面
+node tools/mock-server/test-video-udp.js   # 自动验收：协议/分片/心跳超时/HTTP 回归
+# 原 curl -N .../device/video/stream 已不可用（HTTP 流已移除；实时流走 UDP）
 ```
 
 > **Windows 下 curl 命令行直接传中文会因控制台编码（GBK）变成乱码字节**——Mock 现在会**直接拒绝**
@@ -122,7 +132,9 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 服务端本身**无需改代码**就能对外服务：`server.listen(PORT)` 默认绑全部网卡，
 媒体图片地址按**请求的 Host 头**拼绝对地址（旧数据也自适应，见下方差异表）。要做的只有三件事：
 
-1. **放行端口**：云主机安全组 + 系统防火墙放行 8080（如 `ufw allow 8080`）。
+1. **放行端口**：云主机安全组 + 系统防火墙放行 **TCP 8080 与 UDP 8080**
+   （Linux：`ufw allow 8080/tcp && ufw allow 8080/udp`；Windows Defender 防火墙需允许
+   Node.js 的**专用网络**入站 UDP，否则只有 HTTP 通、视频一直「不可用」）。
 2. **启动**：把 `tools/mock-server/` 整个目录传到服务器，然后
 
    ```bash
@@ -140,7 +152,9 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 > 也没有 IP 白名单、没有限流，CORS 全开。`docs/后端开发对接文档.md` 的「Mock 禁止照搬清单」
 > 已把这些列为正式服务端**必须**修掉的项。
 >
-> 已经做的防御只有：请求体上限 2MB（回 413）、CORS 预检、端口占用兜底。
+> 已经做的防御只有：请求体上限 2MB（回 413）、CORS 预检、端口占用兜底、UDP 视频会话上限。
+> **UDP 视频无鉴权/无加密，且可被伪造源地址放大**——公网部署前必须加 DTLS/VPN/源地址校验，
+> 或只在可信局域网使用。
 > **长期挂在公网请至少加一层访问令牌**，或者只在联调时临时开、事后关掉。
 >
 > 另外：Android 9+ 默认禁止明文 HTTP。debug 包已整包放开（见「配地址」一节），
@@ -158,7 +172,7 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 | 绑定未知设备 | **自动注册为「自定义设备」**并归属当前用户（方便扫码演示） | 404 `unknown_device` |
 | 内置设备解绑 | TC-001/TC-002 返回 400 `cannot_unbind_builtin` | 同左 |
 | 快照上传 | 仅元数据；**图片由服务端从视频流截帧**（当前帧）并**落盘** `tools/mock-server/data/media/`，经 `/media/{id}.png` 回放（**重启后仍可回放**）；**自动登记为风险事件**（风险页 `source=worker`）。未带坐标时按查询点就近放置（演示友好）；带 `lat/lng` 时按真实坐标、半径过滤 | 存盘返回 url；同左（按上报真实坐标过滤） |
-| 视频 | **按 `device_code` 各自一路 MJPEG 流**（`/api/v1/device/video/stream?device_code=`，10fps 时间驱动动画帧：天色轮转/道路虚线/往返三角牌；色调/相位/左上角 OSD 设备号均随 device_code 派生，**不同设备画面稳定不同**）；`videoUrl` 指向事发设备那一路。视频帧**实时生成、不落盘**；仅"截帧成快照"的那一帧落盘（见上行） | 中继车端真实视频（MJPEG/HLS） |
+| 视频 | **按 `device_code` 各自一路 UDP 帧流**（`/api/v1/device/video/stream?device_code=`，与 HTTP 同端口；10fps 时间驱动动画帧：天色轮转/道路虚线/往返三角牌；色调/相位/左上角 OSD 设备号均随 device_code 派生，**不同设备画面稳定不同**）；`videoUrl` 指向事发设备那一路。视频帧**实时生成、不落盘**；仅"截帧成快照"的那一帧落盘（见上行）。单帧 `snapshot.jpg` 仍 HTTP | 把车端真实视频（MJPEG/RTSP）转成同样的 UDP 帧；单帧/录像仍 HTTP |
 | 数据持久化 | **任务记录（/tasks 上传）+ 快照媒体 + 快照登记记录 + 风险登记**落盘 `tools/mock-server/data/`（`media/*.png` + `state.json`），重启自动恢复（启动日志打印恢复条数）；其余演示数据（预警/设备状态）仍在内存，重启清空。目录已 gitignore | 数据库 |
 | 图片地址 | 入库存**相对路径**（`/media/xxx.png`），`/risks` 查询时按**当前请求的 origin** 拼绝对地址（历史绝对地址只重写 origin）——换端口 / 换访问地址（127.0.0.1 ↔ 局域网 IP ↔ adb reverse）后旧数据图片仍可加载 | 对象存储/CDN 固定域名 |
 | 风险数据（`/risks`） | 演示 **8 条**（**今天 6 条** + 历史 2 条），**每条都带 `lane` 占用车道**，距离均 ≤ 2 公里、方位各异 —— 便于验证 APP 风险页「默认今天 / 按距离近→远 / 按时间新→旧」。**无车道信息的条目 APP 不展示**（列表每行都要有「第 N 车道」） | 真实外部数据源（交警/平台），每条带占用车道 |
@@ -174,7 +188,7 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 认证 `auth/login|refresh|profile|logout` ｜ 设备 `devices`、**`devices/bind`（连接设备：账号+绑定码）**、`devices/:id/bind`、`devices/:id`
 ｜ 状态 `device/status`（含 `task.lane` 回显） ｜ 命令 `device/command`（move/manual_stop/stop/estop/resume/light/task_start[+lane]/task_complete/segment_confirm/task_cancel/recover/odo_reset）
 ｜ 记录 `tasks`（POST/GET，支持 `Idempotency-Key`，含 `lane`） ｜ 快照 `snapshots`（multipart/JSON，含 `lane`） ｜ 预警 `warnings`（含 `lane`）
-｜ 风险 `risks`（含 `lane` 占用车道） ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`、`device/video/stream`（均按 `?device_code=` 区分设备）
+｜ 风险 `risks`（含 `lane` 占用车道） ｜ 版本 `app/version` ｜ 反馈 `feedback` ｜ 视频 `device/video/snapshot.jpg`（HTTP 单帧）、`device/video/stream`（**UDP**，均按 `?device_code=` 区分设备）
 
 字段与错误码详见 `docs/后端接口设计文档.md`。**正式服务端开发（后端同学）请看 [`docs/后端开发对接文档.md`](../../docs/后端开发对接文档.md)**——按 APP 实际解析口径整理，含 Mock 禁止照搬清单（视频必须接真实摄像头）与验收清单。
 

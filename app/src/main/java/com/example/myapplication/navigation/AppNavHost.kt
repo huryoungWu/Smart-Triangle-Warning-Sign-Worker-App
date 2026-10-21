@@ -20,6 +20,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -35,7 +36,10 @@ import androidx.navigation.navArgument
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.ui.AppDialogRenderer
 import com.example.myapplication.core.ui.NewRiskAlertDialog
+import com.example.myapplication.core.ui.permission.rememberLocalNetworkPermissionState
 import com.example.myapplication.core.ui.permission.rememberLocationPermissionState
+import com.example.myapplication.di.DeviceTransport
+import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.feature.connect.ConnectScreen
 import com.example.myapplication.feature.debug.DebugScreen
 import com.example.myapplication.feature.deployment.ConeConnectScreen
@@ -146,6 +150,19 @@ fun AppNavHost() {
     LaunchedEffect(mapState.privacyAccepted, locationPermission.granted) {
         if (mapState.privacyAccepted && locationPermission.granted) {
             mapVm.startLocating()
+        }
+    }
+
+    // Android 17（API 37）本地网络权限：登录/状态/命令/视频都要访问局域网，
+    // 在首次进入 SERVER 模式时请求一次；拒绝后视频卡片会给出可读提示。
+    val appContext = LocalContext.current
+    val localNetworkPermission = rememberLocalNetworkPermissionState()
+    var localNetworkPrompted by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val transport = ServiceLocator.get(appContext).transport
+        if (!localNetworkPrompted && transport == DeviceTransport.SERVER && !localNetworkPermission.granted) {
+            localNetworkPrompted = true
+            localNetworkPermission.request()
         }
     }
 

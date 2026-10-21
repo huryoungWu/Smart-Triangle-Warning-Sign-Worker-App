@@ -4,6 +4,8 @@
 
     <!-- 本地 Wi-Fi 通信（M01）：连接 TriangleCar 热点后访问 192.168.4.1 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17（API 37）：访问局域网 TCP/UDP（服务端 HTTP + 实时视频 UDP）需要该运行时权限 -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- 定位（作业人员位置，地图显示用）：必须运行时申请 -->

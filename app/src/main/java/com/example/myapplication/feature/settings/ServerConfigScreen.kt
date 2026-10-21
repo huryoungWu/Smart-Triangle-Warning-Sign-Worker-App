@@ -31,6 +31,7 @@ import com.example.myapplication.core.data.net.ServerProbeResult
 import com.example.myapplication.core.ui.MenuRow
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
+import com.example.myapplication.core.ui.permission.rememberLocalNetworkPermissionState
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
@@ -74,6 +75,8 @@ fun ServerConfigScreen(
     val scope = rememberCoroutineScope()
     val sl = remember(context) { ServiceLocator.get(context) }
     val probe = remember { ServerProbe() }
+    // Android 17：局域网 HTTP 探测也需要本地网络权限；否则会误报「不可达」
+    val localNetworkPermission = rememberLocalNetworkPermissionState()
 
     val currentUrl by sl.settingsRepository.serverBaseUrl
         .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
@@ -89,6 +92,15 @@ fun ServerConfigScreen(
 
     val parsed = parseServerUrl(input)
     val normalized = (parsed as? ServerUrlResult.Ok)?.url
+
+    val runProbe: (String) -> Unit = { url ->
+        scope.launch {
+            testing = true
+            testResult = null
+            testResult = probe.check(url)
+            testing = false
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -159,11 +171,19 @@ fun ServerConfigScreen(
                     text = if (testing) "测试中…" else "测试连接",
                     onClick = {
                         val url = normalized ?: return@SecondaryActionButton
-                        scope.launch {
-                            testing = true
-                            testResult = null
-                            testResult = probe.check(url)
-                            testing = false
+                        if (!localNetworkPermission.granted) {
+                            localNetworkPermission.onRequestResult = { granted ->
+                                if (granted) {
+                                    runProbe(url)
+                                } else {
+                                    testResult = ServerProbeResult.Unreachable(
+                                        "未授予本地网络权限（Android 17+）",
+                                    )
+                                }
+                            }
+                            localNetworkPermission.request()
+                        } else {
+                            runProbe(url)
                         }
                     },
                     enabled = !testing && !saving && normalized != null,
@@ -172,6 +192,10 @@ fun ServerConfigScreen(
                 PrimaryActionButton(
                     text = if (saving) "保存中…" else "保存",
                     onClick = {
+                        // 保存本身不需要网络；但保存后马上去登录/请求，先顺手申请一次权限
+                        if (!localNetworkPermission.granted) {
+                            localNetworkPermission.request()
+                        }
                         scope.launch {
                             saving = true
                             when (sl.applyServerBaseUrl(input)) {

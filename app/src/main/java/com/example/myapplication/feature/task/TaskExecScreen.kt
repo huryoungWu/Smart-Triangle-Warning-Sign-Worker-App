@@ -62,18 +62,20 @@ import com.example.myapplication.core.ui.ConfirmDialog
 import com.example.myapplication.core.ui.DangerActionButton
 import com.example.myapplication.core.ui.DeviceStatusStrip
 import com.example.myapplication.core.ui.map.MapPanel
-import com.example.myapplication.core.ui.MjpegStreamView
 import com.example.myapplication.core.ui.PrimaryActionButton
 import com.example.myapplication.core.ui.RemoteControlPad
 import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.VideoStreamView
+import com.example.myapplication.core.util.udpVideoUrl
 import com.example.myapplication.di.DeviceTransport
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.di.UploadMode
 import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
+import java.net.URLEncoder
 import java.util.Locale
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
@@ -178,17 +180,25 @@ fun TaskExecScreen(
             val context = LocalContext.current
             val sl = remember { ServiceLocator.get(context) }
             // 服务端地址可运行时更改（设置 → 服务器地址）：订阅它，换地址后 URL 变化，
-            // MjpegStreamView 以 url 为 key → 自动断流重连
+            // VideoStreamView/UdpVideoStreamView 以 url 为 key → 自动断流重连
             val serverUrl by sl.settingsRepository.serverBaseUrl
                 .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
-            // 联调模式：播放服务端**该设备的**视频流（按 device_code 各一路；快照即从该流截帧）
+            // 联调模式：播放服务端**该设备的** UDP 视频流（按 device_code 各一路；快照即从该流截帧）。
+            // 逻辑接口不变（同一 path/query），只把 scheme 换成 udp://；端口复用 serverUrl 的端口。
+            val token = sl.authRepository.currentToken
+            val target = buildString {
+                append("/api/v1/device/video/stream?device_code=${state.selectedDeviceCode}")
+                if (!token.isNullOrBlank()) {
+                    append("&token=").append(URLEncoder.encode(token, "UTF-8"))
+                }
+            }
             val streamUrl = if (sl.transport == DeviceTransport.SERVER) {
-                "$serverUrl/api/v1/device/video/stream?device_code=${state.selectedDeviceCode}"
+                udpVideoUrl(serverUrl, target)
             } else {
                 null
             }
             if (streamUrl != null) {
-                MjpegStreamView(
+                VideoStreamView(
                     url = streamUrl,
                     contentDescription = "实时视频",
                     modifier = Modifier
@@ -198,7 +208,7 @@ fun TaskExecScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "服务端视频流（演示动画帧 · ${state.selectedDeviceCode} 专属一路）",
+                    "UDP 视频流（演示动画帧 · ${state.selectedDeviceCode} 专属一路）",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeutralGrey,
                 )

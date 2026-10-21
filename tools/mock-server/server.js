@@ -15,7 +15,8 @@
  *                                                  task_start 带作业车道 lane 1~8）
  *  - 业务：POST/GET /api/v1/tasks、POST/GET /api/v1/snapshots、POST /api/v1/warnings、
  *          GET /api/v1/risks、GET /api/v1/app/version、POST /api/v1/feedback
- *  - 视频：GET /api/v1/device/video/snapshot.jpg、GET /api/v1/device/video/stream?device_code=（按设备各一路占位帧，非真实摄像头）
+ *  - 视频：GET /api/v1/device/video/snapshot.jpg（HTTP，单帧）、UDP /api/v1/device/video/stream?device_code=
+ *          （按设备各一路占位帧，非真实摄像头；UDP 与 HTTP 共用同一端口号）
  *
  * 说明：
  *  - 状态推进由 Mock 服务端定时驱动（APP 只在连接后读取一次、之后由用户手动刷新），
@@ -30,6 +31,7 @@ const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const deploymentSim = require('./deployment');
+const videoUdp = require('./video-udp');
 
 const PORT = Number(process.env.PORT || process.argv[2] || 8080);
 /** 监听网卡：默认全部（0.0.0.0 + ::），即局域网/公网可直接访问；限制只监听内网时设 HOST */
@@ -1226,7 +1228,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── 锥桶协同布设（deployment.js）：套装、事件会话、人工跳过、模拟异常 ──
-  if (deploymentSim.handle(req, res, path, url, body, log)) return;
+  // handle 是 async：必须 await，否则它返回的 Promise 恒为真，后面的 tasks/snapshots/risks/video 全部不会响应
+  if (await deploymentSim.handle(req, res, path, url, body, log)) return;
 
   // ── 作业记录上传 / 查询 ──
   if (path === '/api/v1/tasks' && req.method === 'POST') {
@@ -1387,6 +1390,8 @@ const server = http.createServer(async (req, res) => {
         : back;
     };
     const base = baseUrl(req);
+    // 实时视频流走 UDP：事故 videoUrl 与实时流同 scheme/host/port（Mock 是实时流，不是录像）
+    const udpBase = base.replace(/^http:/i, 'udp:');
     const risks = seeds
       .filter((s) => s.m <= radiusKm * 1000)
       .map((s, i) => {
@@ -1405,8 +1410,8 @@ const server = http.createServer(async (req, res) => {
           hasPhoto: s.photo,
           hasVideo: s.video,
           photoUrls: s.photo ? [`${base}/media/acc-${1000 + i}-1.png`] : [],
-          // 事故视频指向事发设备自己的流（按 deviceCode 各自一路）
-          videoUrl: s.video ? `${base}/api/v1/device/video/stream?device_code=${s.dev}` : null,
+          // 事故视频指向事发设备自己的 UDP 实时流（按 deviceCode 各自一路）
+          videoUrl: s.video ? `${udpBase}/api/v1/device/video/stream?device_code=${s.dev}` : null,
         };
       });
     log(`风险查询 (${lat},${lng}) r=${radiusKm}km → ${risks.length} 条`);
@@ -1446,7 +1451,8 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 201, { id: `fb-${String(bizSeq++).padStart(4, '0')}` });
   }
 
-  // ── 视频流（按 deviceCode 各自一路：实时视频/事故视频/快照截帧均以 deviceCode 区分；接真实视频源后替换本段）──
+  // ── 视频（单帧 HTTP；实时流走 UDP，见 video-udp.js）──
+  // 实时流 GET /api/v1/device/video/stream 已移除：APP 通过 UDP 订阅同一 request-target。
   if (path === '/api/v1/device/video/snapshot.jpg' && req.method === 'GET') {
     // 服务端不再补默认设备编号：APP 必须显式传 device_code
     const dev = url.searchParams.get('device_code');
@@ -1454,21 +1460,6 @@ const server = http.createServer(async (req, res) => {
     const png = makeFrame(frameIndex(), 320, 180, dev); // 该设备当前帧（时间驱动，与观看端一致）
     res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Access-Control-Allow-Origin': CORS_ORIGIN });
     return res.end(png);
-  }
-  if (path === '/api/v1/device/video/stream' && req.method === 'GET') {
-    // 服务端不再补默认设备编号：APP 必须显式传 device_code
-    const dev = url.searchParams.get('device_code');
-    if (!dev) return sendError(res, 400, 'bad_request', '缺少 device_code 查询参数');
-    res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Access-Control-Allow-Origin': CORS_ORIGIN });
-    log(`[视频流] 客户端接入 device_code=${dev}（10fps 动画帧）`);
-    const timer = setInterval(() => {
-      const png = makeFrame(frameIndex(), 320, 180, dev); // 10fps；帧内容由时间驱动
-      res.write(`--frame\r\nContent-Type: image/png\r\nContent-Length: ${png.length}\r\n\r\n`);
-      res.write(png);
-      res.write('\r\n');
-    }, 100);
-    req.on('close', () => clearInterval(timer));
-    return;
   }
   if (path.startsWith('/media/')) {
     // 优先回放 APP 上传的快照图片（原始字节）；未命中则给占位图
@@ -1502,9 +1493,13 @@ server.on('error', (e) => {
 });
 
 server.listen(PORT, HOST, () => {
+  // 实时视频：UDP 与 HTTP 共用同一个数字端口（TCP/UDP 不冲突）
+  videoUdp.start({ port: PORT, host: HOST, makeFrame, log: (...args) => console.log(...args) });
+
   console.log('');
   console.log('  三角警示牌 Mock 服务端已启动（Ctrl+C 停止）');
   console.log(`  本机访问:   http://127.0.0.1:${PORT}`);
+  console.log(`  UDP 视频:   udp://127.0.0.1:${PORT}/api/v1/device/video/stream?device_code=TC-001`);
   const lan = [];
   const global6 = [];
   for (const infos of Object.values(os.networkInterfaces())) {
@@ -1519,10 +1514,18 @@ server.listen(PORT, HOST, () => {
       }
     }
   }
-  for (const u of lan) console.log(`  局域网访问: ${u}   ← 真机同 Wi-Fi / 同热点时用这个地址`);
-  for (const u of global6) console.log(`  IPv6 访问:  ${u}   ← 带方括号；设备需有 IPv6 且链路可达`);
+  for (const u of lan) {
+    console.log(`  局域网访问: ${u}   ← 真机同 Wi-Fi / 同热点时用这个地址`);
+    console.log(`  UDP 视频:   ${u.replace(/^http:/, 'udp:')}/api/v1/device/video/stream?device_code=TC-001`);
+  }
+  for (const u of global6) {
+    console.log(`  IPv6 访问:  ${u}   ← 带方括号；设备需有 IPv6 且链路可达`);
+    console.log(`  UDP 视频:   ${u.replace(/^http:/, 'udp:')}/api/v1/device/video/stream?device_code=TC-001`);
+  }
   console.log('  自检:       http://127.0.0.1:' + PORT + '/  （浏览器打开可见设备列表）');
   console.log('');
+  console.log('  ⚠ 实时视频走 UDP ' + PORT + '：Windows 防火墙需放行 UDP（专用网络）；');
+  console.log('    模拟器/PROXY 环境下 adb reverse 只转 TCP，UDP 请用 10.0.2.2 或局域网 IP。');
   console.log('  ⚠ 本服务端无鉴权（无 token 时按默认用户 demo 处理）、无 IP 白名单、无限流。');
   console.log('    局域网联调可直接用；暴露到公网前请先加访问控制（见 README「公网部署」）。');
   console.log('');

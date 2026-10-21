@@ -2,9 +2,14 @@
 
 > 本文件按接口列出：**接口含义、请求 JSON、响应 JSON、字段含义与取值**，不展开协议设计背景。
 >
+> **2026-10-21 UDP 视频流改造**：实时视频流已从 HTTP MJPEG 改为 **UDP**（逻辑接口不变）。
+> 本次涉及/受影响的接口已单独整理为
+> [《APP接口请求响应JSON文档-UDP视频流变更.md》](APP接口请求响应JSON文档-UDP视频流变更.md)，
+> 给后端开发时可直接使用该增量文档；未列出的接口仍以本文为准。
+>
 > - Base URL：`http://<server>:<port>/api/v1`
 > - 鉴权：登录、版本检查、刷新 token 不需要 Bearer；其余接口建议带
->   `Authorization: Bearer <token>`；视频流允许 `?token=`（播放器不能自定义 Header 时使用）
+>   `Authorization: Bearer <token>`；实时视频 UDP 订阅的 `target` query 里带 `token`（UDP 无 Header）
 > - JSON 请求头：`Content-Type: application/json; charset=utf-8`
 > - 时间均为毫秒时间戳
 > - 字段必须显式上报：数值缺失用 `0`，非数值缺失用 `null`（服务端不补默认值）
@@ -848,7 +853,7 @@ APP 以 multipart 表单发送，逻辑字段如下：
       "hasPhoto": false,
       "hasVideo": true,
       "photoUrls": [],
-      "videoUrl": "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001"
+      "videoUrl": "udp://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001"
     },
     {
       "id": "r-snap-0007",
@@ -885,44 +890,85 @@ APP 以 multipart 表单发送，逻辑字段如下：
 | `risks[].hasPhoto` | bool | 是否有照片 |
 | `risks[].hasVideo` | bool | 是否有视频 |
 | `risks[].photoUrls` | string[] | 照片 URL 列表；可为空数组 |
-| `risks[].videoUrl` | string \| null | 视频/视频流 URL；无则为 `null` |
+| `risks[].videoUrl` | string \| null | 视频/视频流 URL；实时流为 `udp://...`，录像为 `http(s)://...`；无则为 `null` |
 | `risks[].source` | string? | 仅作业人员上报的风险带此字段，值为 `"worker"`；外部数据无此字段 |
 
 ---
 
-## 11. 实时视频流
+## 11. 实时视频流（UDP）
 
-`GET /device/video/stream?device_code=TC-001`（Bearer 或 `?token=`）
+**逻辑接口不变**：
+
+`GET /api/v1/device/video/stream?device_code=TC-001[&token=][&w=640][&fps=10]`
+
+**传输入口改变**：不再走 HTTP `multipart/x-mixed-replace`，改为 **UDP**，
+端口与 HTTP **同号**（默认 8080）。APP 用 `udp://host:port` + 原 path/query 订阅。
 
 **接口含义**：获取指定设备的实时视频流；APP 任务执行页「实时视频」使用。
 
-**调用时机**：进入任务执行页并显示视频卡片时建立长连接；离开页面断开。
+**调用时机**：进入任务执行页并显示视频卡片时订阅；离开页面发 `unsub` / 断开。
 
-### 请求参数（query）
-
-```json
-{
-  "device_code": "TC-001",
-  "token": "<accessToken>"
-}
-```
+### 请求参数（与原 query 完全一致）
 
 | 参数 | 类型 | 必填 | 含义 / 取值 |
 |---|---|---|---|
 | `device_code` | string | 是 | 要观看的设备编号 |
-| `token` | string | 否 | 短时效流 token；播放器不能自定义 Header 时使用；Mock 不校验 |
+| `token` | string | 否 | 短时效流 token；UDP 无 Header，放在 `target` 的 query 里；Mock 不校验 |
+| `w` | int | 否 | 期望宽度；Mock **接受但忽略**（固定 320×180） |
+| `fps` | int | 否 | 期望帧率；Mock **接受但忽略**（固定 10fps） |
 
-- 无请求体。
+### 订阅（客户端 → 服务端，单 datagram UTF-8 JSON）
+
+```json
+{"v":1,"t":"sub","cid":"a1b2c3d4","target":"/api/v1/device/video/stream?device_code=TC-001&fps=10"}
+```
+
+- `cid` 为客户端随机串；同一 `(客户端地址:端口, cid)` 重复 `sub` 幂等，用于丢包重试。
+- `target` 就是原 HTTP request-target（path + query）。
 
 ### 响应
 
-不是 JSON。
+**成功 ack**（单 datagram JSON）：
 
-| 项 | 值 / 含义 |
-|---|---|
-| `Content-Type` | `multipart/x-mixed-replace; boundary=frame` |
-| 响应体 | 连续 MJPEG 帧；Mock 的帧内容实际为 PNG，约 10fps |
-| 失败 | 缺少 `device_code` 返回 400 JSON 错误；鉴权失败（正式服务端）返回 401 |
+```json
+{"v":1,"t":"ack","cid":"a1b2c3d4","sid":123456,"status":200,"format":"image/png","fps":10,"w":320}
+```
+
+**失败 err**（status/error 与 HTTP 语义一致）：
+
+```json
+{"v":1,"t":"err","cid":"a1b2c3d4","status":400,"error":{"code":"bad_request","message":"缺少 device_code 查询参数"}}
+```
+
+**帧数据**（二进制，服务端 → 客户端）：24 字节头 + payload，单 datagram ≤ 1200 字节：
+
+| 偏移 | 长度 | 字段 | 说明 |
+|---:|---:|---|---|
+| 0 | 4 | magic | `"SPV1"` |
+| 4 | 1 | version | `1` |
+| 5 | 1 | type | `1` = FRAME |
+| 6 | 4 | sid | session id（大端 u32） |
+| 10 | 4 | frameId | 每 deviceStream 递增（大端 u32） |
+| 14 | 4 | frameLen | 整帧字节数（大端 u32，≤256KiB） |
+| 18 | 2 | fragIndex | 从 0 开始 |
+| 20 | 2 | fragCount | 总片数 |
+| 22 | 2 | payloadLen | 本片长度（除最后一片外恒为 1176） |
+| 24 | N | payload | PNG/JPEG 原始字节 |
+
+**心跳 / 退订**（客户端 → 服务端）：
+
+```json
+{"v":1,"t":"hb","sid":123456}      // 每 2s
+{"v":1,"t":"unsub","sid":123456}   // 离开页面
+```
+
+### 约定
+
+- 服务端 6s 收不到 `hb` 清理 session；客户端 3s 收不到完整帧自动重连（1s 退避）。
+- 缺片丢整帧（不做 NACK/重传）；客户端 `BitmapFactory` 自动识别 PNG/JPEG。
+- 原 HTTP `GET /device/video/stream` 已移除；旧版 APP 会收到 404。
+- 单帧 `GET /device/video/snapshot.jpg` 与 `POST /snapshots` **仍走 HTTP**。
+- 生产环境 UDP 无 TLS/鉴权，建议仅在可信局域网使用；公网需 DTLS/VPN 或反放大握手。
 
 ---
 
