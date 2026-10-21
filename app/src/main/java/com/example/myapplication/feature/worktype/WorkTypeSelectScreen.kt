@@ -76,12 +76,12 @@ fun WorkTypeSelectScreen(
 
         SectionCard(title = "锥桶协同布设") {
             Text(
-                "1 主桶 + 1~5 从桶",
+                "1 主桶 + 0~5 从桶（从桶可选）",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "先绑定/选择锥桶设备，再发布协同布设任务；主桶与从桶按自身行程逐级启动。",
+                "先绑定/选择锥桶设备，再发布协同布设任务；从桶可选，未选择时仅主桶执行。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

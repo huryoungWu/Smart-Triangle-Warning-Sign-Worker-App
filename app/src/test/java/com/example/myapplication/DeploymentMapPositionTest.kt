@@ -8,6 +8,7 @@ import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeploymentEvent
 import com.example.myapplication.core.model.deployment.DeploymentParams
 import com.example.myapplication.core.model.deployment.DeploymentPhase
+import com.example.myapplication.core.model.deployment.DeploymentPose
 import com.example.myapplication.core.model.deployment.DeploymentSkip
 import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.SkipDisposition
@@ -84,6 +85,17 @@ class DeploymentMapPositionTest {
         assertTrue(pins[1].skipped)
         assertEquals(3.0, pins[1].traveledM, 0.001)
         assertEquals(8.0, pins[1].targetM, 0.001)
+    }
+
+    @Test
+    fun `server pose overrides north projection`() {
+        val master = device("M-001", DeploymentDeviceType.MASTER_CONE, 0, 10.0, 10.0)
+            .copy(pos = DeploymentPose(3.0, 4.0), headingDeg = 90.0)
+        val pin = resolveDeploymentConePins(event(listOf(master)), anchor).single()
+        assertEquals(5.0, CoordTransform.distanceM(anchor, pin.point), 0.2)
+        assertEquals(90.0, pin.headingDeg, 1e-9)
+        assertTrue(pin.point.lng > anchor.lng)
+        assertTrue(pin.point.lat > anchor.lat)
     }
 
     @Test

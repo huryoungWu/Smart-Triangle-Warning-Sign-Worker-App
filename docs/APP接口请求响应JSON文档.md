@@ -1603,6 +1603,30 @@ POST /api/v1/deployments
 ```
 
 > `master` 与每只 `slaves[]` 都必须带 `device_code`、`device_type`、`binding_code`；服务端会按设备登记信息校验绑定码。
+>
+> **仅主桶执行**：`slaves` 允许为空数组（`N=0`），此时只下发主桶、主桶到 `L` 即完成，无逐级触发链路；
+> `d` 仍按接口要求传一个大于 0 的值（无从桶时不参与控制）。
+
+仅主桶示例（`slaves: []`）：
+
+```json
+{
+  "clientRequestId": "uuid-master-only",
+  "name": "锥桶协同布设-仅主桶",
+  "lane": 2,
+  "master": {
+    "device_code": "CONE-M-001",
+    "device_type": "master_cone",
+    "binding_code": "123456"
+  },
+  "slaves": [],
+  "L": 60.0,
+  "d": 1.0,
+  "note": ""
+}
+```
+
+响应中 `params.N = 0`，`devices` 只有主桶一项。
 
 响应 `201`：
 
@@ -1710,6 +1734,11 @@ GET /api/v1/deployments/{deploymentId}
 
 字段取值见 `docs/后端接口设计文档.md` 第 18.3 节。
 
+> **2026-10-22 additive 字段**：`devices[]` 增加
+> `pos: { x, y }`（相对部署起始线的米，x=东、y=北）、`headingDeg`（0=正北）、
+> `manualActive`（该桶是否正在手动点动）。旧客户端忽略这些字段；
+> 旧服务端不返回 `pos` 时 App 回退到按 `traveledM` 沿正北投影。
+
 ## 27. 暂停 / 继续 / 终止
 
 ```http
@@ -1725,6 +1754,11 @@ POST /api/v1/deployments/{deploymentId}/abort
 { "commandId": "uuid", "reason": "无法恢复" }
 → 202 { "deploymentId": "dep-7f3a", "state": "aborted" }
 ```
+
+> **2026-10-22 暂停全部语义**：`pause` 在**任意非终止状态**都可调用——
+> `running` → `paused`；`paused` 幂等；`starting` / `pending_verify` / `verify_failed`
+> 只停止残余运动/手动状态，不改变事件状态；终止态 no-op。
+> 这样 APP 可以始终显示「暂停全部」按钮。
 
 ## 28. 重试当前步骤
 
@@ -1860,3 +1894,99 @@ DELETE /api/v1/deployments/{deploymentId}     # 仅 READY
   "total": 1
 }
 ```
+
+## 32. 单桶手动干预（仅 PAUSED）
+
+锥桶布设执行页支持对**单只**主桶/从桶做手动点动（四向）。进入手动干预前 APP 会先
+`POST /api/v1/deployments/{deploymentId}/pause` 暂停全部锥桶；手动结束后由用户显式「继续布设」。
+
+### 32.1 点动
+
+```http
+POST /api/v1/deployments/{deploymentId}/manual/move
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+```
+
+```json
+{
+  "commandId": "uuid",
+  "sessionId": "hold-uuid",
+  "seq": 1,
+  "device_code": "CONE-M-001",
+  "device_type": "master_cone",
+  "dir": "fwd"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `commandId` | string | 是 | 本次请求 id（审计/幂等） |
+| `sessionId` | string | 是 | 一次“按住”生成一次；同一次按住的保活包复用 |
+| `seq` | int | 是 | 本次按住内递增（0,1,2…），服务端拒绝迟到的低序号包 |
+| `device_code` | string | 是 | 要控制的桶；必须在事件内 |
+| `device_type` | string | 是 | `master_cone` / `slave_cone`，必须与事件记录一致 |
+| `dir` | string | 是 | `fwd` / `back` / `left` / `right` |
+
+- APP 按住期间每 **300ms** 发一次；松手发 `manual/stop`。
+- 服务端 **800ms** 收不到保活自动停车（`manual_timeout`）。
+- 同一事件同一时刻只允许一只桶处于手动状态。
+- 手动移动**计入**该桶 `traveledM`；`left/right` 改变 `headingDeg`，`fwd/back` 沿 heading 更新 `pos`。
+- 暂停期间**不触发**下一只从桶、不写 report、不调用 `checkComplete`；resume 后由 running tick 统一处理。
+
+响应 `202`：
+
+```json
+{
+  "deploymentId": "dep-7f3a",
+  "state": "paused",
+  "device_code": "CONE-M-001",
+  "traveledM": 3.4,
+  "targetM": 20.0,
+  "phase": "stopped",
+  "headingDeg": 90.0,
+  "pos": { "x": 3.4, "y": 0.0 },
+  "ignored": false
+}
+```
+
+### 32.2 停止
+
+```http
+POST /api/v1/deployments/{deploymentId}/manual/stop
+```
+
+```json
+{
+  "commandId": "uuid",
+  "sessionId": "hold-uuid",
+  "seq": 12,
+  "device_code": "CONE-M-001",
+  "device_type": "master_cone"
+}
+```
+
+响应 `202` 同 32.1。`manual/stop` 幂等；没有 active 手动时直接成功；旧 session 的迟到 stop
+不会停掉新的按住。
+
+### 32.3 错误码
+
+| HTTP | code | 场景 |
+|---:|---|---|
+| 400 | `invalid_direction` | `dir` 不是四向之一 |
+| 400 | `invalid_device_type` | `device_type` 与事件设备不一致 |
+| 404 | `not_found` / `deployment_not_found` | 事件/设备不存在或不在事件内 |
+| 409 | `deployment_not_paused` | 事件未暂停（APP 应先暂停全部） |
+| 409 | `device_not_jogging` | 设备不是 `stopped`（未启动/已到位/失败） |
+| 409 | `device_skipped` | 已人工跳过 |
+| 409 | `device_offline` | 设备离线 |
+| 409 | `estop_locked` | 设备急停锁定/安全停止 |
+| 409 | `manual_busy` | 同一事件已有另一只桶在手动 |
+| 409 | `device_at_target` | 已到目标，不能继续前进 |
+
+### 32.4 审计与后续
+
+- `dep.steps` 增加 `manual_move`（按住开始）、`manual_stop`（松手/停止）、`manual_timeout`（断保活）。
+- 手动到目标后暂停中保持 `phase=stopped`、`arrived=false`；`resume` 后进入正常到达/待核验。
+- 暂停中手动越过 d 后即使退回，也不会额外触发；resume 后以当前 `traveledM` 为准。
+- 手动移动只影响所选桶；其他桶保持 `stopped`。

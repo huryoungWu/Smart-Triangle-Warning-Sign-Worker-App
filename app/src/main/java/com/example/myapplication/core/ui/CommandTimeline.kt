@@ -47,7 +47,7 @@ fun CommandTimeline(
     Column(modifier = modifier.fillMaxWidth()) {
         if (current == CommandPhase.UNKNOWN || current == CommandPhase.FAILED) {
             Text(
-                text = "⚠ ${current.label}：${note ?: "请查询设备状态后现场确认，系统不会自动重发运动命令"}",
+                text = "${current.label}：${note ?: "请查询设备状态后现场确认，系统不会自动重发运动命令"}",
                 color = WarningRed,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,

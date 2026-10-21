@@ -18,8 +18,11 @@ import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.ReportResultState
 import com.example.myapplication.core.model.deployment.SelectedSlave
 import com.example.myapplication.core.model.deployment.SkipDisposition
+import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.VerifyResultState
+import com.example.myapplication.core.model.vehicle.MoveDir
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +48,14 @@ data class DeploymentUiState(
     val error: String? = null,
     val message: String? = null,
     val lastRefreshAt: Long = 0L,
+    /** 单桶手动干预对话框是否打开 */
+    val manualMode: Boolean = false,
+    /** 从 RUNNING 进入时正在 pause，pad 先禁用 */
+    val manualEntering: Boolean = false,
+    /** 当前选中的手动控制桶（默认主桶） */
+    val manualDeviceCode: String? = null,
+    /** 当前按住的方向（用于 pad 高亮） */
+    val manualHoldingDir: MoveDir? = null,
 )
 
 /**
@@ -63,6 +74,13 @@ class DeploymentViewModel(
 
     private var pollJob: Job? = null
     private var createClientId: String? = null
+
+    // ── 单桶手动干预 ──
+    private var manualJob: Job? = null
+    private var manualSessionId: String? = null
+    private var manualSeq: Long = 0
+    /** 进入/退出/离开页面的代数：pause 响应回来时若代数变化，不得重新打开手动框 */
+    private var manualEpoch = 0
 
     /**
      * 会话代号：登录/切换服务器/登出时递增。
@@ -331,6 +349,8 @@ class DeploymentViewModel(
     }
 
     fun openEvent(deploymentId: String) {
+        stopJogAsync()
+        manualEpoch++
         // 先清空旧事件，避免执行页轮询把旧事件响应写回；selectedEventId 用于丢弃过期响应
         _uiState.update {
             it.copy(
@@ -339,6 +359,10 @@ class DeploymentViewModel(
                 loading = true,
                 error = null,
                 message = null,
+                manualMode = false,
+                manualEntering = false,
+                manualDeviceCode = null,
+                manualHoldingDir = null,
             )
         }
         viewModelScope.launch {
@@ -380,7 +404,10 @@ class DeploymentViewModel(
                             )
                         }
                     }
-                    if (applied && event.terminal) stopPolling()
+                    if (applied) {
+                        reconcileManualAfterPoll()
+                        if (event.terminal) stopPolling()
+                    }
                 }
                 .onFailure { e ->
                     _uiState.update { s ->
@@ -406,15 +433,301 @@ class DeploymentViewModel(
     fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+        // 页面离开/事件结束时不再后台保活；HTTP stop 由 onExecScreenStopped/exitManualMode 负责
+        manualJob?.cancel()
+        manualJob = null
     }
 
     // ────────────────────────── 控制动作 ──────────────────────────
 
-    fun pause(reason: String) = simpleAction { id -> repository.pause(id, reason) }
-    fun resume() = simpleAction { id -> repository.resume(id) }
-    fun abort(reason: String) = simpleAction { id -> repository.abort(id, reason) }
+    fun pause(reason: String) {
+        stopJogAsync()
+        simpleAction { id -> repository.pause(id, reason) }
+    }
+
+    /**
+     * 暂停全部（除 COMPLETED 外均可点击）：
+     * - 终止态：只提示，不再请求；
+     * - running：服务端置 paused 并停止所有运动；
+     * - starting / pending_verify / paused 等：服务端只停止残余运动/手动，不强行改状态。
+     */
+    fun pauseAll() {
+        val event = _uiState.value.event ?: return
+        if (event.terminal) {
+            _uiState.update { it.copy(message = "事件已结束，无需暂停") }
+            return
+        }
+        stopJogAsync()
+        val note = if (event.state == DeploymentState.PAUSED) {
+            "当前已暂停，已停止残余运动"
+        } else {
+            "已停止所有正在移动的锥桶"
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = true, error = null) }
+            repository.pause(event.deploymentId, "pause_all")
+                .onSuccess {
+                    _uiState.update { it.copy(busy = false, message = note) }
+                    refreshEvent()
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(busy = false, error = e.message ?: "暂停全部失败") }
+                }
+        }
+    }
+
+    /** 先停止手动点动并等待 stop 完成，再恢复自动链路，避免 stop/resume 并发。 */
+    fun resume() {
+        val id = _uiState.value.event?.deploymentId ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = true, error = null) }
+            stopJogSuspend()
+            _uiState.update {
+                it.copy(
+                    busy = false,
+                    manualMode = false,
+                    manualEntering = false,
+                    manualHoldingDir = null,
+                )
+            }
+            repository.resume(id)
+                .onSuccess { refreshEvent() }
+                .onFailure { e ->
+                    _uiState.update { it.copy(error = e.message ?: "继续布设失败") }
+                }
+        }
+    }
+
+    fun abort(reason: String) {
+        stopJogAsync()
+        simpleAction { id -> repository.abort(id, reason) }
+    }
+
+    // ────────────────────────── 单桶手动干预 ──────────────────────────
+
+    fun selectManualDevice(code: String) {
+        if (_uiState.value.manualHoldingDir != null) return
+        val event = _uiState.value.event ?: return
+        if (event.device(code) == null) return
+        _uiState.update { it.copy(manualDeviceCode = code, error = null) }
+    }
+
+    /** 进入手动干预：RUNNING 时先 pause 全部；等轮询确认 PAUSED 后才允许点动。 */
+    fun enterManualMode() {
+        val event = _uiState.value.event ?: return
+        if (event.state == DeploymentState.PAUSED) {
+            val selected = _uiState.value.manualDeviceCode
+                ?.takeIf { event.jogEligible(it) }
+                ?: event.defaultJogDeviceCode()
+            _uiState.update {
+                it.copy(
+                    manualMode = true,
+                    manualEntering = false,
+                    manualDeviceCode = selected,
+                    error = null,
+                )
+            }
+            return
+        }
+        if (event.state != DeploymentState.RUNNING) {
+            _uiState.update { it.copy(error = "当前状态不能手动干预") }
+            return
+        }
+        val epoch = ++manualEpoch
+        val selected = event.defaultJogDeviceCode()
+        _uiState.update {
+            it.copy(
+                manualMode = true,
+                manualEntering = true,
+                manualDeviceCode = selected,
+                error = null,
+            )
+        }
+        viewModelScope.launch {
+            val r = repository.pause(event.deploymentId, "manual_intervention")
+            if (epoch != manualEpoch) return@launch
+            if (r.isFailure) {
+                _uiState.update {
+                    it.copy(
+                        manualMode = false,
+                        manualEntering = false,
+                        error = r.exceptionOrNull()?.message ?: "暂停全部锥桶失败",
+                    )
+                }
+            } else {
+                refreshEvent()
+            }
+        }
+    }
+
+    /** 关闭手动干预框：停止点动，事件保持 paused，不自动 resume。 */
+    fun exitManualMode() {
+        manualEpoch++
+        stopJogAsync()
+        _uiState.update {
+            it.copy(
+                manualMode = false,
+                manualEntering = false,
+                manualHoldingDir = null,
+            )
+        }
+    }
+
+    fun onLeaveManual() = exitManualMode()
+
+    fun onExecScreenStopped() = exitManualMode()
+
+    fun onHoldStart(dir: MoveDir) {
+        val s = _uiState.value
+        val event = s.event ?: return
+        val device = s.manualDeviceCode?.let(event::device) ?: return
+        val deviceType = device.deviceType ?: return
+        if (!s.manualMode || s.manualEntering || s.manualHoldingDir != null ||
+            event.state != DeploymentState.PAUSED || !device.manualEligible
+        ) {
+            if (s.manualHoldingDir == null) {
+                _uiState.update { it.copy(error = "当前不能手动点动：请确认已暂停全部且所选桶可点动") }
+            }
+            return
+        }
+
+        val sessionId = UUID.randomUUID().toString()
+        manualSessionId = sessionId
+        manualSeq = 0
+        _uiState.update { it.copy(manualHoldingDir = dir, error = null) }
+        manualJob?.cancel()
+        manualJob = viewModelScope.launch {
+            while (isActive && _uiState.value.manualHoldingDir == dir) {
+                val seq = ++manualSeq
+                launch {
+                    val result = repository.manualMove(
+                        deploymentId = event.deploymentId,
+                        deviceCode = device.deviceCode,
+                        deviceType = deviceType,
+                        dir = dir,
+                        sessionId = sessionId,
+                        seq = seq,
+                    )
+                    if (result.isFailure && isManualRejection(result.exceptionOrNull()?.message)) {
+                        _uiState.update {
+                            it.copy(
+                                error = result.exceptionOrNull()?.message ?: "手动点动被拒绝",
+                                manualHoldingDir = null,
+                            )
+                        }
+                        stopJogAsync()
+                    }
+                }
+                delay(MANUAL_KEEPALIVE_MS)
+            }
+        }
+    }
+
+    fun onHoldEnd() {
+        if (_uiState.value.manualHoldingDir == null) return
+        stopJogAsync()
+        refreshEvent()
+    }
+
+    fun onManualStop() {
+        stopJogAsync()
+        refreshEvent()
+    }
+
+    private fun stopJogAsync() {
+        val job = manualJob
+
+        manualJob = null
+        job?.cancel()
+        val s = _uiState.value
+        val event = s.event
+        val device = s.manualDeviceCode?.let { event?.device(it) }
+        val deviceType = device?.deviceType
+        val sessionId = manualSessionId
+        val seq = manualSeq
+        manualSessionId = null
+        if (event != null && device != null && deviceType != null && sessionId != null) {
+            viewModelScope.launch {
+                repository.manualStop(event.deploymentId, device.deviceCode, deviceType, sessionId, seq)
+            }
+        }
+        _uiState.update { it.copy(manualHoldingDir = null) }
+    }
+
+    /** resume 前串行使用：取消保活并等待 manual/stop 完成。 */
+    private suspend fun stopJogSuspend() {
+        val job = manualJob
+        manualJob = null
+        job?.cancelAndJoin()
+        val s = _uiState.value
+        val event = s.event
+        val device = s.manualDeviceCode?.let { event?.device(it) }
+        val deviceType = device?.deviceType
+        val sessionId = manualSessionId
+        val seq = manualSeq
+        manualSessionId = null
+        _uiState.update { it.copy(manualHoldingDir = null) }
+        if (event != null && device != null && deviceType != null && sessionId != null) {
+            repository.manualStop(event.deploymentId, device.deviceCode, deviceType, sessionId, seq)
+        }
+    }
+
+    /** 轮询后对账：事件离开 PAUSED / 所选设备失效 / 暂停完成。 */
+    private fun reconcileManualAfterPoll() {
+        val s = _uiState.value
+        val event = s.event ?: return
+        if (!s.manualMode) return
+
+        if (event.terminal) {
+            manualEpoch++
+            stopJogAsync()
+            _uiState.update {
+                it.copy(manualMode = false, manualEntering = false, manualHoldingDir = null)
+            }
+            return
+        }
+        if (event.state != DeploymentState.PAUSED) {
+            // RUNNING 且正在 pause：等下一拍；其他状态（starting 等）先保持框但禁用 pad
+            if (!s.manualEntering) {
+                manualEpoch++
+                stopJogAsync()
+                _uiState.update {
+                    it.copy(manualMode = false, manualEntering = false, manualHoldingDir = null)
+                }
+            }
+            return
+        }
+
+        var holding = s.manualHoldingDir
+        var selectedCode = s.manualDeviceCode
+        val selected = selectedCode?.let(event::device)
+        if (selected == null || !selected.manualEligible) {
+            if (holding != null) {
+                stopJogAsync()
+                holding = null
+            }
+            selectedCode = event.defaultJogDeviceCode()
+        }
+        _uiState.update {
+            it.copy(
+                manualEntering = false,
+                manualHoldingDir = holding,
+                manualDeviceCode = selectedCode,
+            )
+        }
+    }
+
+    private fun isManualRejection(message: String?): Boolean {
+        val text = message.orEmpty()
+        if (text.isBlank()) return false
+        val transient = listOf(
+            "超时", "连接", "不可达", "timeout", "connection", "network", "failed to connect",
+        )
+        return transient.none { text.contains(it, ignoreCase = true) }
+    }
 
     fun retryCurrent() {
+        stopJogAsync()
         val event = _uiState.value.event ?: return
         val startTarget = event.devices.firstOrNull {
             it.startCommand.state == CommandResultState.TIMEOUT ||
@@ -452,6 +765,7 @@ class DeploymentViewModel(
     }
 
     fun skip(device: DeploymentDeviceState, reason: String, disposition: SkipDisposition, note: String = "") {
+        stopJogAsync()
         val id = _uiState.value.event?.deploymentId ?: return
         if (reason.isBlank()) {
             _uiState.update { it.copy(error = "请填写人工跳过原因") }
@@ -476,6 +790,7 @@ class DeploymentViewModel(
     }
 
     fun verify(device: DeploymentDeviceState, pass: Boolean, note: String) {
+        stopJogAsync()
         val id = _uiState.value.event?.deploymentId ?: return
         val deviceType = device.deviceType
         if (deviceType == null) {
@@ -496,6 +811,7 @@ class DeploymentViewModel(
     }
 
     fun complete() {
+        stopJogAsync()
         val id = _uiState.value.event?.deploymentId ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(busy = true) }
@@ -547,6 +863,8 @@ class DeploymentViewModel(
     fun dismissMessage() = _uiState.update { it.copy(message = null) }
 
     fun resetDraft() {
+        stopJogAsync()
+        manualEpoch++
         createClientId = null
         _uiState.update {
             it.copy(
@@ -556,6 +874,10 @@ class DeploymentViewModel(
                 selectedEventId = null,
                 error = null,
                 message = null,
+                manualMode = false,
+                manualEntering = false,
+                manualDeviceCode = null,
+                manualHoldingDir = null,
             )
         }
         reloadDevices()
@@ -584,7 +906,12 @@ class DeploymentViewModel(
 
     private fun resetForNewSession() {
         sessionEpoch++
+        manualEpoch++
         stopPolling()
+        manualJob?.cancel()
+        manualJob = null
+        manualSessionId = null
+        manualSeq = 0
         createClientId = null
         _uiState.value = DeploymentUiState()
     }
@@ -595,6 +922,8 @@ class DeploymentViewModel(
     }
 
     companion object {
+        private const val MANUAL_KEEPALIVE_MS = 300L
+
         val Factory = viewModelFactory {
             initializer {
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MyAppApplication

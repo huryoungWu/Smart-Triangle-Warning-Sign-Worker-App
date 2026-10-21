@@ -1222,6 +1222,12 @@ const server = http.createServer(async (req, res) => {
     const id = String(body.device_code || '');
     if (!id) return sendError(res, 400, 'bad_request', '缺少 device_code');
     const d = getDevice(id);
+    // 布设中的设备只走 deployments/{id}/manual/*，避免三角架 move/manual_stop 静默无效
+    if (d.deployment && d.deployment.id &&
+        (body.type === 'move' || body.type === 'manual_stop')) {
+      log(`[cmd] u=${currentUser(req)} ${id} ${body.type} → rejected: deployment_managed`);
+      return sendJson(res, 200, { accepted: false, reason: 'deployment_managed' });
+    }
     const r = applyCommand(d, body);
     log(`[cmd] u=${currentUser(req)} ${id} ${body.type}${body.dir ? '/' + body.dir : ''}${body.mode ? '/' + body.mode : ''}${body.segments ? ` (${body.segments.length} 段)` : ''}${body.lane ? ` 车道=${body.lane}` : ''} → ${r.accepted ? 'accepted' : 'rejected: ' + r.reason}`);
     return sendJson(res, 200, r.accepted ? { accepted: true, cmdId: nid('c') } : { accepted: false, reason: r.reason });

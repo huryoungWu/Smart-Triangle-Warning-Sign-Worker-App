@@ -17,12 +17,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -45,6 +54,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.myapplication.core.geo.CoordTransform
+import com.example.myapplication.core.geo.DeploymentConeMapPin
 import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.geo.resolveDeploymentConePins
 import com.example.myapplication.core.model.deployment.CommandResultState
@@ -57,16 +68,22 @@ import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.ReportResultState
 import com.example.myapplication.core.model.deployment.SkipDisposition
 import com.example.myapplication.core.model.deployment.VerifyResultState
+import com.example.myapplication.core.model.vehicle.MoveDir
 import com.example.myapplication.core.ui.ConfirmDialog
 import com.example.myapplication.core.ui.DangerActionButton
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
+import com.example.myapplication.core.ui.RemoteControlPad
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
+import com.example.myapplication.core.ui.VideoStreamView
 import com.example.myapplication.core.ui.map.MapPin
+import com.example.myapplication.core.ui.map.MapPolyline
 import com.example.myapplication.core.ui.map.PhoneMapPanel
 import com.example.myapplication.core.util.TimeFormat
+import com.example.myapplication.core.util.udpVideoUrl
+import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.feature.map.MapViewModel
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
@@ -79,7 +96,9 @@ import com.example.myapplication.ui.theme.WarnOrangeBg
 import com.example.myapplication.ui.theme.WarningRed
 import com.example.myapplication.ui.theme.WarningRedBg
 import kotlinx.coroutines.awaitCancellation
+import java.net.URLEncoder
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 锥桶协同布设执行页：1Hz 聚合状态、逐设备卡片、异常处置、逐只核验。
@@ -95,6 +114,10 @@ fun DeploymentExecScreen(
     val state by vm.uiState.collectAsStateWithLifecycle()
     val event = state.event
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val sl = remember { ServiceLocator.get(context) }
+    val serverUrl by sl.settingsRepository.serverBaseUrl
+        .collectAsStateWithLifecycle(initialValue = sl.serverBaseUrl)
 
     LaunchedEffect(Unit) {
         if (vm.uiState.value.event == null) vm.loadActiveEvent()
@@ -107,6 +130,8 @@ fun DeploymentExecScreen(
             try {
                 awaitCancellation()
             } finally {
+                // 切后台/离开页面：停止手动保活（事件保持暂停，不自动 resume）
+                vm.onExecScreenStopped()
                 vm.stopPolling()
             }
         }
@@ -135,43 +160,75 @@ fun DeploymentExecScreen(
             }
         }
     }
-    val conePins = remember(event, coneAnchor) {
+    val conePositions = remember(event, coneAnchor) {
         val anchor = coneAnchor
         if (event == null || anchor == null) {
             emptyList()
         } else {
-            resolveDeploymentConePins(event, anchor).map { pin ->
-                MapPin(
-                    id = "cone:${pin.deviceCode}",
-                    point = pin.point,
-                    title = if (pin.isMaster) "主桶 ${pin.deviceCode}" else "从 ${pin.order} ${pin.deviceCode}",
-                    snippet = buildString {
-                        append("已行进 ${fmt(pin.traveledM)} m / 目标 ${fmt(pin.targetM)} m")
-                        if (pin.arrived) append(" · 已到位")
-                        if (pin.skipped) append(" · 已跳过")
-                        append("（位置为估算）")
-                    },
-                    colorArgb = when {
-                        pin.skipped -> NeutralGrey.toArgb()
-                        pin.arrived -> SafeGreen.toArgb()
-                        pin.isMaster -> InfoBlue.toArgb()
-                        else -> WarnOrange.toArgb()
-                    },
-                )
-            }
+            resolveDeploymentConePins(event, anchor)
+        }
+    }
+    val conePins = remember(conePositions) {
+        conePositions.map { pin ->
+            MapPin(
+                id = "cone:${pin.deviceCode}",
+                point = pin.point,
+                title = if (pin.isMaster) "主桶 ${pin.deviceCode}" else "从 ${pin.order} ${pin.deviceCode}",
+                snippet = buildString {
+                    append("已行进 ${fmt(pin.traveledM)} m / 目标 ${fmt(pin.targetM)} m")
+                    if (pin.arrived) append(" · 已到位")
+                    if (pin.skipped) append(" · 已跳过")
+                    append(" · 朝向 ${pin.headingDeg.roundToInt()}°（位置为估算）")
+                },
+                colorArgb = conePinColor(pin),
+            )
         }
     }
 
+    // 运行轨迹：按 1Hz 状态采样各桶位置，过滤静止抖动并限制长度
+    val coneTrails = remember(event?.deploymentId) {
+        mutableStateMapOf<String, List<GeoPoint>>()
+    }
+    LaunchedEffect(event?.deploymentId, coneAnchor, conePositions) {
+        if (event == null || coneAnchor == null) return@LaunchedEffect
+        conePositions.forEach { pin ->
+            val current = coneTrails[pin.deviceCode].orEmpty()
+            val last = current.lastOrNull()
+            if (last == null ||
+                CoordTransform.distanceM(last, pin.point) >= CONE_TRAIL_MIN_STEP_M
+            ) {
+                coneTrails[pin.deviceCode] = (current + pin.point).takeLast(CONE_TRAIL_MAX_POINTS)
+            }
+        }
+    }
+    val coneTrailLines = conePositions.mapNotNull { pin ->
+        val points = coneTrails[pin.deviceCode].orEmpty()
+        if (points.size < 2) {
+            null
+        } else {
+            MapPolyline(
+                id = "cone-trail:${pin.deviceCode}",
+                points = points,
+                colorArgb = conePinColor(pin),
+                width = 10f,
+            )
+        }
+    }
+
+    // 手指按在地图上时暂停整页滚动，避免滑地图变成滑页面
+    var mapTouchActive by remember { mutableStateOf(false) }
     var showPauseConfirm by remember { mutableStateOf(false) }
     var showAbortConfirm by remember { mutableStateOf(false) }
     var showRetryConfirm by remember { mutableStateOf(false) }
+    var showManualConfirm by remember { mutableStateOf(false) }
+    var showResumeConfirm by remember { mutableStateOf(false) }
     var skipTarget by remember { mutableStateOf<DeploymentDeviceState?>(null) }
     var verifyTarget by remember { mutableStateOf<DeploymentDeviceState?>(null) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(rememberScrollState(), enabled = !mapTouchActive)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -194,7 +251,33 @@ fun DeploymentExecScreen(
             return@Column
         }
 
-        EventStateBanner(event)
+        EventOverviewCard(event)
+
+        // 紧急操作：放在首屏显眼位置，避免现场着急时还要向下翻找
+        if (event.state == DeploymentState.RUNNING || event.state == DeploymentState.PAUSED) {
+            Button(
+                onClick = {
+                    if (event.state == DeploymentState.RUNNING) {
+                        showManualConfirm = true
+                    } else {
+                        vm.enterManualMode()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = WarnOrange,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(
+                    text = "单桶手动干预",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
 
         // 主/从桶实时位置（无逐桶 GPS，按各桶 traveledM 沿正北方向估算）
         if (coneAnchor != null || !event.terminal) {
@@ -204,14 +287,45 @@ fun DeploymentExecScreen(
                     height = 220.dp,
                     title = "主/从桶实时位置",
                     extraMarkers = conePins,
+                    extraPolylines = coneTrailLines,
                     showPhoneMarker = false,
                     cameraCenter = coneAnchor,
                     followPhone = false,
+                    onTouchActiveChange = { mapTouchActive = it },
                     caption = if (coneAnchor == null) {
                         "暂无手机定位锚点，无法估算锥桶位置；请允许定位后重试。"
                     } else {
-                        "蓝点=主桶，橙点=从桶，绿点=已到位，灰点=已跳过；按各桶已行进距离沿正北方向估算（非 GPS）。"
+                        "蓝点=主桶，橙点=从桶，绿点=已到位，灰点=已跳过；连线为运行轨迹；按各桶位置/朝向估算（旧数据回退正北投影，非 GPS）。"
                     },
+                )
+            }
+        }
+
+        // 主桶实时视频：复用三角架同一套 UDP 视频接口（逻辑接口不变）
+        val masterCode = event.master?.deviceCode
+        if (!event.terminal && masterCode != null) {
+            val token = sl.authRepository.currentToken
+            val target = buildString {
+                append("/api/v1/device/video/stream?device_code=").append(masterCode)
+                if (!token.isNullOrBlank()) {
+                    append("&token=").append(URLEncoder.encode(token, "UTF-8"))
+                }
+            }
+            val videoUrl = udpVideoUrl(serverUrl, target)
+            SectionCard(title = "主桶实时视频") {
+                VideoStreamView(
+                    url = videoUrl,
+                    contentDescription = "主桶实时视频",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "主桶 ${masterCode} 实时视频（UDP，接口同三角架实时视频）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
                 )
             }
         }
@@ -253,10 +367,6 @@ fun DeploymentExecScreen(
             }
         }
 
-        SectionCard(title = "整体进度") {
-            ProgressSummary(event)
-        }
-
         SectionCard(title = "设备状态（主桶在前，从桶按顺序）") {
             event.ordered.forEach { dev ->
                 DeviceStateCard(
@@ -268,11 +378,25 @@ fun DeploymentExecScreen(
             }
         }
 
+        // 暂停全部：仅 COMPLETED 不显示；RUNNING/STARTING 二次确认，其余状态直接执行/提示
+        if (event.state != DeploymentState.COMPLETED) {
+            PrimaryActionButton(
+                text = "暂停全部",
+                onClick = {
+                    if (event.state == DeploymentState.RUNNING || event.state == DeploymentState.STARTING) {
+                        showPauseConfirm = true
+                    } else {
+                        vm.pauseAll()
+                    }
+                },
+                enabled = !state.busy,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
         // 操作区
         when (event.state) {
             DeploymentState.RUNNING -> {
-                PrimaryActionButton("暂停全部", onClick = { showPauseConfirm = true })
-                Spacer(Modifier.height(8.dp))
                 if (canRetry(event)) {
                     SecondaryActionButton("重试当前步骤", onClick = { showRetryConfirm = true })
                     Spacer(Modifier.height(8.dp))
@@ -295,7 +419,7 @@ fun DeploymentExecScreen(
             }
 
             DeploymentState.PAUSED -> {
-                PrimaryActionButton("继续", onClick = { vm.resume() })
+                PrimaryActionButton("继续", onClick = { showResumeConfirm = true })
                 Spacer(Modifier.height(8.dp))
                 DangerActionButton("终止事件", onClick = { showAbortConfirm = true })
             }
@@ -350,6 +474,47 @@ fun DeploymentExecScreen(
         }
     }
 
+    val manualEvent = event
+    if (showManualConfirm) {
+        ConfirmDialog(
+            title = "进入手动干预？",
+            message = "将先暂停全部锥桶，再对选中的一只进行点动。手动移动计入该桶行程；完成后需手动「继续布设」才恢复自动链路。",
+            confirmText = "暂停并进入",
+            onConfirm = {
+                showManualConfirm = false
+                vm.enterManualMode()
+            },
+            onDismiss = { showManualConfirm = false },
+        )
+    }
+    if (state.manualMode && manualEvent != null) {
+        ManualJogDialog(
+            state = state,
+            event = manualEvent,
+            onSelectDevice = vm::selectManualDevice,
+            onHoldStart = vm::onHoldStart,
+            onHoldEnd = vm::onHoldEnd,
+            onStop = vm::onManualStop,
+            onDismiss = vm::exitManualMode,
+            onResume = {
+                vm.exitManualMode()
+                showResumeConfirm = true
+            },
+        )
+    }
+    if (showResumeConfirm) {
+        ConfirmDialog(
+            title = "继续布设？",
+            message = "所有锥桶将恢复自动移动。请确认手动点动已停止、现场路径安全。",
+            confirmText = "继续布设",
+            onConfirm = {
+                showResumeConfirm = false
+                vm.resume()
+            },
+            onDismiss = { showResumeConfirm = false },
+        )
+    }
+
     if (showPauseConfirm) {
         ConfirmDialog(
             title = "暂停全部锥桶？",
@@ -357,7 +522,7 @@ fun DeploymentExecScreen(
             confirmText = "暂停全部",
             onConfirm = {
                 showPauseConfirm = false
-                vm.pause("作业人员暂停")
+                vm.pauseAll()
             },
             onDismiss = { showPauseConfirm = false },
         )
@@ -433,14 +598,14 @@ fun DeploymentExecScreen(
 }
 
 @Composable
-private fun EventStateBanner(event: DeploymentEvent) {
+private fun EventOverviewCard(event: DeploymentEvent) {
     val (fg, bg) = when (event.state) {
         DeploymentState.COMPLETED -> SafeGreen to SafeGreenBg
         DeploymentState.ABORTED, DeploymentState.FAILED, DeploymentState.VERIFY_FAILED -> WarningRed to WarningRedBg
         DeploymentState.PAUSED, DeploymentState.PENDING_VERIFY -> WarnOrange to WarnOrangeBg
         else -> InfoBlue to InfoBlueBg
     }
-    SectionCard(title = "事件状态") {
+    SectionCard(title = "事件状态与整体进度") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StatusChip(event.state.label, fg, bg)
             if (event.result == DeploymentResult.COMPLETED_WITH_EXCEPTION) {
@@ -450,24 +615,21 @@ private fun EventStateBanner(event: DeploymentEvent) {
             Spacer(Modifier.weight(1f))
             Text(event.deploymentId, style = MaterialTheme.typography.labelSmall, color = NeutralGrey)
         }
+        Spacer(Modifier.height(10.dp))
+        EventProgressBar(event)
         Spacer(Modifier.height(6.dp))
         Text(
             "已到达 ${event.arrivedCount}/${event.devices.size} · 已核验 ${event.verifiedCount}/${event.devices.size}" +
                 if (event.hasSkip) " · 人工跳过 ${event.devices.count { it.skipped }}" else "",
             style = MaterialTheme.typography.bodySmall,
         )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "主桶与从桶可同时移动；到达数量与核验数量分开统计。",
+            style = MaterialTheme.typography.labelSmall,
+            color = NeutralGrey,
+        )
     }
-}
-
-@Composable
-private fun ProgressSummary(event: DeploymentEvent) {
-    EventProgressBar(event)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "主桶与从桶可同时移动；到达数量与核验数量分开统计。",
-        style = MaterialTheme.typography.labelSmall,
-        color = NeutralGrey,
-    )
 }
 
 @Composable
@@ -730,6 +892,129 @@ private fun VerifyDeviceDialog(
 }
 
 @Composable
+private fun ManualJogDialog(
+    state: DeploymentUiState,
+    event: DeploymentEvent,
+    onSelectDevice: (String) -> Unit,
+    onHoldStart: (MoveDir) -> Unit,
+    onHoldEnd: () -> Unit,
+    onStop: () -> Unit,
+    onDismiss: () -> Unit,
+    onResume: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    val selected = state.manualDeviceCode?.let(event::device)
+    val canJog = event.state == DeploymentState.PAUSED &&
+        !state.manualEntering && !state.busy && selected?.manualEligible == true
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("单桶手动干预") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box {
+                    OutlinedButton(
+                        onClick = { menuExpanded = true },
+                        enabled = state.manualHoldingDir == null && !state.manualEntering,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            selected?.let { "${it.orderLabel} · ${it.deviceCode} · ${it.phase.label}" }
+                                ?: "请选择要控制的锥桶",
+                            modifier = Modifier.weight(1f),
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "选择锥桶")
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        event.ordered.forEach { device ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            "${device.orderLabel} · ${device.deviceCode}",
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        Text(
+                                            buildString {
+                                                append(device.phase.label)
+                                                append(" · 已行进 ${fmt(device.traveledM)}/${fmt(device.targetM)} m")
+                                                if (device.manualActive) append(" · 手动中")
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = NeutralGrey,
+                                        )
+                                    }
+                                },
+                                trailingIcon = {
+                                    if (device.deviceCode == selected?.deviceCode) {
+                                        Text("✓", color = SafeGreen, fontWeight = FontWeight.Bold)
+                                    }
+                                },
+                                onClick = {
+                                    onSelectDevice(device.deviceCode)
+                                    menuExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+
+                selected?.let {
+                    Text(
+                        "目标 ${fmt(it.targetM)} m · 已行进 ${fmt(it.traveledM)} m · 朝向 ${it.headingDeg.roundToInt()}°",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                RemoteControlPad(
+                    enabled = canJog,
+                    holdingDir = state.manualHoldingDir,
+                    onHoldStart = onHoldStart,
+                    onHoldEnd = onHoldEnd,
+                    onStopClick = onStop,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Text(
+                    text = when {
+                        state.manualEntering -> "正在暂停全部锥桶…"
+                        event.state != DeploymentState.PAUSED -> "等待全部锥桶暂停…"
+                        selected == null -> "请选择要控制的锥桶"
+                        !selected.online -> "所选桶离线，不能点动"
+                        selected.skipped -> "所选桶已跳过"
+                        selected.arrived -> "所选桶已到位"
+                        selected.phase != DeploymentPhase.STOPPED -> "所选桶当前状态 ${selected.phase.label}，不能点动"
+                        selected.traveledM >= selected.targetM - 1e-9 -> "目标已达成，继续布设后确认"
+                        else -> "按住方向键点动，松手停车；仅所选桶动作。手动移动计入该桶行程。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (canJog) NeutralGrey else WarnOrange,
+                )
+                Text(
+                    "手动干预期间布设已暂停；关闭后保持暂停，需点「继续布设」恢复自动链路。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onResume,
+                enabled = event.state == DeploymentState.PAUSED && !state.busy,
+            ) { Text("继续布设") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("关闭（保持暂停）") }
+        },
+    )
+}
+
+@Composable
 private fun CheckboxRow(text: String, checked: Boolean, onToggle: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = checked, onCheckedChange = { onToggle() })
@@ -741,6 +1026,17 @@ private fun CheckboxRow(text: String, checked: Boolean, onToggle: () -> Unit) {
 private const val ANCHOR_LIVE_WINDOW_MS = 2 * 60 * 1000L
 /** 历史事件：允许从轨迹里找更早的起点；找不到就不显示估算点位 */
 private const val ANCHOR_HISTORY_WINDOW_MS = 30 * 60 * 1000L
+/** 锥桶轨迹最小采样距离（米），过滤 1Hz 轮询下的静止抖动 */
+private const val CONE_TRAIL_MIN_STEP_M = 0.5
+/** 单只桶最多保留的轨迹点数 */
+private const val CONE_TRAIL_MAX_POINTS = 500
+
+private fun conePinColor(pin: DeploymentConeMapPin): Int = when {
+    pin.skipped -> NeutralGrey.toArgb()
+    pin.arrived -> SafeGreen.toArgb()
+    pin.isMaster -> InfoBlue.toArgb()
+    else -> WarnOrange.toArgb()
+}
 
 private fun fmt(v: Double): String =
     if (v == v.toInt().toDouble()) v.toInt().toString() else String.format("%.1f", v)

@@ -60,7 +60,8 @@ fun ConeHomeScreen(
 
     val hasMaster = draft.master != null
     val hasSlaves = draft.slaves.isNotEmpty()
-    val ready = hasMaster && hasSlaves
+    // 主桶必选；从桶可为 0（仅主桶执行）
+    val ready = hasMaster
     val active = state.activeEvent
 
     Column(
@@ -72,11 +73,11 @@ fun ConeHomeScreen(
     ) {
         PageTitle(
             text = "锥桶协同布设",
-            subtitle = "1 主桶 + N 从桶 · 按自身行程逐级启动",
+            subtitle = "1 主桶 + 0~5 从桶 · 按自身行程逐级启动",
             onBack = onSwitchWorkType,
         )
 
-        SafetyText("锥桶设备由服务端统一编排；发布任务前请确认主桶/从桶已绑定并处于同一在线状态。")
+        SafetyText("锥桶设备由服务端统一编排；发布任务前请确认主桶/从桶已绑定并处于同一在线状态；未选择从桶时可仅主桶执行。")
 
         active?.let { event ->
             DeploymentActiveCard(
@@ -96,7 +97,7 @@ fun ConeHomeScreen(
                         if (hasSlaves) {
                             "从桶：${draft.slaves.sortedBy { it.order }.joinToString(" → ") { it.device.deviceCode }}"
                         } else {
-                            "从桶：未选择"
+                            "从桶：无（仅主桶执行）"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -129,7 +130,7 @@ fun ConeHomeScreen(
             )
         } else if (!ready) {
             Text(
-                "请先进入「设备连接」选择主桶和至少 1 个从桶。",
+                "请先进入「设备连接」选择主桶；从桶可选（不选则仅主桶执行）。",
                 color = WarnOrange,
                 style = MaterialTheme.typography.bodySmall,
             )

@@ -80,12 +80,14 @@ fun DeploymentPublishScreen(
         vm.loadActiveEvent(force = true)
     }
 
+    // 手指按在地图上时暂停整页滚动，避免滑地图变成滑页面
+    var mapTouchActive by remember { mutableStateOf(false) }
     var showStartConfirm by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(rememberScrollState(), enabled = !mapTouchActive)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -102,6 +104,7 @@ fun DeploymentPublishScreen(
             title = "现场位置",
             showPhoneMarker = true,
             caption = "蓝星为当前作业人员位置（高德定位）。",
+            onTouchActiveChange = { mapTouchActive = it },
         )
 
         SectionCard(title = "事件信息") {
@@ -142,7 +145,7 @@ fun DeploymentPublishScreen(
                 "从桶：${
                     draft.slaves.sortedBy { it.order }
                         .joinToString(" → ") { "${it.device.deviceCode}(从${it.order})" }
-                        .ifBlank { "未选择" }
+                        .ifBlank { "无（仅主桶执行）" }
                 }",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -162,45 +165,68 @@ fun DeploymentPublishScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = draft.dText,
-                onValueChange = vm::updateD,
-                label = { Text("相邻设备启动间隔 d（米）") },
-                singleLine = true,
-                isError = draft.dText.isNotBlank() && (draft.d == null || draft.step2Errors().isNotEmpty()),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "L、d 都是沿预定路线的累计行程（米），不是地图直线距离，也不是时间。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            Text("从桶数量 N = ${draft.n}", style = MaterialTheme.typography.bodyMedium)
-            if (draft.n == 0) {
-                Text("请先返回设备连接页选择从桶。", color = WarningRed, style = MaterialTheme.typography.labelSmall)
+            if (draft.n > 0) {
+                OutlinedTextField(
+                    value = draft.dText,
+                    onValueChange = vm::updateD,
+                    label = { Text("相邻设备启动间隔 d（米）") },
+                    singleLine = true,
+                    isError = draft.dText.isNotBlank() && (draft.d == null || draft.step2Errors().isNotEmpty()),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "L、d 都是沿预定路线的累计行程（米），不是地图直线距离，也不是时间。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    "未选择从桶：无需填写启动间隔 d，仅主桶执行到 L。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
             }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                if (draft.n == 0) "从桶数量 N = 0（仅主桶执行）" else "从桶数量 N = ${draft.n}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
         SectionCard(title = "布设预览（沿路线累计行程）") {
             if (draft.preview.isEmpty()) {
-                Text("填写 L、d 后显示主桶与各从桶的目标行程。", color = NeutralGrey)
+                Text(
+                    if (draft.n == 0) {
+                        "填写 L 后显示主桶目标行程。"
+                    } else {
+                        "填写 L、d 后显示主桶与各从桶的目标行程。"
+                    },
+                    color = NeutralGrey,
+                )
             } else {
                 draft.preview.forEach { p -> TargetRow(p) }
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "启动链路：主桶自身到 d → 启动从 1；从 1 自身到 d → 上报主桶 → 启动从 2；依此类推。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "注意：从 k 移动到 d 只是达到启动间隔，不是到达最终位置；后续桶不会停在 d 等待。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WarnOrange,
-                )
+                if (draft.n == 0) {
+                    Text(
+                        "仅主桶执行到 L，没有从桶启动链路。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "启动链路：主桶自身到 d → 启动从 1；从 1 自身到 d → 上报主桶 → 启动从 2；依此类推。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "注意：从 k 移动到 d 只是达到启动间隔，不是到达最终位置；后续桶不会停在 d 等待。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarnOrange,
+                    )
+                }
             }
         }
 
@@ -214,19 +240,27 @@ fun DeploymentPublishScreen(
             )
             ConditionRow("主桶已选择", draft.master != null, "")
             ConditionRow(
-                "从桶数量 1~${DeploymentLimits.N_MAX}",
-                draft.n in 1..DeploymentLimits.N_MAX,
-                "当前 ${draft.n}",
+                "从桶数量 0~${DeploymentLimits.N_MAX}",
+                draft.n in 0..DeploymentLimits.N_MAX,
+                if (draft.n == 0) "当前 0（仅主桶）" else "当前 ${draft.n}",
             )
         }
 
         SectionCard(title = "人工现场确认") {
             CheckRow(
-                "我已现场确认：所有锥桶按编队顺序置于同一起始线，朝向布设方向，路线无障碍物和人员。",
+                if (draft.n == 0) {
+                    "我已现场确认：主桶置于起始线，朝向布设方向，路线无障碍物和人员。"
+                } else {
+                    "我已现场确认：所有锥桶按编队顺序置于同一起始线，朝向布设方向，路线无障碍物和人员。"
+                },
                 draft.precheckSafety,
                 vm::toggleSafety,
             )
-            CheckRow("我已核对主桶/从桶编号与 APP 顺序一致。", draft.precheckOrder, vm::toggleOrder)
+            CheckRow(
+                if (draft.n == 0) "我已核对主桶编号与 APP 一致。" else "我已核对主桶/从桶编号与 APP 顺序一致。",
+                draft.precheckOrder,
+                vm::toggleOrder,
+            )
             if (!draft.precheckDone) {
                 Text(
                     "请完成以上两项现场确认后才能开始。",

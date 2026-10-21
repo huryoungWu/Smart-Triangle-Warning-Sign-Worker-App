@@ -8,6 +8,7 @@ import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.SkipDisposition
+import com.example.myapplication.core.model.vehicle.MoveDir
 import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -243,6 +244,91 @@ class ServerDeploymentRepository(
 
     override suspend fun complete(deploymentId: String): Result<Unit> =
         control(deploymentId, "complete") {}
+
+    override suspend fun manualMove(
+        deploymentId: String,
+        deviceCode: String,
+        deviceType: DeploymentDeviceType,
+        dir: MoveDir,
+        sessionId: String,
+        seq: Long,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject()
+                .put("commandId", UUID.randomUUID().toString())
+                .put("sessionId", sessionId)
+                .put("seq", seq)
+                .put("device_code", deviceCode)
+                .put("device_type", deviceType.token)
+                .put("dir", dir.manualToken)
+            requestManual(
+                "POST",
+                "$baseUrl/api/v1/deployments/${enc(deploymentId)}/manual/move",
+                body.toString(),
+            )
+            Unit
+        }
+    }
+
+    override suspend fun manualStop(
+        deploymentId: String,
+        deviceCode: String,
+        deviceType: DeploymentDeviceType,
+        sessionId: String,
+        seq: Long,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject()
+                .put("commandId", UUID.randomUUID().toString())
+                .put("sessionId", sessionId)
+                .put("seq", seq)
+                .put("device_code", deviceCode)
+                .put("device_type", deviceType.token)
+            requestManual(
+                "POST",
+                "$baseUrl/api/v1/deployments/${enc(deploymentId)}/manual/stop",
+                body.toString(),
+            )
+            Unit
+        }
+    }
+
+    /**
+     * 手动点动专用短超时请求：300ms 保活必须在 800ms 服务端看门狗内完成，
+     * 不能复用普通控制请求的 3000ms read timeout。
+     */
+    private fun requestManual(method: String, url: String, body: String?): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = method
+            conn.connectTimeout = 500
+            conn.readTimeout = 700
+            conn.setRequestProperty("Accept", "application/json")
+            tokenProvider()?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+            if (body != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IOException(serverErrorMessage(code, text))
+            return text
+        } catch (e: SocketTimeoutException) {
+            throw IOException("手动干预应答超时（700ms）", e)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private val MoveDir.manualToken: String
+        get() = when (this) {
+            MoveDir.FWD -> "fwd"
+            MoveDir.BACK -> "back"
+            MoveDir.LEFT -> "left"
+            MoveDir.RIGHT -> "right"
+        }
 
     /** 控制动作统一出口：commandId 由 APP 生成，服务端幂等 */
     private suspend fun control(

@@ -256,13 +256,38 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/skip \
 - 被跳过设备 `skipped_manual`、不计到达；仍需核验处置方式；
 - 事件完成结果 `completed_with_exception`。
 
+### 单桶手动干预（2026-10-22 新增）
+
+先暂停全部，再对选中桶发四向点动（APP 按住期间每 300ms 发一次；服务端 800ms 看门狗）：
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/pause \
+  -H 'Content-Type: application/json' -d '{"reason":"manual"}'
+
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/manual/move \
+  -H 'Content-Type: application/json' \
+  -d '{"commandId":"m1","sessionId":"hold-1","seq":1,
+       "device_code":"CONE-M-001","device_type":"master_cone","dir":"fwd"}'
+
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/manual/stop \
+  -H 'Content-Type: application/json' \
+  -d '{"commandId":"m2","sessionId":"hold-1","seq":2,
+       "device_code":"CONE-M-001","device_type":"master_cone"}'
+```
+
+- 仅 `paused` 可用；同一事件同一时刻只允许一只桶手动；
+- 四向 `fwd/back/left/right`；手动移动计入 `traveledM`，并更新 `pos{x,y}/headingDeg`；
+- 暂停期间不触发后继；`resume` 后按当前行程正常触发/到达；
+- 三角架 `/api/v1/device/command` 的 move/manual_stop 对布设设备返回 `deployment_managed`。
+
 ### 自动化验收
 
 ```bash
 node tools/mock-server/test-deployment.js
 ```
 
-覆盖：正常逐级触发与目标行程、单进行中事件、上报丢失→人工跳过→`completed_with_exception`。
+覆盖：正常逐级触发与目标行程、单进行中事件、上报丢失→人工跳过→`completed_with_exception`、
+N=0、暂停/四向点动/保活/看门狗/暂停不触发后继/resume 触发。
 
 ### 数据持久化
 

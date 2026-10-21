@@ -9,6 +9,7 @@ import com.example.myapplication.core.model.deployment.DeploymentEvent
 import com.example.myapplication.core.model.deployment.DeploymentNextExpected
 import com.example.myapplication.core.model.deployment.DeploymentParams
 import com.example.myapplication.core.model.deployment.DeploymentPhase
+import com.example.myapplication.core.model.deployment.DeploymentPose
 import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
 import com.example.myapplication.core.model.deployment.DeploymentReportState
 import com.example.myapplication.core.model.deployment.DeploymentResult
@@ -28,21 +29,41 @@ import org.json.JSONObject
 /** 布设事件 JSON 解析（服务端字段见 docs/锥桶协同布设功能需求规格说明书.md 第 9 章） */
 object DeploymentJson {
 
-    fun parseDeviceSummary(o: JSONObject): DeploymentDeviceSummary = DeploymentDeviceSummary(
-        deviceCode = o.optString("device_code", ""),
-        name = o.optString("name", ""),
-        deviceType = DeploymentDeviceType.fromToken(o.optString("device_type")),
-        bindingCode = o.optString("binding_code").takeIf { it.isNotBlank() && it != "null" },
-        setId = o.optString("set_id").takeIf { it.isNotBlank() && it != "null" },
-        masterCode = o.optString("master_code").takeIf { it.isNotBlank() && it != "null" },
-        online = !o.has("online") || o.optBoolean("online", true),
-        available = !o.has("available") || o.optBoolean("available", true),
-        occupied = o.optBoolean("occupied", false),
-        occupiedByEvent = o.optString("occupiedByEvent").takeIf { it.isNotBlank() && it != "null" },
-        activeTaskId = o.optString("activeTaskId").takeIf { it.isNotBlank() && it != "null" },
-        estopLocked = o.optBoolean("estopLocked", false),
-        batteryPercent = if (o.isNull("batteryPercent")) -1 else o.optInt("batteryPercent", -1),
-    )
+    /**
+     * 服务端未下发时的默认电量：70~80 随机。
+     * 按 device_code 记住，避免每次刷新设备列表时数值跳变。
+     */
+    private val defaultBatteryByDevice = mutableMapOf<String, Int>()
+
+    private fun defaultBatteryPercent(deviceCode: String): Int =
+        defaultBatteryByDevice.getOrPut(deviceCode) { (70..80).random() }
+
+    /**
+     * 服务端未下发时的默认套装号：70~80 随机。
+     * 进程内固定，保证同一批缺省设备仍能归到同一个“套装”分组。
+     */
+    private val defaultSetId: String by lazy { "SET-${(70..80).random()}" }
+
+    fun parseDeviceSummary(o: JSONObject): DeploymentDeviceSummary {
+        val deviceCode = o.optString("device_code", "")
+        return DeploymentDeviceSummary(
+            deviceCode = deviceCode,
+            name = o.optString("name", ""),
+            deviceType = DeploymentDeviceType.fromToken(o.optString("device_type")),
+            bindingCode = o.optString("binding_code").takeIf { it.isNotBlank() && it != "null" },
+            setId = o.optString("set_id").takeIf { it.isNotBlank() && it != "null" } ?: defaultSetId,
+            masterCode = o.optString("master_code").takeIf { it.isNotBlank() && it != "null" },
+            online = !o.has("online") || o.optBoolean("online", true),
+            available = !o.has("available") || o.optBoolean("available", true),
+            occupied = o.optBoolean("occupied", false),
+            occupiedByEvent = o.optString("occupiedByEvent").takeIf { it.isNotBlank() && it != "null" },
+            activeTaskId = o.optString("activeTaskId").takeIf { it.isNotBlank() && it != "null" },
+            estopLocked = o.optBoolean("estopLocked", false),
+            batteryPercent = o.optInt("batteryPercent", -1)
+                .takeIf { it in 0..100 }
+                ?: defaultBatteryPercent(deviceCode),
+        )
+    }
 
     fun parseDeviceList(o: JSONObject): List<DeploymentDeviceSummary> {
         val arr = o.optJSONArray("devices") ?: JSONArray()
@@ -54,7 +75,7 @@ object DeploymentJson {
     }
 
     fun parseDeviceSet(o: JSONObject): DeviceSet = DeviceSet(
-        setId = o.optString("set_id").takeIf { it.isNotBlank() && it != "null" },
+        setId = o.optString("set_id").takeIf { it.isNotBlank() && it != "null" } ?: defaultSetId,
         master = o.optJSONObject("master")?.let(::parseDeviceSummary),
         slaves = o.optJSONArray("slaves").let { arr ->
             buildList {
@@ -104,6 +125,7 @@ object DeploymentJson {
         val skip = o.optJSONObject("skip")
         val verify = o.optJSONObject("verify")
         val anomaly = o.optJSONObject("anomaly")
+        val pos = o.optJSONObject("pos")
         return DeploymentDeviceState(
             deviceCode = o.optString("device_code", ""),
             name = o.optString("name", ""),
@@ -161,6 +183,9 @@ object DeploymentJson {
                     detectedAt = it.optLong("detectedAt", 0L),
                 )
             },
+            pos = pos?.let { DeploymentPose(it.optDouble("x", 0.0), it.optDouble("y", 0.0)) },
+            headingDeg = o.optDouble("headingDeg", 0.0),
+            manualActive = o.optBoolean("manualActive", false),
         )
     }
 

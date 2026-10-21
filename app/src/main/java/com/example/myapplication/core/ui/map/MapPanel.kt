@@ -143,11 +143,14 @@ fun PhoneMapPanel(
     height: Dp = 240.dp,
     title: String = "现场位置",
     extraMarkers: List<MapPin> = emptyList(),
+    extraPolylines: List<MapPolyline> = emptyList(),
     showPhoneMarker: Boolean = true,
     caption: String? = null,
     cameraCenter: GeoPoint? = null,
     followPhone: Boolean? = null,
     cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
+    /** 地图按下/抬起回调：页面可据此在拖动地图时禁用外层垂直滚动 */
+    onTouchActiveChange: ((Boolean) -> Unit)? = null,
 ) {
     val mapState by mapVm.uiState.collectAsStateWithLifecycle()
     val phoneFix by mapVm.phoneFix.collectAsStateWithLifecycle()
@@ -193,8 +196,10 @@ fun PhoneMapPanel(
                 ),
                 onMapReady = { },
                 extraMarkers = extraMarkers,
+                extraPolylines = extraPolylines,
                 showPhoneMarker = showPhoneMarker,
                 cameraZoom = cameraZoom,
+                onTouchActiveChange = onTouchActiveChange,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(height),

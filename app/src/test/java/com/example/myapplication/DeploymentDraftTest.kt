@@ -112,7 +112,24 @@ class DeploymentDraftTest {
         )
         assertTrue(d.eventErrors().isEmpty())
         assertTrue(d.deviceErrors().any { it.contains("请选择主桶") })
-        assertTrue(d.deviceErrors().any { it.contains("请至少选择 1 只从桶") })
+    }
+
+    @Test
+    fun `master only deployment is valid without slaves`() {
+        val d = DeploymentDraft(
+            name = "test",
+            lane = 2,
+            master = dev("M", DeploymentDeviceType.MASTER_CONE),
+            slaves = emptyList(),
+            lText = "60",
+            dText = "",
+            precheckSafety = true,
+            precheckOrder = true,
+        )
+        assertTrue(d.validate().isEmpty())
+        assertEquals(1.0, d.d!!, 1e-9)
+        assertEquals(listOf(60.0), d.preview.map { it.targetM })
+        assertTrue(d.canStart())
     }
 
     @Test
@@ -149,9 +166,10 @@ class DeploymentDraftTest {
     }
 
     @Test
-    fun `N must be between one and five`() {
+    fun `N must be between zero and five`() {
+        // 0 从桶 = 仅主桶执行，合法
         val none = draft("60", "10", 0)
-        assertTrue(none.validate().any { it.contains("至少选择 1 只从桶") })
+        assertTrue(none.validate().isEmpty())
         val tooMany = draft("100", "10", 6)
         assertTrue(tooMany.validate().any { it.contains("不能超过 5") })
     }

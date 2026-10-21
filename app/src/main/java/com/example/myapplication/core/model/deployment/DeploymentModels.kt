@@ -205,7 +205,13 @@ data class DeploymentDraft(
 ) {
     val n: Int get() = slaves.size
     val L: Double? get() = lText.trim().replace('−', '-').toDoubleOrNull()
-    val d: Double? get() = dText.trim().replace('−', '-').toDoubleOrNull()
+    /**
+     * 从桶启动间隔。
+     * 没有从桶时该参数不参与控制，但现有创建接口仍要求传 d（>0）；
+     * 因此仅主桶执行时缺省用 1.0，请求字段/接口保持不变。
+     */
+    val d: Double? get() =
+        dText.trim().replace('−', '-').toDoubleOrNull() ?: if (n == 0) 1.0 else null
 
     fun targetFor(order: Int): Double? {
         val l = L ?: return null
@@ -240,7 +246,6 @@ data class DeploymentDraft(
     fun deviceErrors(): List<String> {
         val errors = mutableListOf<String>()
         if (master == null) errors.add("请选择主桶")
-        if (n < 1) errors.add("请至少选择 1 只从桶")
         if (n > DeploymentLimits.N_MAX) errors.add("从桶数量不能超过 ${DeploymentLimits.N_MAX}")
         val orders = slaves.map { it.order }
         if (orders.sorted() != (1..n).toList()) errors.add("从桶顺序必须为连续的 1..$n")
@@ -290,7 +295,6 @@ data class DeploymentDraft(
                 errors.add("L 必须 ≥ N×d（当前 ${fmt(l)} < ${n}×${fmt(interval)}=${fmt(need)}）")
             }
         }
-        if (n == 0) errors.add("请先选择从桶")
         return errors
     }
 
@@ -362,6 +366,9 @@ data class DeploymentAnomaly(
     val label: String get() = message.ifBlank { code }
 }
 
+/** 部署中的桶相对起始线的位置（米，东/北） */
+data class DeploymentPose(val x: Double, val y: Double)
+
 data class DeploymentDeviceState(
     val deviceCode: String,
     val name: String,
@@ -380,6 +387,10 @@ data class DeploymentDeviceState(
     val skip: DeploymentSkip? = null,
     val verify: DeploymentVerifyState = DeploymentVerifyState(),
     val anomaly: DeploymentAnomaly? = null,
+    /** 服务端返回的相对起始线位置；旧服务端/旧事件为 null（地图回退 traveledM 正北） */
+    val pos: DeploymentPose? = null,
+    val headingDeg: Double = 0.0,
+    val manualActive: Boolean = false,
 ) {
     val progress: Float
         get() = if (targetM <= 0.001) 1f else (traveledM / targetM).toFloat().coerceIn(0f, 1f)
@@ -388,6 +399,11 @@ data class DeploymentDeviceState(
     val orderLabel: String get() = if (isMaster) "主桶" else "从 $order"
     val started: Boolean get() = phase != DeploymentPhase.NOT_STARTED
     val skipped: Boolean get() = skip?.skipped == true || phase == DeploymentPhase.SKIPPED_MANUAL
+
+    /** 设备自身是否可在暂停时手动点动；事件还必须处于 PAUSED 才能操作 */
+    val manualEligible: Boolean
+        get() = online && phase == DeploymentPhase.STOPPED && !arrived && !skipped &&
+            traveledM < targetM - 1e-9
 }
 
 data class DeploymentNextExpected(
@@ -439,6 +455,15 @@ data class DeploymentEvent(
     val allVerified: Boolean get() = devices.all { it.verify.state == VerifyResultState.PASS }
 
     fun device(code: String): DeploymentDeviceState? = devices.firstOrNull { it.deviceCode == code }
+
+    /** 暂停中且所选设备可点动 */
+    fun jogEligible(code: String?): Boolean =
+        state == DeploymentState.PAUSED && code?.let(::device)?.manualEligible == true
+
+    /** 默认控制主桶；主桶不可点动时选第一只可点动的桶 */
+    fun defaultJogDeviceCode(): String? =
+        master?.takeIf { it.manualEligible }?.deviceCode
+            ?: devices.firstOrNull { it.manualEligible }?.deviceCode
 }
 
 data class DeploymentRecordSummary(

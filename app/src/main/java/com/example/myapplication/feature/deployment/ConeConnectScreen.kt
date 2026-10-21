@@ -100,7 +100,7 @@ fun ConeConnectScreen(
     ) {
         PageTitle(
             text = "锥桶设备连接",
-            subtitle = "1 主桶 + N 从桶 · 绑定后选择本次编队",
+            subtitle = "1 主桶 + 0~${DeploymentLimits.N_MAX} 从桶 · 绑定后选择本次编队",
             onBack = onBack,
         )
 
@@ -141,7 +141,7 @@ fun ConeConnectScreen(
                 Text("请先选择主桶。", color = NeutralGrey)
                 return@SectionCard
             }
-            SafetyText("任意已绑定从桶都可加入任意主桶；套装只用于默认候选。绑定 ≠ 加入，勾选后才参与本次布设。")
+            SafetyText("任意已绑定从桶都可加入任意主桶；套装只用于默认候选。绑定 ≠ 加入，勾选后才参与本次布设。也可以不选从桶，仅主桶执行。")
             Spacer(Modifier.height(6.dp))
             if (state.slaveCandidates.isEmpty()) {
                 Text("暂无已绑定且可用的从桶。请先扫码或输入编号绑定。", color = WarnOrange)
@@ -199,7 +199,8 @@ fun ConeConnectScreen(
             }
         }
 
-        val ready = draft.master != null && draft.slaves.isNotEmpty()
+        // 只要求主桶；从桶可为 0（仅主桶执行）
+        val ready = draft.master != null
         PrimaryActionButton(
             text = "完成设备连接",
             onClick = { if (vm.validateDevices()) onDevicesReady() },
@@ -207,13 +208,17 @@ fun ConeConnectScreen(
         )
         if (!ready) {
             Text(
-                "请先选择 1 个主桶和至少 1 个从桶。",
+                "请先选择 1 个主桶；从桶可选（不选则仅主桶执行）。",
                 style = MaterialTheme.typography.labelSmall,
                 color = WarnOrange,
             )
         } else {
             Text(
-                "下一步进入锥桶作业首页，可发布布设任务。",
+                if (draft.slaves.isEmpty()) {
+                    "未选择从桶：下一步仅主桶执行；进入锥桶作业首页后可发布布设任务。"
+                } else {
+                    "下一步进入锥桶作业首页，可发布布设任务。"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = NeutralGrey,
             )

@@ -7,6 +7,7 @@ import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.SkipDisposition
+import com.example.myapplication.core.model.vehicle.MoveDir
 
 /**
  * 锥桶协同布设通信接口 —— APP 只认服务端协议。
@@ -81,4 +82,26 @@ interface DeploymentRepository {
         note: String,
     ): Result<Unit>
     suspend fun complete(deploymentId: String): Result<Unit>
+
+    /**
+     * 单桶手动点动（仅 PAUSED；四向）。
+     * [sessionId] 每次按住生成一次，[seq] 在本次按住内递增，服务端用于拒绝迟到的保活包。
+     */
+    suspend fun manualMove(
+        deploymentId: String,
+        deviceCode: String,
+        deviceType: DeploymentDeviceType,
+        dir: MoveDir,
+        sessionId: String,
+        seq: Long,
+    ): Result<Unit>
+
+    /** 单桶手动停止（幂等；同 sessionId 的迟到 stop 不会停掉新按住）。 */
+    suspend fun manualStop(
+        deploymentId: String,
+        deviceCode: String,
+        deviceType: DeploymentDeviceType,
+        sessionId: String,
+        seq: Long,
+    ): Result<Unit>
 }

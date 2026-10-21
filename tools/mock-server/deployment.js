@@ -25,9 +25,13 @@ const LIMITS = {
   precision: 0.1,
   speed: 1.0,
   slowSpeed: 0.5,
+  turnDps: 60,
+  manualWatchdogMs: 800,
   readyTtlMs: 30 * 60 * 1000,
   persistEveryMs: 2000,
 };
+
+const MANUAL_DIRS = new Set(['fwd', 'back', 'left', 'right']);
 
 const TERMINAL = new Set(['completed', 'aborted', 'failed']);
 const SKIP_DISPOSITIONS = new Set(['placed_manually', 'removed_from_route', 'not_required']);
@@ -93,6 +97,12 @@ function load() {
           const g = ctx.devices.get(dd.device_code);
           if (g) dd.binding_code = g.bindingCode;
         }
+        // 旧落盘没有 pose：按原语义（正北投影）迁移；重启不自动续跑手动
+        if (!Number.isFinite(dd.posX)) dd.posX = 0;
+        if (!Number.isFinite(dd.posY)) dd.posY = Number(dd.traveledM) || 0;
+        if (!Number.isFinite(dd.headingDeg)) dd.headingDeg = 0;
+        dd.manual = null;
+        dd.lastManual = null;
       }
       for (const a of dep.anomalies || []) {
         if (!a.device_code && a.deviceCode) a.device_code = a.deviceCode;
@@ -107,6 +117,8 @@ function load() {
         g.occupied = true;
         g.occupiedByEvent = dep.id;
         g.deployment = deploymentView(dd, dep);
+        g.pos = { x: dd.posX, y: dd.posY };
+        if (g.task) g.task.heading = dd.headingDeg;
       }
     }
     if (deployments.size) {
@@ -261,20 +273,31 @@ function deploymentView(dd, dep) {
     reachedInterval: dd.reachedInterval,
     arrived: dd.arrived,
     skipped: dd.phase === 'skipped_manual',
+    posX: round2(dd.posX),
+    posY: round2(dd.posY),
+    headingDeg: round2(dd.headingDeg),
+    manualActive: !!dd.manual,
   };
 }
 
 function updateGlobal(dd, dep) {
   const g = deviceOf(dd);
   if (!g) return;
+  g.pos = { x: dd.posX, y: dd.posY };
+  if (g.task) g.task.heading = dd.headingDeg;
   g.deployment = deploymentView(dd, dep);
   g.occupied = true;
   g.occupiedByEvent = dep.id;
 }
 
+function round2(v) {
+  return Math.round(Number(v || 0) * 100) / 100;
+}
+
 function releaseAll(dep) {
   for (const dd of dep.devices) {
     const g = deviceOf(dd);
+    dd.manual = null;
     if (!g) continue;
     g.occupied = false;
     g.occupiedByEvent = null;
@@ -363,9 +386,209 @@ function checkComplete(dep) {
   persist();
 }
 
+function stopManual(dd, dep, reason) {
+  const g = deviceOf(dd);
+  const active = dd.manual;
+  dd.manual = null;
+  if (active) {
+    dd.lastManual = { sessionId: active.sessionId, seq: active.seq };
+    addStep(dep, {
+      type: reason === 'manual_timeout' ? 'manual_timeout' : 'manual_stop',
+      from: 'operator',
+      to: dd.device_code,
+      state: reason,
+      sessionId: active.sessionId,
+    });
+  }
+  if (g) {
+    g.motion = 'idle';
+    g.mode = 'standby';
+    g.odo.speedMps = 0;
+  }
+  updateGlobal(dd, dep);
+  persist();
+}
+
+function manualMove(dep, body) {
+  if (dep.state !== 'paused') {
+    return { error: { status: 409, code: 'deployment_not_paused', message: '请先暂停全部锥桶再手动干预' } };
+  }
+  const t = targetDevice(dep, body);
+  if (t.error) return t;
+  const dd = t.dd;
+  const g = deviceOf(dd);
+  if (!g || g.online === false) {
+    return { error: { status: 409, code: 'device_offline', message: `设备 ${dd.device_code} 离线` } };
+  }
+  if (g.estopLocked || g.mode === 'safe_stop') {
+    return { error: { status: 409, code: 'estop_locked', message: `设备 ${dd.device_code} 急停锁定/安全停止` } };
+  }
+  // 同一事件同一时刻只允许一只桶手动（优先返回 busy，避免第二只桶先报自身状态）
+  const other = dep.devices.find((x) => x !== dd && x.manual);
+  if (other) {
+    return { error: { status: 409, code: 'manual_busy', message: `设备 ${other.device_code} 正在手动中` } };
+  }
+  if (dd.phase === 'skipped_manual' || (dd.skip && dd.skip.skipped)) {
+    return { error: { status: 409, code: 'device_skipped', message: `设备 ${dd.device_code} 已跳过` } };
+  }
+  if (dd.arrived) {
+    return { error: { status: 409, code: 'device_not_jogging', message: `设备 ${dd.device_code} 已到位，不能手动点动` } };
+  }
+  if (dd.phase !== 'stopped') {
+    return { error: { status: 409, code: 'device_not_jogging', message: `设备 ${dd.device_code} 当前状态 ${dd.phase}，不能手动点动` } };
+  }
+  if (dd.traveledM >= dd.targetM - 1e-9) {
+    return { error: { status: 409, code: 'device_at_target', message: `设备 ${dd.device_code} 已到目标` } };
+  }
+  const dir = String(body.dir || '');
+  if (!MANUAL_DIRS.has(dir)) {
+    return { error: { status: 400, code: 'invalid_direction', message: 'dir 必须为 fwd/back/left/right' } };
+  }
+  const sessionId = String(body.sessionId || '');
+  if (!sessionId) return { error: { status: 400, code: 'bad_request', message: '缺少 sessionId' } };
+  const seq = Number(body.seq);
+  if (!Number.isFinite(seq) || seq < 0) {
+    return { error: { status: 400, code: 'bad_request', message: 'seq 必须是非负数字' } };
+  }
+
+  if (dd.manual && dd.manual.sessionId === sessionId && seq <= dd.manual.seq) {
+    return { dd }; // 重复/乱序保活
+  }
+  if (dd.manual && dd.manual.sessionId !== sessionId) {
+    // 同一只桶的新按住可以接管旧 session（旧的 stop 可能还在路上；旧 stop 会被 session 校验忽略）
+    stopManual(dd, dep, 'manual_replaced');
+  }
+  if (!dd.manual && dd.lastManual && dd.lastManual.sessionId === sessionId && seq <= dd.lastManual.seq) {
+    return { dd }; // stop 之后迟到的保活，不重启
+  }
+
+  const now = Date.now();
+  if (!dd.manual) {
+    dd.manual = { dir, sessionId, seq, lastAt: now, lastTick: now };
+    addStep(dep, {
+      type: 'manual_move',
+      from: dep.owner || 'operator',
+      to: dd.device_code,
+      dir,
+      sessionId,
+      state: 'active',
+    });
+  } else {
+    dd.manual.dir = dir;
+    dd.manual.seq = seq;
+    dd.manual.lastAt = now;
+  }
+  g.motion = 'moving';
+  g.mode = 'manual';
+  updateGlobal(dd, dep);
+  return { dd };
+}
+
+function manualStop(dep, body) {
+  const t = targetDevice(dep, body);
+  if (t.error) return t;
+  const dd = t.dd;
+  const sessionId = String(body.sessionId || '');
+  const seq = Number(body.seq);
+  if (dd.manual) {
+    // 旧 session 的迟到 stop 不得停掉新按住
+    if (sessionId && dd.manual.sessionId !== sessionId) return { dd, ignored: true };
+    stopManual(dd, dep, 'manual_stopped');
+    dd.lastManual = {
+      sessionId: dd.lastManual ? dd.lastManual.sessionId : sessionId,
+      seq: Number.isFinite(seq) ? Math.max(seq, dd.lastManual ? dd.lastManual.seq : 0) : (dd.lastManual ? dd.lastManual.seq : 0),
+    };
+    persist();
+    return { dd };
+  }
+  // 幂等：没有 active 手动。只有 paused 时才清理运动状态，running/terminal 不碰自动 tick
+  if (dep.state === 'paused') {
+    const g = deviceOf(dd);
+    if (g) {
+      g.motion = 'idle';
+      g.mode = 'standby';
+      g.odo.speedMps = 0;
+    }
+    updateGlobal(dd, dep);
+  }
+  // 即使 stop 先于第一条 move 到达，也要记住 session/seq，拒绝随后迟到的保活包
+  if (sessionId) {
+    dd.lastManual = {
+      sessionId,
+      seq: Number.isFinite(seq)
+        ? Math.max(seq, dd.lastManual ? dd.lastManual.seq : 0)
+        : (dd.lastManual ? dd.lastManual.seq : 0),
+    };
+    persist();
+  }
+  return { dd };
+}
+
+function tickManual(dep, now) {
+  for (const dd of dep.devices) {
+    const m = dd.manual;
+    if (!m) continue;
+    const g = deviceOf(dd);
+    if (!g || g.online === false) {
+      stopManual(dd, dep, 'device_offline');
+      continue;
+    }
+    if (g.estopLocked || g.mode === 'safe_stop') {
+      stopManual(dd, dep, 'estop_locked');
+      continue;
+    }
+    if (now - m.lastAt > LIMITS.manualWatchdogMs) {
+      stopManual(dd, dep, 'manual_timeout');
+      continue;
+    }
+    let dt = (now - (m.lastTick || now)) / 1000;
+    m.lastTick = now;
+    if (dt <= 0) continue;
+    if (dt > 1) dt = 1;
+
+    if (m.dir === 'left' || m.dir === 'right') {
+      const delta = LIMITS.turnDps * dt;
+      dd.headingDeg = (dd.headingDeg + (m.dir === 'left' ? -delta : delta) + 360) % 360;
+      if (g.task) g.task.heading = dd.headingDeg;
+      g.motion = 'moving';
+      g.mode = 'manual';
+      updateGlobal(dd, dep);
+      continue;
+    }
+
+    const sign = m.dir === 'back' ? -1 : 1;
+    const remaining = sign > 0 ? Math.max(0, dd.targetM - dd.traveledM) : dd.traveledM;
+    const step = Math.min(LIMITS.speed * dt, remaining);
+    if (step <= 0) {
+      stopManual(dd, dep, sign > 0 ? 'manual_reached_target' : 'manual_stopped');
+      continue;
+    }
+    const rad = (dd.headingDeg * Math.PI) / 180;
+    dd.traveledM = Math.max(0, Math.min(dd.targetM, dd.traveledM + sign * step));
+    dd.posX += sign * step * Math.sin(rad);
+    dd.posY += sign * step * Math.cos(rad);
+    g.odo.traveledM += Math.abs(step);
+    g.odo.leftPulse += Math.round(Math.abs(step) * 500);
+    g.odo.rightPulse += Math.round(Math.abs(step) * 500);
+    g.odo.speedMps = LIMITS.speed;
+    g.motion = 'moving';
+    g.mode = 'manual';
+    if (sign > 0 && dd.traveledM >= dd.targetM - 1e-9) {
+      stopManual(dd, dep, 'manual_reached_target');
+      continue;
+    }
+    updateGlobal(dd, dep);
+  }
+  if (now - lastPersistAt > LIMITS.persistEveryMs) persist();
+}
+
 function tick() {
   const now = Date.now();
   for (const dep of deployments.values()) {
+    if (dep.state === 'paused') {
+      tickManual(dep, now);
+      continue;
+    }
     if (dep.state !== 'running') continue;
     for (const dd of dep.devices) {
       if (dd.phase !== 'moving') continue;
@@ -387,7 +610,10 @@ function tick() {
       g.odo.leftPulse += Math.round(step * 500);
       g.odo.rightPulse += Math.round(step * 500);
       g.odo.speedMps = speed;
-      g.pos.y += step;
+      const rad = (dd.headingDeg * Math.PI) / 180;
+      dd.posX += step * Math.sin(rad);
+      dd.posY += step * Math.cos(rad);
+      g.pos = { x: dd.posX, y: dd.posY };
       g.motion = 'moving';
       g.mode = 'auto';
 
@@ -469,7 +695,8 @@ function validateCreate(body, owner) {
     order: Number(s.order ?? i + 1),
   }));
   const n = slaves.length;
-  if (n < 1 || n > LIMITS.nMax) errors.push({ code: 'invalid_params', message: `从桶数量必须为 1~${LIMITS.nMax}` });
+  // N=0 合法：仅主桶执行；上限仍为 nMax
+  if (n > LIMITS.nMax) errors.push({ code: 'invalid_params', message: `从桶数量不能超过 ${LIMITS.nMax}` });
   const codes = new Set();
   const orders = new Set();
   slaves.forEach((s, i) => {
@@ -587,6 +814,11 @@ function createDeployment(body, owner) {
         order: 0,
         targetM: v.L,
         traveledM: 0,
+        posX: 0,
+        posY: 0,
+        headingDeg: 0,
+        manual: null,
+        lastManual: null,
         phase: 'not_started',
         lastTick: now,
         startCommand: { state: 'none', commandId: null, sentAt: null, ackedAt: null, reason: null },
@@ -606,6 +838,11 @@ function createDeployment(body, owner) {
         order: s.order,
         targetM: round1(v.L - s.order * v.d),
         traveledM: 0,
+        posX: 0,
+        posY: 0,
+        headingDeg: 0,
+        manual: null,
+        lastManual: null,
         phase: 'not_started',
         lastTick: now,
         startCommand: { state: 'none', commandId: null, sentAt: null, ackedAt: null, reason: null },
@@ -642,6 +879,11 @@ function startDeployment(dep, body) {
   dep.startedAt = Date.now();
   for (const dd of dep.devices) {
     const g = deviceOf(dd);
+    dd.posX = 0;
+    dd.posY = 0;
+    dd.headingDeg = 0;
+    dd.manual = null;
+    dd.lastManual = null;
     g.occupied = true;
     g.occupiedByEvent = dep.id;
     g.pos = { x: 0, y: 0 };
@@ -670,20 +912,43 @@ function startDeployment(dep, body) {
 }
 
 function pauseDeployment(dep, body) {
-  if (dep.state !== 'running') return { status: 409, code: 'deployment_state_invalid', message: '当前状态不能暂停' };
-  dep.state = 'paused';
-  dep.pausedAt = Date.now();
-  dep.pauseReason = String(body.reason || '');
+  // 暂停全部在任意状态都可调用：终止态 no-op；running → paused；
+  // starting / pending_verify / verify_failed / paused → 只停运动/清手动，不改变事件状态。
+  if (TERMINAL.has(dep.state)) {
+    return { ok: true, state: dep.state, noop: true, paused: false };
+  }
+  const wasRunning = dep.state === 'running';
+  let changed = false;
+  if (wasRunning) {
+    dep.state = 'paused';
+    dep.pausedAt = Date.now();
+    dep.pauseReason = String(body.reason || '');
+    changed = true;
+  }
   for (const dd of dep.devices) {
+    if (dd.manual) {
+      dd.manual = null;
+      const g = deviceOf(dd);
+      if (g) {
+        g.motion = 'idle';
+        g.mode = 'standby';
+        g.odo.speedMps = 0;
+      }
+      updateGlobal(dd, dep);
+      changed = true;
+    }
     if (dd.phase === 'moving') {
       addStep(dep, { type: 'pause', from: 'server', to: dd.device_code, state: 'acked' });
       stopDevice(dd, dep);
+      changed = true;
     }
   }
-  addStep(dep, { type: 'pause_all', from: 'server', to: null, state: 'done' });
-  persist();
-  log(`[布设] ${dep.id} 暂停 reason=${dep.pauseReason}`);
-  return { ok: true, state: dep.state };
+  if (changed) {
+    addStep(dep, { type: wasRunning ? 'pause_all' : 'stop_all', from: 'server', to: null, state: 'done' });
+    persist();
+    log(`[布设] ${dep.id} 暂停全体 reason=${dep.pauseReason || ''} state=${dep.state}`);
+  }
+  return { ok: true, state: dep.state, noop: !changed, paused: wasRunning };
 }
 
 function resumeDeployment(dep) {
@@ -691,6 +956,12 @@ function resumeDeployment(dep) {
   dep.state = 'running';
   dep.resumedAt = Date.now();
   for (const dd of dep.devices) {
+    dd.manual = null;
+    const g0 = deviceOf(dd);
+    if (g0) {
+      g0.motion = 'idle';
+      g0.odo.speedMps = 0;
+    }
     if (dd.phase === 'stopped') {
       dd.phase = 'moving';
       dd.lastTick = Date.now();
@@ -890,6 +1161,9 @@ function deviceJson(dep, dd) {
     online: !!(g && g.online !== false),
     targetM: round1(dd.targetM),
     traveledM: round1(dd.traveledM),
+    pos: { x: round2(dd.posX), y: round2(dd.posY) },
+    headingDeg: round2(dd.headingDeg),
+    manualActive: !!dd.manual,
     phase: dd.phase,
     startState: dd.phase,
     startCommand: dd.startCommand,
@@ -1102,6 +1376,27 @@ async function handle(req, res, path, url, body, log) {
       if (r.status) return send(res, r.status, r.code, r.message);
       return ok(res, 200, { deploymentId: dep.id, state: r.state, result: r.result });
     }
+  }
+
+  // ── 单桶手动干预（仅 PAUSED）──
+  const mManual = /^\/api\/v1\/deployments\/([^/]+)\/manual\/(move|stop)$/.exec(path);
+  if (mManual && req.method === 'POST') {
+    const dep = getOwned(req, decodeURIComponent(mManual[1]));
+    if (!dep) return send(res, 404, 'deployment_not_found', '布设事件不存在');
+    const r = mManual[2] === 'move' ? manualMove(dep, body) : manualStop(dep, body);
+    if (r.error) return send(res, r.error.status, r.error.code, r.error.message, r.error.detail);
+    const dd = r.dd;
+    return ok(res, 202, {
+      deploymentId: dep.id,
+      state: dep.state,
+      device_code: dd.device_code,
+      traveledM: round1(dd.traveledM),
+      targetM: round1(dd.targetM),
+      phase: dd.phase,
+      headingDeg: round2(dd.headingDeg),
+      pos: { x: round2(dd.posX), y: round2(dd.posY) },
+      ignored: !!r.ignored,
+    });
   }
 
   // ── 模拟异常注入（仅 Mock）──

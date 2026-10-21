@@ -88,6 +88,41 @@ async function start(id) {
   return r.json;
 }
 
+async function pause(id) {
+  const r = await req('POST', `/api/v1/deployments/${id}/pause`, { commandId: 'pause-test', reason: 'manual_test' });
+  assert.strictEqual(r.status, 202, `pause failed: ${r.status} ${r.text}`);
+  return r.json;
+}
+
+async function resume(id) {
+  const r = await req('POST', `/api/v1/deployments/${id}/resume`, { commandId: 'resume-test', confirmed: true });
+  assert.strictEqual(r.status, 202, `resume failed: ${r.status} ${r.text}`);
+  return r.json;
+}
+
+async function manualMove(id, device, dir, sessionId, seq) {
+  return req('POST', `/api/v1/deployments/${id}/manual/move`, {
+    commandId: `manual-${sessionId}-${seq}`,
+    sessionId,
+    seq,
+    device_code: device.device_code,
+    device_type: device.device_type,
+    dir,
+  });
+}
+
+async function manualStop(id, device, sessionId, seq) {
+  return req('POST', `/api/v1/deployments/${id}/manual/stop`, {
+    commandId: `manual-stop-${sessionId}-${seq}`,
+    sessionId,
+    seq,
+    device_code: device.device_code,
+    device_type: device.device_type,
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function verifyAll(event) {
   for (const d of event.devices) {
     const r = await req('POST', `/api/v1/deployments/${event.deploymentId}/verify`, {
@@ -163,6 +198,20 @@ async function main() {
   assert.strictEqual(done.result, 'completed');
   console.log('   ok: targets [8,6,4,2], trigger chain, completed');
 
+  console.log('1.1) master only (N=0)');
+  ev = await create('master-only', 2, 1, []);
+  assert.strictEqual(ev.devices.length, 1, 'master-only event should contain only the master');
+  assert.strictEqual(ev.devices[0].device_type, 'master_cone');
+  assert.strictEqual(ev.params.N, 0);
+  await start(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'master-only arrived');
+  const masterOnlyDone = await verifyAll(ev);
+  assert.strictEqual(masterOnlyDone.result, 'completed');
+  console.log('   ok: N=0 allowed, master alone completed');
+
   console.log('2) one active event per operator');
   ev = await create('one-active', 6, 2, [slave('CONE-S-001', 1)]);
   await start(ev.deploymentId);
@@ -217,6 +266,137 @@ async function main() {
     device_code: 'CONE-S-001', type: 'report_lost', enabled: false,
   });
   console.log('   ok: no auto-skip, manual skip started slave2, completed_with_exception');
+
+  console.log('4) manual jog (paused only, four-way)');
+  ev = await create('manual', 10, 2, [slave('CONE-S-001', 1), slave('CONE-S-002', 2)]);
+  let r = await manualMove(ev.deploymentId, MASTER, 'fwd', 'hold-running', 1);
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(r.json.error.code, 'deployment_not_paused');
+  await start(ev.deploymentId);
+  await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.devices[0].phase === 'moving' && s.devices[0].traveledM > 0.2 ? s : null;
+  }, 'manual master moving');
+  await pause(ev.deploymentId);
+  await pause(ev.deploymentId); // 暂停全部在任何非终止状态都可重复调用（幂等）
+  let paused = await status(ev.deploymentId);
+  assert.strictEqual(paused.state, 'paused');
+  assert.strictEqual(paused.devices[0].phase, 'stopped');
+  const masterBefore = paused.devices[0];
+  const slaveBefore = paused.devices[1];
+
+  const session = 'hold-1';
+  let seq = 1;
+  for (let i = 0; i < 7; i++) {
+    r = await manualMove(ev.deploymentId, MASTER, 'fwd', session, seq++);
+    assert.strictEqual(r.status, 202, `manual move failed: ${r.status} ${r.text}`);
+    await sleep(300);
+  }
+  let mid = await status(ev.deploymentId);
+  assert.ok(mid.devices[0].traveledM > masterBefore.traveledM + 0.2, 'master should move manually');
+  assert.ok(mid.devices[0].pos.y > masterBefore.pos.y, 'pos.y should advance');
+  assert.ok(Math.abs(mid.devices[1].traveledM - slaveBefore.traveledM) < 1e-9, 'slave must not move');
+  assert.strictEqual(mid.devices[0].manualActive, true);
+
+  r = await manualMove(ev.deploymentId, slave('CONE-S-001', 1), 'fwd', 'other', 1);
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(r.json.error.code, 'manual_busy');
+
+  r = await req('POST', '/api/v1/device/command', {
+    device_code: MASTER.device_code, type: 'move', dir: 'fwd',
+  });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.json.accepted, false);
+  assert.strictEqual(r.json.reason, 'deployment_managed');
+
+  r = await manualStop(ev.deploymentId, MASTER, session, seq++);
+  assert.strictEqual(r.status, 202);
+  await sleep(500);
+  let stopped = await status(ev.deploymentId);
+  assert.strictEqual(stopped.devices[0].manualActive, false);
+  const stoppedM = stopped.devices[0].traveledM;
+  await sleep(500);
+  stopped = await status(ev.deploymentId);
+  assert.ok(Math.abs(stopped.devices[0].traveledM - stoppedM) < 1e-9, 'manual stop should freeze');
+
+  // stop 之后迟到的同 session 保活不能重启
+  r = await manualMove(ev.deploymentId, MASTER, 'fwd', session, seq - 1);
+  assert.strictEqual(r.status, 202);
+  await sleep(400);
+  const late = await status(ev.deploymentId);
+  assert.strictEqual(late.devices[0].manualActive, false);
+  assert.ok(Math.abs(late.devices[0].traveledM - stoppedM) < 1e-9, 'late keepalive must be ignored');
+
+  // left turn changes heading; fwd then changes pos.x as well as pos.y
+  const headingBefore = late.devices[0].headingDeg;
+  const session2 = 'hold-2';
+  let seq2 = 1;
+  for (let i = 0; i < 3; i++) {
+    r = await manualMove(ev.deploymentId, MASTER, 'left', session2, seq2++);
+    assert.strictEqual(r.status, 202, r.text);
+    await sleep(200);
+  }
+  await manualStop(ev.deploymentId, MASTER, session2, seq2++);
+  const turned = await status(ev.deploymentId);
+  assert.notStrictEqual(turned.devices[0].headingDeg, headingBefore, 'heading should change');
+  const beforeFwd = turned.devices[0];
+  const session3 = 'hold-3';
+  let seq3 = 1;
+  for (let i = 0; i < 3; i++) {
+    r = await manualMove(ev.deploymentId, MASTER, 'fwd', session3, seq3++);
+    assert.strictEqual(r.status, 202, r.text);
+    await sleep(200);
+  }
+  await manualStop(ev.deploymentId, MASTER, session3, seq3++);
+  const afterFwd = await status(ev.deploymentId);
+  assert.ok(Math.abs(afterFwd.devices[0].pos.x - beforeFwd.pos.x) > 0.03, 'pos.x should change after turn');
+
+  // 暂停中越过 d 不触发后继
+  const dcheck = await status(ev.deploymentId);
+  assert.strictEqual(dcheck.devices[0].reachedInterval, false);
+  assert.strictEqual(dcheck.devices[1].startCommand.state, 'none');
+  await resume(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.devices[1].startCommand.state === 'acked' ? s : null;
+  }, 'slave1 started after resume');
+  await req('POST', `/api/v1/deployments/${ev.deploymentId}/abort`, { commandId: 'abort-manual', reason: 'test' });
+  console.log('   ok: paused-only jog, four-way, busy/stale guards, no trigger while paused, resume trigger');
+
+  console.log('5) manual to target -> resume pending_verify');
+  ev = await create('manual-target', 2, 1, []);
+  await start(ev.deploymentId);
+  await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.devices[0].phase === 'moving' ? s : null;
+  }, 'target master moving');
+  await pause(ev.deploymentId);
+  const targetSession = 'hold-target';
+  let targetSeq = 1;
+  for (let i = 0; i < 30; i++) {
+    r = await manualMove(ev.deploymentId, MASTER, 'fwd', targetSession, targetSeq++);
+    if (r.status === 409) {
+      assert.strictEqual(r.json.error.code, 'device_at_target');
+      break;
+    }
+    assert.strictEqual(r.status, 202, r.text);
+    await sleep(150);
+    const s = await status(ev.deploymentId);
+    if (s.devices[0].traveledM >= s.devices[0].targetM - 1e-9) break;
+  }
+  await manualStop(ev.deploymentId, MASTER, targetSession, targetSeq++);
+  let targetState = await status(ev.deploymentId);
+  assert.ok(targetState.devices[0].traveledM >= targetState.devices[0].targetM - 1e-9, 'target reached');
+  assert.strictEqual(targetState.devices[0].phase, 'stopped');
+  assert.strictEqual(targetState.devices[0].arrived, false);
+  await resume(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'manual target pending_verify');
+  const targetDone = await verifyAll(ev);
+  assert.strictEqual(targetDone.result, 'completed');
+  console.log('   ok: target reached while paused, resume -> pending_verify');
 
   console.log('\nALL DEPLOYMENT TESTS PASSED');
 }

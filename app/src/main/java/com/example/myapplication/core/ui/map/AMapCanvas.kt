@@ -3,11 +3,13 @@ package com.example.myapplication.core.ui.map
 import android.graphics.Bitmap
 import android.graphics.Paint
 import android.os.Bundle
+import android.view.MotionEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.motionEventSpy
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -49,16 +51,31 @@ data class MapPin(
     val colorArgb: Int,
 )
 
+/** 额外轨迹线（如锥桶运行过程中按行程估算的轨迹）。 */
+data class MapPolyline(
+    val id: String,
+    val points: List<GeoPoint>,
+    val colorArgb: Int,
+    val dotted: Boolean = false,
+    val width: Float = 10f,
+)
+
 @Composable
 fun AMapCanvas(
     model: MapRenderModel,
     onMapReady: (AMap) -> Unit,
     modifier: Modifier = Modifier,
     extraMarkers: List<MapPin> = emptyList(),
+    extraPolylines: List<MapPolyline> = emptyList(),
     /** 是否用**五角星**标出「我的位置」（作业人员位置）；风险页需要，作业页默认不显示 */
     showPhoneMarker: Boolean = false,
     /** 相机缩放级别：作业页 17（近景），风险页放大到能覆盖 2 公里半径的点位 */
     cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
+    /**
+     * 手指是否按在地图上（按下 true，抬起/取消 false）。
+     * 供外层在拖动地图期间临时禁用页面垂直滚动，避免滑地图时整页跟着滚。
+     */
+    onTouchActiveChange: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -97,11 +114,21 @@ fun AMapCanvas(
     }
 
     AndroidView(
-        modifier = modifier,
+        // 只观察、不消费：MapView 照常平移/缩放，同时把按下/抬起告诉外层，
+        // 外层据此暂停页面垂直滚动，避免滑地图时整页跟着滑。
+        modifier = modifier.motionEventSpy { event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> onTouchActiveChange?.invoke(true)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onTouchActiveChange?.invoke(false)
+            }
+        },
         factory = { _ -> mapView },   // factory 收到 Context，返回已 remember 的 MapView
         update = { _ ->
             val aMap = aMapHolder.value ?: mapView.map.also { aMapHolder.value = it; onMapReady(it) }
-            renderMap(aMap, model, markers, polylines, cameraDone, extraMarkers, showPhoneMarker, cameraZoom)
+            renderMap(
+                aMap, model, markers, polylines, cameraDone,
+                extraMarkers, extraPolylines, showPhoneMarker, cameraZoom,
+            )
         },
     )
 }
@@ -113,6 +140,7 @@ private fun renderMap(
     polylines: MutableMap<String, Polyline>,
     cameraDone: androidx.compose.runtime.MutableState<Boolean>,
     extraMarkers: List<MapPin> = emptyList(),
+    extraPolylines: List<MapPolyline> = emptyList(),
     showPhoneMarker: Boolean = false,
     cameraZoom: Float = DEFAULT_CAMERA_ZOOM,
 ) {
@@ -124,6 +152,18 @@ private fun renderMap(
         putMarker(
             aMap, markers, "extra:" + pin.id, pin.point,
             pin.title, pin.snippet, pin.colorArgb,
+        )
+    }
+
+    // ── 额外轨迹线（锥桶运行轨迹等）──
+    val extraLineIds = extraPolylines.map { it.id }.toSet()
+    polylines.keys
+        .filter { it.startsWith("extra:poly:") && it.removePrefix("extra:poly:") !in extraLineIds }
+        .forEach { polylines.remove(it)?.remove() }
+    extraPolylines.forEach { line ->
+        updateTrail(
+            aMap, polylines, "extra:poly:" + line.id,
+            line.points, line.colorArgb, dotted = line.dotted, width = line.width,
         )
     }
 
@@ -279,6 +319,7 @@ private fun updateTrail(
     points: List<GeoPoint>,
     color: Int,
     dotted: Boolean,
+    width: Float = 14f,
 ) {
     if (points.size < 2) {
         polylines.remove(key)?.remove()
@@ -293,7 +334,7 @@ private fun updateTrail(
             PolylineOptions()
                 .setDottedLine(dotted)
                 .color(color)
-                .width(14f)
+                .width(width)
                 .addAll(latLngs),
         )
     }

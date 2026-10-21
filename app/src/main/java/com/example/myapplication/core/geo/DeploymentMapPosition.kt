@@ -5,9 +5,10 @@ import com.example.myapplication.core.model.deployment.DeploymentEvent
 /**
  * 锥桶地图估算点。
  *
- * 当前部署接口只返回每只桶的 `traveledM`（自身已行进距离），没有逐桶 GPS；
- * 与三角架无车端 GPS 时一样，以发布/启动时的手机位置为锚点、默认正北方向
- * 直线投影 `traveledM` 米，仅用于现场示意，**不是 GPS 定位**。
+ * 优先使用服务端返回的 `pos {x,y}`（相对起始线，米，东/北）与 `headingDeg`，
+ * 这样手动转向后点位/轨迹能反映朝向变化；
+ * 旧服务端/旧事件没有 `pos` 时，回退到按 `traveledM` 沿正北投影。
+ * 仍然只是服务端行程/朝向的估算，**不是 GPS 定位**。
  */
 data class DeploymentConeMapPin(
     val deviceCode: String,
@@ -18,6 +19,7 @@ data class DeploymentConeMapPin(
     val targetM: Double,
     val arrived: Boolean,
     val skipped: Boolean,
+    val headingDeg: Double = 0.0,
 )
 
 fun resolveDeploymentConePins(
@@ -27,19 +29,32 @@ fun resolveDeploymentConePins(
 ): List<DeploymentConeMapPin> {
     if (anchor == null) return emptyList()
     return event.devices.map { device ->
-        DeploymentConeMapPin(
-            deviceCode = device.deviceCode,
-            point = CoordTransform.projectGcj02(
+        val pos = device.pos
+        val point = if (pos != null) {
+            offsetGcj02(anchor, pos.x, pos.y)
+        } else {
+            CoordTransform.projectGcj02(
                 start = anchor,
                 headingDeg = headingDeg,
                 distanceM = device.traveledM.coerceAtLeast(0.0),
-            ),
+            )
+        }
+        DeploymentConeMapPin(
+            deviceCode = device.deviceCode,
+            point = point,
             order = device.order,
             isMaster = device.isMaster,
             traveledM = device.traveledM,
             targetM = device.targetM,
             arrived = device.arrived,
             skipped = device.skipped,
+            headingDeg = device.headingDeg,
         )
     }
+}
+
+/** 以锚点为原点，按东/北偏移（米）得到 GCJ-02 点位 */
+fun offsetGcj02(anchor: GeoPoint, eastM: Double, northM: Double): GeoPoint {
+    val north = CoordTransform.projectGcj02(anchor, 0.0, northM)
+    return CoordTransform.projectGcj02(north, 90.0, eastM)
 }
