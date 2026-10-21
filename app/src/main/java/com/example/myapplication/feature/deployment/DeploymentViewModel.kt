@@ -512,15 +512,18 @@ class DeploymentViewModel(
 
     fun loadRecords() {
         val epoch = sessionEpoch
+        _uiState.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             repository.listDeployments()
                 .onSuccess { list ->
                     if (epoch != sessionEpoch) return@onSuccess
-                    _uiState.update { it.copy(records = list) }
+                    _uiState.update { it.copy(records = list, loading = false) }
                 }
                 .onFailure { e ->
                     if (epoch != sessionEpoch) return@onFailure
-                    _uiState.update { it.copy(error = e.message ?: "加载布设记录失败") }
+                    _uiState.update {
+                        it.copy(loading = false, error = e.message ?: "加载布设记录失败")
+                    }
                 }
         }
     }

@@ -70,7 +70,7 @@ fun DeploymentRecordsScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.records, key = { it.deploymentId }) { record ->
-                    RecordCard(record, onClick = { onOpen(record.deploymentId) })
+                    DeploymentRecordCard(record, onClick = { onOpen(record.deploymentId) })
                 }
             }
         }
@@ -79,7 +79,7 @@ fun DeploymentRecordsScreen(
 }
 
 @Composable
-private fun RecordCard(record: DeploymentRecordSummary, onClick: () -> Unit) {
+fun DeploymentRecordCard(record: DeploymentRecordSummary, onClick: () -> Unit) {
     val (fg, bg) = when (record.state) {
         DeploymentState.COMPLETED -> SafeGreen to SafeGreenBg
         DeploymentState.ABORTED, DeploymentState.FAILED, DeploymentState.VERIFY_FAILED -> WarningRed to WarningRedBg

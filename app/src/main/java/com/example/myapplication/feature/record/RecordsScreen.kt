@@ -1,6 +1,7 @@
 package com.example.myapplication.feature.record
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,12 +12,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -27,8 +39,6 @@ import com.example.myapplication.core.model.vehicle.LaneRange
 import com.example.myapplication.core.model.vehicle.WorkRecord
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.di.UploadMode
-import com.example.myapplication.core.ui.LOCKED_FEATURE_NOTICE
-import com.example.myapplication.core.ui.LockedFeatureCard
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.SafetyNoticeBanner
 import com.example.myapplication.core.ui.BannerVariant
@@ -36,6 +46,7 @@ import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.feature.deployment.DeploymentActiveCard
+import com.example.myapplication.feature.deployment.DeploymentRecordCard
 import com.example.myapplication.feature.deployment.DeploymentViewModel
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.ui.theme.NeutralGrey
@@ -48,6 +59,11 @@ import java.util.Locale
 
 /**
  * 作业记录（M09）：记录开始时间、目标距离、设备结果、人工核验、异常备注。
+ *
+ * 顶部下拉切换两类记录：
+ * - 「三角架作业记录」：本机 WorkRecord + 上传状态（原列表，不包含锥桶记录）；
+ * - 「锥桶协同布置作业记录」：复用服务端现有 `listDeployments`，不新增/不修改服务端接口。
+ *
  * **数据真实性**：记录始终在本机留一份；UPLOAD_MODE=HTTP 时同时上传服务端并展示服务端单号，
  * STUB 模式下标注"仅本机保存"，不得宣称已上传平台。
  */
@@ -55,14 +71,21 @@ import java.util.Locale
 fun RecordsScreen(
     vm: VehicleViewModel,
     deploymentVm: DeploymentViewModel,
-    onOpenDeployments: () -> Unit,
     onOpenDeploymentExec: (String) -> Unit,
 ) {
     val records by vm.records.collectAsStateWithLifecycle(initialValue = emptyList())
     val deploymentState by deploymentVm.uiState.collectAsStateWithLifecycle()
     val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
 
+    var selectedTabKey by rememberSaveable { mutableStateOf(RecordTab.TRIANGLE.name) }
+    val selectedTab = RecordTab.entries.firstOrNull { it.name == selectedTabKey } ?: RecordTab.TRIANGLE
+    var recordMenuExpanded by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) { deploymentVm.loadActiveEvent(force = true) }
+    // 切到锥桶记录页时按需拉取；不改服务端接口，复用现有 listDeployments
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == RecordTab.CONE) deploymentVm.loadRecords()
+    }
 
     Column(
         modifier = Modifier
@@ -72,50 +95,138 @@ fun RecordsScreen(
     ) {
         PageTitle("作业记录")
 
-        Text(
-            "锥桶协同布设",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-        )
-        deploymentState.activeEvent?.let { event ->
-            DeploymentActiveCard(
-                event = event,
-                onOpen = { onOpenDeploymentExec(event.deploymentId) },
-            )
-        }
-        SecondaryActionButton(
-            text = "布设事件记录（锥桶协同）",
-            onClick = onOpenDeployments,
-        )
-
-        if (records.isEmpty()) {
-            SectionCard(title = "暂无作业记录") {
+        // 记录类型下拉：三角架作业记录 / 锥桶协同布置作业记录
+        Box {
+            OutlinedButton(
+                onClick = { recordMenuExpanded = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(
-                    if (serverUpload) {
-                        "完成一次定距布置或一键布置后，记录会自动保存到本机并上传服务端。"
-                    } else {
-                        "完成一次定距布置或一键布置后，记录会自动保存到本机（${WorkRecord.LOCAL_ONLY_NOTICE}）。"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = selectedTab.label,
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.Medium,
                 )
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "选择记录类型")
             }
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(records, key = { it.id }) { record ->
-                    RecordCard(record, TimeFormat.format("MM-dd HH:mm", record.startedAt))
+            DropdownMenu(
+                expanded = recordMenuExpanded,
+                onDismissRequest = { recordMenuExpanded = false },
+            ) {
+                RecordTab.entries.forEach { tab ->
+                    DropdownMenuItem(
+                        text = { Text(tab.label) },
+                        trailingIcon = {
+                            if (tab == selectedTab) {
+                                Text("✓", color = SafeGreen, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        onClick = {
+                            selectedTabKey = tab.name
+                            recordMenuExpanded = false
+                        },
+                    )
                 }
             }
         }
 
-        LockedFeatureCard(
-            title = "云端记录 / 事件编号",
-            reason = LOCKED_FEATURE_NOTICE,
-            onClick = { vm.showInfo("云端记录", LOCKED_FEATURE_NOTICE) },
-        )
+        when (selectedTab) {
+            RecordTab.TRIANGLE -> {
+                if (records.isEmpty()) {
+                    SectionCard(title = "暂无作业记录") {
+                        Text(
+                            if (serverUpload) {
+                                "完成一次定距布置或一键布置后，记录会自动保存到本机并上传服务端。"
+                            } else {
+                                "完成一次定距布置或一键布置后，记录会自动保存到本机（${WorkRecord.LOCAL_ONLY_NOTICE}）。"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(records, key = { it.id }) { record ->
+                            RecordCard(record, TimeFormat.format("MM-dd HH:mm", record.startedAt))
+                        }
+                    }
+                }
+
+            }
+
+            RecordTab.CONE -> {
+                deploymentState.activeEvent?.let { event ->
+                    DeploymentActiveCard(
+                        event = event,
+                        onOpen = { onOpenDeploymentExec(event.deploymentId) },
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "锥桶协同布设记录",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = deploymentVm::loadRecords,
+                        enabled = !deploymentState.loading,
+                    ) {
+                        Text(if (deploymentState.loading) "加载中…" else "刷新")
+                    }
+                }
+
+                when {
+                    deploymentState.loading && deploymentState.records.isEmpty() -> {
+                        SectionCard(title = "正在加载布设记录") {
+                            Text("正在从服务端加载…", color = NeutralGrey)
+                        }
+                    }
+
+                    deploymentState.error != null -> {
+                        SectionCard(title = "加载失败") {
+                            Text(deploymentState.error ?: "加载布设记录失败", color = WarningRed)
+                            Spacer(Modifier.height(8.dp))
+                            SecondaryActionButton("重试", onClick = deploymentVm::loadRecords)
+                        }
+                    }
+
+                    deploymentState.records.isEmpty() -> {
+                        SectionCard(title = "暂无锥桶布设记录") {
+                            Text(
+                                "完成或终止一次锥桶协同布设后，记录会显示在这里。",
+                                color = NeutralGrey,
+                            )
+                        }
+                    }
+
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(deploymentState.records, key = { it.deploymentId }) { record ->
+                                DeploymentRecordCard(
+                                    record = record,
+                                    onClick = { onOpenDeploymentExec(record.deploymentId) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Spacer(Modifier.height(24.dp))
     }
+}
+
+private enum class RecordTab(val label: String) {
+    TRIANGLE("三角架作业记录"),
+    CONE("锥桶协同布置作业记录"),
 }
 
 @Composable

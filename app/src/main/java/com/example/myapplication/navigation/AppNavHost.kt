@@ -334,7 +334,6 @@ fun AppNavHost() {
                 RecordsScreen(
                     vm = vm,
                     deploymentVm = deploymentVm,
-                    onOpenDeployments = { navController.navigate(Routes.DEPLOYMENT_RECORDS) },
                     onOpenDeploymentExec = { id ->
                         deploymentVm.openEvent(id)
                         navController.navigate(Routes.DEPLOYMENT_EXEC)
