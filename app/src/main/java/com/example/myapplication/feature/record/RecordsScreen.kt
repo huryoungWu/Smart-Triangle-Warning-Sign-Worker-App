@@ -39,11 +39,14 @@ import com.example.myapplication.core.model.vehicle.LaneRange
 import com.example.myapplication.core.model.vehicle.WorkRecord
 import com.example.myapplication.di.ServiceLocator
 import com.example.myapplication.di.UploadMode
+import com.example.myapplication.core.ui.ContentCard
+import com.example.myapplication.core.ui.EmptyStateCard
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.SafetyNoticeBanner
 import com.example.myapplication.core.ui.BannerVariant
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
+import com.example.myapplication.core.ui.SkeletonList
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.feature.deployment.DeploymentActiveCard
 import com.example.myapplication.feature.deployment.DeploymentRecordCard
@@ -181,9 +184,7 @@ fun RecordsScreen(
 
                 when {
                     deploymentState.loading && deploymentState.records.isEmpty() -> {
-                        SectionCard(title = "正在加载布设记录") {
-                            Text("正在从服务端加载…", color = NeutralGrey)
-                        }
+                        SkeletonList(count = 3, itemHeight = 96.dp)
                     }
 
                     deploymentState.error != null -> {
@@ -195,12 +196,10 @@ fun RecordsScreen(
                     }
 
                     deploymentState.records.isEmpty() -> {
-                        SectionCard(title = "暂无锥桶布设记录") {
-                            Text(
-                                "完成或终止一次锥桶协同布设后，记录会显示在这里。",
-                                color = NeutralGrey,
-                            )
-                        }
+                        EmptyStateCard(
+                            title = "暂无锥桶布设记录",
+                            message = "完成或终止一次锥桶协同布设后，记录会显示在这里。",
+                        )
                     }
 
                     else -> {
@@ -232,8 +231,8 @@ private enum class RecordTab(val label: String) {
 @Composable
 private fun RecordCard(record: WorkRecord, timeText: String) {
     val serverUpload = ServiceLocator.UPLOAD_MODE == UploadMode.HTTP
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+    ContentCard {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     buildString {

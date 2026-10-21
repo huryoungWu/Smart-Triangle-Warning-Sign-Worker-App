@@ -1,6 +1,5 @@
 package com.example.myapplication.feature.risk
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,8 +36,11 @@ import com.example.myapplication.core.model.risk.RiskRadius
 import com.example.myapplication.core.model.risk.RiskSort
 import com.example.myapplication.core.model.risk.RiskTimeScope
 import com.example.myapplication.core.model.risk.applyRiskView
+import com.example.myapplication.core.ui.ContentCard
+import com.example.myapplication.core.ui.EmptyStateCard
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.RemoteImage
+import com.example.myapplication.core.ui.SkeletonList
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.core.ui.map.MapPanel
 import com.example.myapplication.core.ui.map.MapPin
@@ -174,19 +175,21 @@ fun RiskScreen(
             }
         }
 
+        if (loading && shown.isEmpty()) {
+            item {
+                SkeletonList(count = 3, itemHeight = 104.dp)
+            }
+        }
+
         if (shown.isEmpty() && !loading) {
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = when (timeScope) {
-                            RiskTimeScope.TODAY -> "今天周边 ${radiusKm} 公里内暂无风险事件（可切「全部」查看更早的）"
-                            RiskTimeScope.ALL -> "周边 ${radiusKm} 公里内暂无风险事件"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NeutralGrey,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
+                EmptyStateCard(
+                    title = "暂无风险事件",
+                    message = when (timeScope) {
+                        RiskTimeScope.TODAY -> "今天周边 ${radiusKm} 公里内暂无风险事件（可切「全部」查看更早的）"
+                        RiskTimeScope.ALL -> "周边 ${radiusKm} 公里内暂无风险事件"
+                    },
+                )
             }
         }
 
@@ -203,14 +206,10 @@ private const val RISK_MAP_CAMERA_ZOOM = 15f
 
 @Composable
 private fun AccidentCard(accident: Accident, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-    ) {
+    ContentCard(onClick = onClick) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(14.dp),
         ) {
             // 有照片就显示缩略图（作业人员上报的快照图片，便于区分各条事件）
             val photo = accident.photoUrls.firstOrNull()

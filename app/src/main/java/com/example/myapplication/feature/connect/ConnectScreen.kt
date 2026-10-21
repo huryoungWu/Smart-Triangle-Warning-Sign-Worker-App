@@ -266,15 +266,6 @@ fun ConnectScreen(
                 }
             }
 
-            if (!connected && bindingCode.isBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "请先输入绑定码，再连接设备",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WarnOrange,
-                )
-            }
-
             if (selected?.available == false) {
                 Spacer(Modifier.height(8.dp))
                 SafetyText("该设备当前不可用，请选择其他设备后再连接。")
@@ -301,14 +292,6 @@ fun ConnectScreen(
             onClick = onEnterWork,
             enabled = connected,
         )
-        if (!connected) {
-            Text(
-                text = "连接成功后方可进入单设备作业",
-                style = MaterialTheme.typography.labelSmall,
-                color = WarnOrange,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
 
         Spacer(Modifier.height(24.dp))
     }

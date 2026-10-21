@@ -1,5 +1,7 @@
 package com.example.myapplication.feature.deployment
 
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -7,6 +9,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.myapplication.MyAppApplication
 import com.example.myapplication.core.data.api.DeploymentRepository
+import com.example.myapplication.core.geo.GeoPoint
 import com.example.myapplication.core.model.deployment.CommandResultState
 import com.example.myapplication.core.model.deployment.DeploymentDeviceState
 import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
@@ -59,6 +62,17 @@ data class DeploymentUiState(
 )
 
 /**
+ * 执行页退出/重进时需要保留的锥桶轨迹与起点锚点。
+ *
+ * 轨迹原本放在 Compose `remember` 里，离开页面就会被销毁；改为按 deploymentId 缓存在
+ * ViewModel 中，返回执行页时可以继续画同一条轨迹。
+ */
+class DeploymentConeTrailMemory internal constructor() {
+    var anchor: GeoPoint? = null
+    val points: SnapshotStateMap<String, List<GeoPoint>> = mutableStateMapOf()
+}
+
+/**
  * 锥桶协同布设 ViewModel（独立于单设备 VehicleViewModel）。
  *
  * - 事件状态以服务端聚合状态为准；执行页可见时 1Hz 轮询；
@@ -75,6 +89,9 @@ class DeploymentViewModel(
     private var pollJob: Job? = null
     private var createClientId: String? = null
 
+    /** 按事件缓存轨记忆，最多保留 [MAX_TRAIL_EVENTS] 个，避免长时间使用无限增长。 */
+    private val coneTrailMemories = mutableMapOf<String, DeploymentConeTrailMemory>()
+
     // ── 单桶手动干预 ──
     private var manualJob: Job? = null
     private var manualSessionId: String? = null
@@ -87,6 +104,16 @@ class DeploymentViewModel(
      * 异步响应回来时若代号已变化，说明是旧会话的请求，直接丢弃，避免旧数据覆盖新会话。
      */
     private var sessionEpoch = 0
+
+    // ────────────────────────── 执行页轨迹缓存 ──────────────────────────
+
+    fun coneTrailMemoryFor(deploymentId: String): DeploymentConeTrailMemory {
+        coneTrailMemories[deploymentId]?.let { return it }
+        if (coneTrailMemories.size >= MAX_TRAIL_EVENTS) {
+            coneTrailMemories.keys.firstOrNull()?.let(coneTrailMemories::remove)
+        }
+        return DeploymentConeTrailMemory().also { coneTrailMemories[deploymentId] = it }
+    }
 
     // ────────────────────────── 设备台账 ──────────────────────────
 
@@ -913,6 +940,7 @@ class DeploymentViewModel(
         manualSessionId = null
         manualSeq = 0
         createClientId = null
+        coneTrailMemories.clear()
         _uiState.value = DeploymentUiState()
     }
 
@@ -923,6 +951,7 @@ class DeploymentViewModel(
 
     companion object {
         private const val MANUAL_KEEPALIVE_MS = 300L
+        private const val MAX_TRAIL_EVENTS = 8
 
         val Factory = viewModelFactory {
             initializer {

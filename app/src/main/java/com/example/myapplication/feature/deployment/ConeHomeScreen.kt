@@ -24,7 +24,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
-import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
@@ -77,8 +76,6 @@ fun ConeHomeScreen(
             onBack = onSwitchWorkType,
         )
 
-        SafetyText("锥桶设备由服务端统一编排；发布任务前请确认主桶/从桶已绑定并处于同一在线状态；未选择从桶时可仅主桶执行。")
-
         active?.let { event ->
             DeploymentActiveCard(
                 event = event,
@@ -125,12 +122,6 @@ fun ConeHomeScreen(
         if (active != null) {
             Text(
                 "已有进行中的布设事件。请进入执行页完成或终止后再发布新任务。",
-                color = WarnOrange,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        } else if (!ready) {
-            Text(
-                "请先进入「设备连接」选择主桶；从桶可选（不选则仅主桶执行）。",
                 color = WarnOrange,
                 style = MaterialTheme.typography.bodySmall,
             )

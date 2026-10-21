@@ -2,12 +2,17 @@ package com.example.myapplication.feature.deployment
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -29,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,7 +47,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,16 +54,18 @@ import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeploymentLimits
 import com.example.myapplication.core.model.deployment.SelectedSlave
+import com.example.myapplication.core.ui.EmptyState
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
-import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
+import com.example.myapplication.core.ui.SkeletonDeviceRows
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.core.ui.permission.rememberCameraPermissionState
 import com.example.myapplication.ui.theme.InfoBlue
 import com.example.myapplication.ui.theme.InfoBlueBg
 import com.example.myapplication.ui.theme.NeutralGrey
+import com.example.myapplication.ui.theme.NeutralGreyBg
 import com.example.myapplication.ui.theme.SafeGreen
 import com.example.myapplication.ui.theme.SafeGreenBg
 import com.example.myapplication.ui.theme.WarnOrange
@@ -104,8 +112,6 @@ fun ConeConnectScreen(
             onBack = onBack,
         )
 
-        SafetyText("锥桶由服务端统一编排，不需要三角牌的单设备连接。绑定只是加入候选列表，勾选后才参与本次布设。")
-
         state.activeEvent?.let { event ->
             DeploymentActiveCard(
                 event = event,
@@ -114,10 +120,10 @@ fun ConeConnectScreen(
         }
 
         SectionCard(title = "选择主桶") {
-            SafetyText("只能选择已绑定、在线、空闲、未急停的主桶。")
-            Spacer(Modifier.height(6.dp))
-            if (state.masterCandidates.isEmpty()) {
-                Text("暂无已绑定且可用的主桶。请先扫码或输入编号绑定主桶。", color = WarnOrange)
+            if (state.loading && state.masterCandidates.isEmpty()) {
+                SkeletonDeviceRows()
+            } else if (state.masterCandidates.isEmpty()) {
+                EmptyState("暂无已绑定且可用的主桶。请先扫码或输入编号绑定主桶。")
             } else {
                 state.masterCandidates.forEach { dev ->
                     DeviceSelectRow(
@@ -141,10 +147,10 @@ fun ConeConnectScreen(
                 Text("请先选择主桶。", color = NeutralGrey)
                 return@SectionCard
             }
-            SafetyText("任意已绑定从桶都可加入任意主桶；套装只用于默认候选。绑定 ≠ 加入，勾选后才参与本次布设。也可以不选从桶，仅主桶执行。")
-            Spacer(Modifier.height(6.dp))
-            if (state.slaveCandidates.isEmpty()) {
-                Text("暂无已绑定且可用的从桶。请先扫码或输入编号绑定。", color = WarnOrange)
+            if (state.loading && state.slaveCandidates.isEmpty()) {
+                SkeletonDeviceRows()
+            } else if (state.slaveCandidates.isEmpty()) {
+                EmptyState("暂无已绑定且可用的从桶。请先扫码或输入编号绑定。")
             } else {
                 val setName = draft.master?.setId ?: state.deviceSet?.setId
                 val setSlaves = state.slaveCandidates.filter { setName != null && it.setId == setName }
@@ -184,8 +190,6 @@ fun ConeConnectScreen(
 
         if (draft.slaves.isNotEmpty()) {
             SectionCard(title = "编队顺序（从 1…从 ${draft.n}）") {
-                SafetyText("顺序决定目标行程：从 k 目标 = L − k×d。请与实际起始线队形一致。")
-                Spacer(Modifier.height(6.dp))
                 draft.slaves.sortedBy { it.order }.forEachIndexed { idx, sel ->
                     SelectedSlaveRow(
                         sel = sel,
@@ -205,30 +209,12 @@ fun ConeConnectScreen(
             text = "完成设备连接",
             onClick = { if (vm.validateDevices()) onDevicesReady() },
             enabled = ready && !state.busy,
+            icon = Icons.Default.Check,
+            loading = state.busy,
         )
-        if (!ready) {
-            Text(
-                "请先选择 1 个主桶；从桶可选（不选则仅主桶执行）。",
-                style = MaterialTheme.typography.labelSmall,
-                color = WarnOrange,
-            )
-        } else {
-            Text(
-                if (draft.slaves.isEmpty()) {
-                    "未选择从桶：下一步仅主桶执行；进入锥桶作业首页后可发布布设任务。"
-                } else {
-                    "下一步进入锥桶作业首页，可发布布设任务。"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = NeutralGrey,
-            )
-        }
 
         Spacer(Modifier.height(16.dp))
         SecondaryActionButton("刷新设备列表", onClick = vm::reloadDevices, enabled = !state.loading)
-        if (state.loading) {
-            Text("正在加载设备…", style = MaterialTheme.typography.labelSmall, color = InfoBlue)
-        }
 
         Spacer(Modifier.height(24.dp))
     }
@@ -285,6 +271,7 @@ fun ConeConnectScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DeviceSelectRow(
     device: DeploymentDeviceSummary,
@@ -295,43 +282,101 @@ private fun DeviceSelectRow(
 ) {
     val reason = device.unavailableReason()
     val enabled = device.selectable
-    Row(
+    val battery = device.batteryPercent.coerceIn(0, 100)
+    val batteryColor = when {
+        battery >= 50 -> SafeGreen
+        battery >= 20 -> WarnOrange
+        else -> WarningRed
+    }
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .background(if (selected) InfoBlueBg else Color.Transparent)
-            .padding(vertical = 6.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(vertical = 3.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        ),
     ) {
-        if (radio) {
-            RadioButton(selected = selected, onClick = { if (enabled) onClick() }, enabled = enabled)
-        } else {
-            Checkbox(checked = selected, onCheckedChange = { if (enabled) onClick() }, enabled = enabled)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(device.name.ifBlank { device.deviceCode }, fontWeight = FontWeight.Bold)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                StatusChip(
-                    if (device.online) "在线" else "离线",
-                    if (device.online) SafeGreen else WarningRed,
-                    if (device.online) SafeGreenBg else WarningRedBg,
-                )
-                if (device.occupied) StatusChip("被占用", WarnOrange, WarnOrangeBg)
-                if (device.activeTaskId != null) StatusChip("任务中", WarnOrange, WarnOrangeBg)
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            if (radio) {
+                RadioButton(selected = selected, onClick = { if (enabled) onClick() }, enabled = enabled)
+            } else {
+                Checkbox(checked = selected, onCheckedChange = { if (enabled) onClick() }, enabled = enabled)
             }
-            Text(
-                "${device.deviceCode} · 电量 ${device.batteryText}" +
-                    (device.setId?.let { " · 套装 $it" } ?: "") +
-                    (reason?.let { " · $it" } ?: ""),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (reason != null) WarningRed else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = device.name.ifBlank { device.deviceCode },
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                    )
+                    TextButton(onClick = onUnbind) {
+                        Text("解绑", color = WarningRed, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Text(
+                    text = device.deviceCode,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    StatusChip(
+                        if (device.online) "在线" else "离线",
+                        if (device.online) SafeGreen else WarningRed,
+                        if (device.online) SafeGreenBg else WarningRedBg,
+                    )
+                    device.setId?.let { setId ->
+                        StatusChip("套装 $setId", InfoBlue, InfoBlueBg)
+                    }
+                    if (device.occupied) StatusChip("被占用", WarnOrange, WarnOrangeBg)
+                    if (device.activeTaskId != null) StatusChip("任务中", WarnOrange, WarnOrangeBg)
+                }
+                Spacer(Modifier.height(7.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "电量 ${device.batteryText}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = batteryColor,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(NeutralGreyBg),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(battery / 100f)
+                                .fillMaxHeight()
+                                .background(batteryColor),
+                        )
+                    }
+                }
+                if (reason != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = reason,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningRed,
+                    )
+                }
+            }
         }
-        TextButton(onClick = onUnbind) { Text("解绑", color = WarningRed) }
     }
 }
 

@@ -11,7 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,9 +26,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
 import com.example.myapplication.core.model.deployment.DeploymentResult
 import com.example.myapplication.core.model.deployment.DeploymentState
+import com.example.myapplication.core.ui.ContentCard
+import com.example.myapplication.core.ui.EmptyStateCard
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
+import com.example.myapplication.core.ui.SkeletonList
 import com.example.myapplication.core.ui.StatusChip
 import com.example.myapplication.core.util.TimeFormat
 import com.example.myapplication.ui.theme.InfoBlue
@@ -58,19 +62,36 @@ fun DeploymentRecordsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PageTitle("布设事件记录", onBack = onBack)
-        SecondaryActionButton("刷新", onClick = vm::loadRecords)
+        SecondaryActionButton(
+            text = "刷新",
+            onClick = vm::loadRecords,
+            icon = Icons.Default.Refresh,
+            loading = state.loading,
+        )
 
-        if (state.records.isEmpty()) {
-            SectionCard(title = "暂无布设事件") {
-                Text(
-                    "完成或终止一次锥桶协同布设后，事件记录会显示在这里。",
-                    color = NeutralGrey,
+        when {
+            state.loading && state.records.isEmpty() -> {
+                SkeletonList(count = 4, itemHeight = 96.dp)
+            }
+
+            state.error != null && state.records.isEmpty() -> {
+                SectionCard(title = "加载失败") {
+                    Text(state.error ?: "加载布设记录失败", color = WarningRed)
+                }
+            }
+
+            state.records.isEmpty() -> {
+                EmptyStateCard(
+                    title = "暂无布设事件",
+                    message = "完成或终止一次锥桶协同布设后，事件记录会显示在这里。",
                 )
             }
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.records, key = { it.deploymentId }) { record ->
-                    DeploymentRecordCard(record, onClick = { onOpen(record.deploymentId) })
+
+            else -> {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(state.records, key = { it.deploymentId }) { record ->
+                        DeploymentRecordCard(record, onClick = { onOpen(record.deploymentId) })
+                    }
                 }
             }
         }
@@ -86,8 +107,8 @@ fun DeploymentRecordCard(record: DeploymentRecordSummary, onClick: () -> Unit) {
         DeploymentState.PAUSED, DeploymentState.PENDING_VERIFY -> WarnOrange to WarnOrangeBg
         else -> InfoBlue to InfoBlueBg
     }
-    Card(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
-        Column(modifier = Modifier.padding(12.dp)) {
+    ContentCard(onClick = onClick) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(record.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 StatusChip(record.state.label, fg, bg)

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,7 +19,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -27,10 +31,10 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -140,7 +145,12 @@ fun DeploymentExecScreen(
     // ── 锥桶地图锚点：优先取事件开始时刻附近的手机定位，其次实时手机位置 ──
     val mapState by mapVm.uiState.collectAsStateWithLifecycle()
     val phoneFix by mapVm.phoneFix.collectAsStateWithLifecycle()
-    var coneAnchor by remember(event?.deploymentId) { mutableStateOf<GeoPoint?>(null) }
+    val coneMemory = remember(event?.deploymentId) {
+        event?.deploymentId?.let(vm::coneTrailMemoryFor)
+    }
+    var coneAnchor by remember(event?.deploymentId) {
+        mutableStateOf(coneMemory?.anchor)
+    }
     LaunchedEffect(event?.deploymentId, event?.startedAt, phoneFix, mapState.phoneTrail) {
         if (coneAnchor == null && event != null) {
             val startedAt = event.startedAt ?: 0L
@@ -152,12 +162,14 @@ fun DeploymentExecScreen(
             // 进行中事件要求轨迹点足够新，避免用很久以前的点当起点；历史事件可放宽
             val window = if (event.terminal) ANCHOR_HISTORY_WINDOW_MS else ANCHOR_LIVE_WINDOW_MS
             val nearEnough = nearest != null && abs(nearest.at - startedAt) <= window
-            coneAnchor = when {
+            val resolved = when {
                 nearEnough -> nearest!!.point
                 // 历史事件没有当时的手机定位时，不拿当前位置硬凑
                 !event.terminal -> phoneFix?.point
                 else -> null
             }
+            coneAnchor = resolved
+            if (resolved != null) coneMemory?.anchor = resolved
         }
     }
     val conePositions = remember(event, coneAnchor) {
@@ -185,10 +197,10 @@ fun DeploymentExecScreen(
         }
     }
 
-    // 运行轨迹：按 1Hz 状态采样各桶位置，过滤静止抖动并限制长度
-    val coneTrails = remember(event?.deploymentId) {
-        mutableStateMapOf<String, List<GeoPoint>>()
-    }
+    // 运行轨迹：按 1Hz 状态采样各桶位置，过滤静止抖动并限制长度。
+    // 轨迹缓存在 ViewModel 中（按 deploymentId），退出执行页再回来仍能继续画。
+    val emptyConeTrails = remember { mutableStateMapOf<String, List<GeoPoint>>() }
+    val coneTrails = coneMemory?.points ?: emptyConeTrails
     LaunchedEffect(event?.deploymentId, coneAnchor, conePositions) {
         if (event == null || coneAnchor == null) return@LaunchedEffect
         conePositions.forEach { pin ->
@@ -225,178 +237,163 @@ fun DeploymentExecScreen(
     var skipTarget by remember { mutableStateOf<DeploymentDeviceState?>(null) }
     var verifyTarget by remember { mutableStateOf<DeploymentDeviceState?>(null) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState(), enabled = !mapTouchActive)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        PageTitle(
-            text = event?.name ?: "布设执行",
-            subtitle = event?.let {
-                "L=${fmt(it.params.L)} m · d=${fmt(it.params.d)} m · N=${it.params.N}" +
-                    (it.lane?.let { lane -> " · 第 $lane 车道" } ?: "")
-            },
-            onBack = onBack,
-        )
-
-        if (event == null) {
-            SectionCard(title = "暂无布设事件") {
-                Text("当前没有可展示的布设事件。", color = NeutralGrey)
-                Spacer(Modifier.height(8.dp))
-                SecondaryActionButton("刷新", onClick = vm::refreshEvent)
-            }
-            Spacer(Modifier.height(24.dp))
-            return@Column
-        }
-
-        EventOverviewCard(event)
-
-        // 紧急操作：放在首屏显眼位置，避免现场着急时还要向下翻找
-        if (event.state == DeploymentState.RUNNING || event.state == DeploymentState.PAUSED) {
-            Button(
-                onClick = {
-                    if (event.state == DeploymentState.RUNNING) {
-                        showManualConfirm = true
-                    } else {
-                        vm.enterManualMode()
-                    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState(), enabled = !mapTouchActive)
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 140.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PageTitle(
+                text = event?.name ?: "布设执行",
+                subtitle = event?.let {
+                    "L=${fmt(it.params.L)} m · d=${fmt(it.params.d)} m · N=${it.params.N}" +
+                        (it.lane?.let { lane -> " · 第 $lane 车道" } ?: "")
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = WarnOrange,
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text(
-                    text = "单桶手动干预",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
+                onBack = onBack,
+            )
 
-        // 主/从桶实时位置（无逐桶 GPS，按各桶 traveledM 沿正北方向估算）
-        if (coneAnchor != null || !event.terminal) {
-            key(event.deploymentId) {
-                PhoneMapPanel(
-                    mapVm = mapVm,
-                    height = 220.dp,
-                    title = "主/从桶实时位置",
-                    extraMarkers = conePins,
-                    extraPolylines = coneTrailLines,
-                    showPhoneMarker = false,
-                    cameraCenter = coneAnchor,
-                    followPhone = false,
-                    onTouchActiveChange = { mapTouchActive = it },
-                    caption = if (coneAnchor == null) {
-                        "暂无手机定位锚点，无法估算锥桶位置；请允许定位后重试。"
-                    } else {
-                        "蓝点=主桶，橙点=从桶，绿点=已到位，灰点=已跳过；连线为运行轨迹；按各桶位置/朝向估算（旧数据回退正北投影，非 GPS）。"
-                    },
-                )
-            }
-        }
-
-        // 主桶实时视频：复用三角架同一套 UDP 视频接口（逻辑接口不变）
-        val masterCode = event.master?.deviceCode
-        if (!event.terminal && masterCode != null) {
-            val token = sl.authRepository.currentToken
-            val target = buildString {
-                append("/api/v1/device/video/stream?device_code=").append(masterCode)
-                if (!token.isNullOrBlank()) {
-                    append("&token=").append(URLEncoder.encode(token, "UTF-8"))
+            if (event == null) {
+                SectionCard(title = "暂无布设事件") {
+                    Text("当前没有可展示的布设事件。", color = NeutralGrey)
+                    Spacer(Modifier.height(8.dp))
+                    SecondaryActionButton("刷新", onClick = vm::refreshEvent)
                 }
+                Spacer(Modifier.height(24.dp))
+                return@Column
             }
-            val videoUrl = udpVideoUrl(serverUrl, target)
-            SectionCard(title = "主桶实时视频") {
-                VideoStreamView(
-                    url = videoUrl,
-                    contentDescription = "主桶实时视频",
+
+            EventOverviewCard(event)
+
+            // 紧急操作：放在首屏显眼位置，避免现场着急时还要向下翻找
+            if (event.state == DeploymentState.RUNNING || event.state == DeploymentState.PAUSED) {
+                Button(
+                    onClick = {
+                        if (event.state == DeploymentState.RUNNING) {
+                            showManualConfirm = true
+                        } else {
+                            vm.enterManualMode()
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(180.dp)
-                        .clip(RoundedCornerShape(12.dp)),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "主桶 ${masterCode} 实时视频（UDP，接口同三角架实时视频）",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
-            }
-        }
-
-        // 异常横幅：一旦出现必须显性展示
-        if (event.anomalies.isNotEmpty()) {
-            SectionCard(title = "异常（系统不会自动跳过）") {
-                event.anomalies.forEach { a ->
+                        .height(56.dp),
+                    shape = MaterialTheme.shapes.medium,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = WarnOrange,
+                        contentColor = Color.White,
+                    ),
+                ) {
                     Text(
-                        "• ${a.deviceCode ?: ""} ${a.label}（${a.code}）",
-                        color = WarningRed,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "单桶手动干预",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "请先暂停/现场处置，再按安全流程重试；无法恢复时可人工跳过当前从桶（仅异常阻断时）。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WarningRed,
-                )
             }
-        }
 
-        // 当前链路下一步
-        event.nextExpected?.let { next ->
-            SectionCard(title = "当前链路") {
-                val text = when (next.type) {
-                    "trigger" -> "等待主桶自身行程达到 ${fmt(next.thresholdM)} m 后触发 ${next.afterReportTrigger ?: "从 1"}"
-                    "report" -> "等待 ${next.deviceCode} 自身行程达到 ${fmt(next.thresholdM)} m 后上报" +
-                        (next.afterReportTrigger?.let { "，随后触发 $it" } ?: "")
-                    else -> "等待 ${next.deviceCode}"
+            // 主/从桶实时位置（无逐桶 GPS，按各桶 traveledM 沿正北方向估算）
+            if (coneAnchor != null || !event.terminal) {
+                key(event.deploymentId) {
+                    PhoneMapPanel(
+                        mapVm = mapVm,
+                        height = 220.dp,
+                        title = "主/从桶实时位置",
+                        extraMarkers = conePins,
+                        extraPolylines = coneTrailLines,
+                        showPhoneMarker = false,
+                        cameraCenter = coneAnchor,
+                        followPhone = false,
+                        onTouchActiveChange = { mapTouchActive = it },
+                        caption = if (coneAnchor == null) {
+                            "暂无手机定位锚点，无法估算锥桶位置；请允许定位后重试。"
+                        } else {
+                            "蓝点=主桶，橙点=从桶，绿点=已到位，灰点=已跳过；连线为运行轨迹；按各桶位置/朝向估算（旧数据回退正北投影，非 GPS）。"
+                        },
+                    )
                 }
-                Text(text, color = InfoBlue, fontWeight = FontWeight.Bold)
-                Text(
-                    "注意：是设备自身行程达到 d，不是主桶走到 (k+1)×d；从桶之间不直接发启动指令。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = NeutralGrey,
-                )
             }
-        }
 
-        SectionCard(title = "设备状态（主桶在前，从桶按顺序）") {
-            event.ordered.forEach { dev ->
-                DeviceStateCard(
-                    device = dev,
-                    eventState = event.state,
-                    onVerify = { verifyTarget = dev },
-                )
-                Spacer(Modifier.height(10.dp))
-            }
-        }
-
-        // 暂停全部：仅 COMPLETED 不显示；RUNNING/STARTING 二次确认，其余状态直接执行/提示
-        if (event.state != DeploymentState.COMPLETED) {
-            PrimaryActionButton(
-                text = "暂停全部",
-                onClick = {
-                    if (event.state == DeploymentState.RUNNING || event.state == DeploymentState.STARTING) {
-                        showPauseConfirm = true
-                    } else {
-                        vm.pauseAll()
+            // 主桶实时视频：复用三角架同一套 UDP 视频接口（逻辑接口不变）
+            val masterCode = event.master?.deviceCode
+            if (!event.terminal && masterCode != null) {
+                val token = sl.authRepository.currentToken
+                val target = buildString {
+                    append("/api/v1/device/video/stream?device_code=").append(masterCode)
+                    if (!token.isNullOrBlank()) {
+                        append("&token=").append(URLEncoder.encode(token, "UTF-8"))
                     }
-                },
-                enabled = !state.busy,
-            )
-            Spacer(Modifier.height(8.dp))
-        }
+                }
+                val videoUrl = udpVideoUrl(serverUrl, target)
+                SectionCard(title = "主桶实时视频") {
+                    VideoStreamView(
+                        url = videoUrl,
+                        contentDescription = "主桶实时视频",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "主桶 ${masterCode} 实时视频（UDP，接口同三角架实时视频）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NeutralGrey,
+                    )
+                }
+            }
 
-        // 操作区
-        when (event.state) {
-            DeploymentState.RUNNING -> {
+            // 异常横幅：一旦出现必须显性展示
+            if (event.anomalies.isNotEmpty()) {
+                SectionCard(title = "异常（系统不会自动跳过）") {
+                    event.anomalies.forEach { a ->
+                        Text(
+                            "• ${a.deviceCode ?: ""} ${a.label}（${a.code}）",
+                            color = WarningRed,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "请先暂停/现场处置，再按安全流程重试；无法恢复时可人工跳过当前从桶（仅异常阻断时）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WarningRed,
+                    )
+                }
+            }
+
+            // 当前链路下一步
+            event.nextExpected?.let { next ->
+                SectionCard(title = "当前链路") {
+                    val text = when (next.type) {
+                        "trigger" -> "等待主桶自身行程达到 ${fmt(next.thresholdM)} m 后触发 ${next.afterReportTrigger ?: "从 1"}"
+                        "report" -> "等待 ${next.deviceCode} 自身行程达到 ${fmt(next.thresholdM)} m 后上报" +
+                            (next.afterReportTrigger?.let { "，随后触发 $it" } ?: "")
+                        else -> "等待 ${next.deviceCode}"
+                    }
+                    Text(text, color = InfoBlue, fontWeight = FontWeight.Bold)
+                    Text(
+                        "注意：是设备自身行程达到 d，不是主桶走到 (k+1)×d；从桶之间不直接发启动指令。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NeutralGrey,
+                    )
+                }
+            }
+
+            SectionCard(title = "设备状态（主桶在前，从桶按顺序）") {
+                event.ordered.forEach { dev ->
+                    DeviceStateCard(
+                        device = dev,
+                        eventState = event.state,
+                        onVerify = { verifyTarget = dev },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
+
+            // 主操作固定在底部栏；这里只保留次级处置，避免重复按钮。
+            if (event.state == DeploymentState.RUNNING) {
                 if (canRetry(event)) {
                     SecondaryActionButton("重试当前步骤", onClick = { showRetryConfirm = true })
                     Spacer(Modifier.height(8.dp))
@@ -415,32 +412,17 @@ fun DeploymentExecScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                 }
-                SecondaryActionButton("终止事件", onClick = { showAbortConfirm = true })
             }
 
-            DeploymentState.PAUSED -> {
-                PrimaryActionButton("继续", onClick = { showResumeConfirm = true })
-                Spacer(Modifier.height(8.dp))
-                DangerActionButton("终止事件", onClick = { showAbortConfirm = true })
-            }
-
-            DeploymentState.PENDING_VERIFY, DeploymentState.VERIFY_FAILED -> {
+            if (event.state == DeploymentState.PENDING_VERIFY || event.state == DeploymentState.VERIFY_FAILED) {
                 Text(
                     if (event.allVerified) "全部设备核验通过，可以完成布设。" else "请逐只核对实际位置/处置方式并完成核验。",
                     color = if (event.allVerified) SafeGreen else WarnOrange,
                     fontWeight = FontWeight.Bold,
                 )
-                Spacer(Modifier.height(8.dp))
-                PrimaryActionButton(
-                    text = if (event.hasSkip) "完成布设（带异常）" else "完成布设",
-                    onClick = vm::complete,
-                    enabled = event.allVerified && !state.busy,
-                )
-                Spacer(Modifier.height(8.dp))
-                SecondaryActionButton("终止事件", onClick = { showAbortConfirm = true })
             }
 
-            DeploymentState.STARTING -> {
+            if (event.state == DeploymentState.STARTING) {
                 SectionCard(title = "启动中") {
                     Text("正在等待主桶确认启动指令。", color = InfoBlue)
                     Text(
@@ -449,28 +431,30 @@ fun DeploymentExecScreen(
                         color = NeutralGrey,
                     )
                 }
-                SecondaryActionButton("刷新状态", onClick = vm::refreshEvent)
-                Spacer(Modifier.height(8.dp))
-                DangerActionButton("终止事件", onClick = { showAbortConfirm = true })
             }
 
-            DeploymentState.COMPLETED, DeploymentState.ABORTED, DeploymentState.FAILED -> {
-                SecondaryActionButton("刷新记录", onClick = vm::refreshEvent)
-            }
-
-            else -> {
-                SecondaryActionButton("刷新状态", onClick = vm::refreshEvent)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "最后更新：${event.updatedAt.takeIf { it > 0 }?.let { TimeFormat.hhmmss(it) } ?: "-"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = NeutralGrey,
+            )
+            if (state.busy) {
+                Text("处理中…", style = MaterialTheme.typography.labelSmall, color = InfoBlue)
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "最后更新：${event.updatedAt.takeIf { it > 0 }?.let { TimeFormat.hhmmss(it) } ?: "-"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = NeutralGrey,
-        )
-        if (state.busy) {
-            Text("处理中…", style = MaterialTheme.typography.labelSmall, color = InfoBlue)
+        if (event != null) {
+            DeploymentBottomActionBar(
+                event = event,
+                busy = state.busy,
+                onPause = { showPauseConfirm = true },
+                onResume = { showResumeConfirm = true },
+                onAbort = { showAbortConfirm = true },
+                onComplete = vm::complete,
+                onRefresh = vm::refreshEvent,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 
@@ -598,47 +582,200 @@ fun DeploymentExecScreen(
 }
 
 @Composable
-private fun EventOverviewCard(event: DeploymentEvent) {
-    val (fg, bg) = when (event.state) {
-        DeploymentState.COMPLETED -> SafeGreen to SafeGreenBg
-        DeploymentState.ABORTED, DeploymentState.FAILED, DeploymentState.VERIFY_FAILED -> WarningRed to WarningRedBg
-        DeploymentState.PAUSED, DeploymentState.PENDING_VERIFY -> WarnOrange to WarnOrangeBg
-        else -> InfoBlue to InfoBlueBg
-    }
-    SectionCard(title = "事件状态与整体进度") {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusChip(event.state.label, fg, bg)
-            if (event.result == DeploymentResult.COMPLETED_WITH_EXCEPTION) {
-                Spacer(Modifier.width(6.dp))
-                StatusChip("带异常完成", WarnOrange, WarnOrangeBg)
+private fun DeploymentBottomActionBar(
+    event: DeploymentEvent,
+    busy: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onAbort: () -> Unit,
+    onComplete: () -> Unit,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        shadowElevation = 12.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            when (event.state) {
+                DeploymentState.RUNNING -> {
+                    PrimaryActionButton(
+                        text = "暂停全部",
+                        onClick = onPause,
+                        modifier = Modifier.weight(1f),
+                        enabled = !busy,
+                        loading = busy,
+                    )
+                    DangerActionButton(
+                        text = "终止事件",
+                        onClick = onAbort,
+                        modifier = Modifier.weight(0.75f),
+                        enabled = !busy,
+                    )
+                }
+
+                DeploymentState.PAUSED -> {
+                    PrimaryActionButton(
+                        text = "继续布设",
+                        onClick = onResume,
+                        modifier = Modifier.weight(1f),
+                        enabled = !busy,
+                        icon = Icons.Default.PlayArrow,
+                        loading = busy,
+                    )
+                    DangerActionButton(
+                        text = "终止事件",
+                        onClick = onAbort,
+                        modifier = Modifier.weight(0.75f),
+                        enabled = !busy,
+                    )
+                }
+
+                DeploymentState.PENDING_VERIFY, DeploymentState.VERIFY_FAILED -> {
+                    PrimaryActionButton(
+                        text = "完成布设",
+                        onClick = onComplete,
+                        modifier = Modifier.weight(1f),
+                        enabled = event.allVerified && !busy,
+                        icon = Icons.Default.Check,
+                        loading = busy,
+                    )
+                    DangerActionButton(
+                        text = "终止事件",
+                        onClick = onAbort,
+                        modifier = Modifier.weight(0.75f),
+                        enabled = !busy,
+                    )
+                }
+
+                DeploymentState.STARTING -> {
+                    SecondaryActionButton(
+                        text = "刷新状态",
+                        onClick = onRefresh,
+                        modifier = Modifier.weight(1f),
+                        enabled = !busy,
+                        icon = Icons.Default.Refresh,
+                        loading = busy,
+                    )
+                    DangerActionButton(
+                        text = "终止事件",
+                        onClick = onAbort,
+                        modifier = Modifier.weight(0.75f),
+                        enabled = !busy,
+                    )
+                }
+
+                else -> {
+                    SecondaryActionButton(
+                        text = "刷新记录",
+                        onClick = onRefresh,
+                        modifier = Modifier.weight(1f),
+                        enabled = !busy,
+                        icon = Icons.Default.Refresh,
+                        loading = busy,
+                    )
+                }
             }
-            Spacer(Modifier.weight(1f))
-            Text(event.deploymentId, style = MaterialTheme.typography.labelSmall, color = NeutralGrey)
         }
-        Spacer(Modifier.height(10.dp))
-        EventProgressBar(event)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "已到达 ${event.arrivedCount}/${event.devices.size} · 已核验 ${event.verifiedCount}/${event.devices.size}" +
-                if (event.hasSkip) " · 人工跳过 ${event.devices.count { it.skipped }}" else "",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            "主桶与从桶可同时移动；到达数量与核验数量分开统计。",
-            style = MaterialTheme.typography.labelSmall,
-            color = NeutralGrey,
-        )
     }
 }
 
+/** 首屏状态 hero：大号状态 + 进度 + 到达/核验计数。 */
 @Composable
-private fun EventProgressBar(event: DeploymentEvent) {
+private fun EventOverviewCard(event: DeploymentEvent) {
+    val accent = when (event.state) {
+        DeploymentState.COMPLETED -> Color(0xFF7BD88F)
+        DeploymentState.ABORTED, DeploymentState.FAILED, DeploymentState.VERIFY_FAILED -> Color(0xFFFF8A80)
+        DeploymentState.PAUSED, DeploymentState.PENDING_VERIFY -> Color(0xFFFFB74D)
+        else -> Color(0xFF64B5F6)
+    }
     val total = event.devices.size.coerceAtLeast(1)
     // 人工跳过的设备已完成处置，进度上计入“已结束”，但不计入“已到达”
     val done = event.devices.count { it.arrived || it.skipped }
     val fraction = done.toFloat() / total
-    SimpleProgress(fraction, InfoBlue)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFF0A2E42), Color(0xFF14506E)),
+                ),
+            )
+            .padding(18.dp),
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusChip(
+                    text = event.state.label,
+                    fg = Color.White,
+                    bg = Color.White.copy(alpha = 0.18f),
+                )
+                if (event.result == DeploymentResult.COMPLETED_WITH_EXCEPTION) {
+                    Spacer(Modifier.width(6.dp))
+                    StatusChip(
+                        text = "带异常完成",
+                        fg = Color(0xFFFFD180),
+                        bg = Color(0x33FFB74D),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = event.deploymentId,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.6f),
+                    maxLines = 1,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = "${(fraction * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "整体进度",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(bottom = 5.dp),
+                )
+                Spacer(Modifier.weight(1f))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "已到达 ${event.arrivedCount}/$total",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White,
+                    )
+                    Text(
+                        text = "已核验 ${event.verifiedCount}/$total" +
+                            if (event.hasSkip) " · 跳过 ${event.devices.count { it.skipped }}" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            SimpleProgress(
+                progress = fraction,
+                color = accent,
+                trackColor = Color.White.copy(alpha = 0.18f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -730,13 +867,17 @@ private fun DeviceStateCard(
 }
 
 @Composable
-private fun SimpleProgress(progress: Float, color: Color) {
+private fun SimpleProgress(
+    progress: Float,
+    color: Color,
+    trackColor: Color = NeutralGreyBg,
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(6.dp)
             .clip(RoundedCornerShape(3.dp))
-            .background(NeutralGreyBg),
+            .background(trackColor),
     ) {
         Box(
             modifier = Modifier

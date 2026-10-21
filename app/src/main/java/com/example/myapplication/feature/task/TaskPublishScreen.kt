@@ -47,7 +47,6 @@ import com.example.myapplication.core.model.vehicle.SegmentRange
 import com.example.myapplication.core.model.vehicle.TaskKind
 import com.example.myapplication.core.ui.PageTitle
 import com.example.myapplication.core.ui.PrimaryActionButton
-import com.example.myapplication.core.ui.SafetyText
 import com.example.myapplication.core.ui.SecondaryActionButton
 import com.example.myapplication.core.ui.SectionCard
 import com.example.myapplication.core.ui.StatusChip
@@ -156,8 +155,6 @@ fun TaskPublishScreen(
 
         // ③ 路线设计（核心）
         SectionCard(title = "路线设计（${draft.segments.size} 段 · 行驶合计 ${"%.1f".format(draft.totalM)} 米）") {
-            SafetyText("路线各段将按顺序执行；每段动作与参数如下。")
-
             draft.segments.forEachIndexed { index, seg ->
                 SegmentCard(
                     index = index,
