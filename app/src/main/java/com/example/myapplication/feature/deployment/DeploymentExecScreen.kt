@@ -48,7 +48,7 @@ import com.example.myapplication.core.model.deployment.DeploymentDeviceState
 import com.example.myapplication.core.model.deployment.DeploymentEvent
 import com.example.myapplication.core.model.deployment.DeploymentPhase
 import com.example.myapplication.core.model.deployment.DeploymentResult
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.ReportResultState
 import com.example.myapplication.core.model.deployment.SkipDisposition
@@ -199,7 +199,7 @@ fun DeploymentExecScreen(
                     Spacer(Modifier.height(8.dp))
                 }
                 val blocked = blockedDevice(event)
-                if (blocked != null && blocked.role != DeploymentRole.MASTER) {
+                if (blocked != null && blocked.deviceType != DeploymentDeviceType.MASTER_CONE) {
                     DangerActionButton(
                         text = "人工跳过 ${blocked.deviceCode}（受控）",
                         onClick = { skipTarget = blocked },
@@ -317,7 +317,7 @@ fun DeploymentExecScreen(
             busy = state.busy,
             onDismiss = { skipTarget = null },
             onConfirm = { reason, disposition, note ->
-                vm.skip(dev.deviceCode, reason, disposition, note)
+                vm.skip(dev, reason, disposition, note)
                 skipTarget = null
             },
         )
@@ -329,7 +329,7 @@ fun DeploymentExecScreen(
             busy = state.busy,
             onDismiss = { verifyTarget = null },
             onConfirm = { pass, note ->
-                vm.verify(dev.deviceCode, pass, note)
+                vm.verify(dev, pass, note)
                 verifyTarget = null
             },
         )

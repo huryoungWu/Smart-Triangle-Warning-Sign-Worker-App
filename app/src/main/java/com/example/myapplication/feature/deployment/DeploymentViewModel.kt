@@ -8,11 +8,12 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.myapplication.MyAppApplication
 import com.example.myapplication.core.data.api.DeploymentRepository
 import com.example.myapplication.core.model.deployment.CommandResultState
+import com.example.myapplication.core.model.deployment.DeploymentDeviceState
 import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentEvent
 import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.ReportResultState
 import com.example.myapplication.core.model.deployment.SelectedSlave
@@ -77,8 +78,8 @@ class DeploymentViewModel(
             repository.listDevices()
                 .onSuccess { devices ->
                     _uiState.update { s ->
-                        val masters = devices.filter { it.role == DeploymentRole.MASTER }
-                        val slaves = devices.filter { it.role == DeploymentRole.SLAVE }
+                        val masters = devices.filter { it.deviceType == DeploymentDeviceType.MASTER_CONE }
+                        val slaves = devices.filter { it.deviceType == DeploymentDeviceType.SLAVE_CONE }
                         val keepMaster = s.draft.master?.deviceCode
                             ?.let { code -> masters.firstOrNull { it.deviceCode == code } }
                         val keptSlaves = s.draft.slaves.mapNotNull { sel ->
@@ -128,7 +129,7 @@ class DeploymentViewModel(
             it.copy(
                 draft = it.draft.copy(master = master, slaves = emptyList(), lText = it.draft.lText, dText = it.draft.dText),
                 deviceSet = null,
-                slaveCandidates = it.allDevices.filter { d -> d.role == DeploymentRole.SLAVE && d.deviceCode != code },
+                slaveCandidates = it.allDevices.filter { d -> d.deviceType == DeploymentDeviceType.SLAVE_CONE && d.deviceCode != code },
             )
         }
         viewModelScope.launch {
@@ -138,7 +139,7 @@ class DeploymentViewModel(
                         s.copy(
                             deviceSet = set,
                             slaveCandidates = mergeSlaveCandidates(
-                                s.allDevices.filter { d -> d.role == DeploymentRole.SLAVE },
+                                s.allDevices.filter { d -> d.deviceType == DeploymentDeviceType.SLAVE_CONE },
                                 set,
                             ),
                         )
@@ -205,7 +206,7 @@ class DeploymentViewModel(
 
     // ────────────────────────── 绑定 / 解绑 ──────────────────────────
 
-    fun bindDevice(deviceCode: String, bindingCode: String) {
+    fun bindDevice(deviceCode: String, bindingCode: String, deviceType: DeploymentDeviceType) {
         val code = deviceCode.trim()
         if (code.isBlank()) {
             _uiState.update { it.copy(error = "设备编号不能为空") }
@@ -217,12 +218,12 @@ class DeploymentViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(busy = true) }
-            repository.bindDevice(code, bindingCode.trim())
+            repository.bindDevice(code, bindingCode.trim(), deviceType)
                 .onSuccess { dev ->
                     _uiState.update {
                         it.copy(
                             busy = false,
-                            message = "设备 ${dev.deviceCode} 已绑定，请勾选加入本次布设",
+                            message = "设备 ${dev.deviceCode}（${dev.deviceType?.token ?: deviceType.token}）已绑定，请勾选加入本次布设",
                         )
                     }
                     reloadDevices()
@@ -437,12 +438,18 @@ class DeploymentViewModel(
             return
         }
         val type = if (startTarget != null) "start_command" else "report"
+        val targetType = target.deviceType
+        if (targetType == null) {
+            _uiState.update { it.copy(error = "设备 ${target.deviceCode} 缺少 device_type，无法重试") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(busy = true) }
             repository.retry(
                 deploymentId = event.deploymentId,
                 type = type,
                 deviceCode = target.deviceCode,
+                deviceType = targetType,
                 originalCommandId = target.startCommand.commandId,
                 reportId = if (type == "report") "${event.deploymentId}:${target.deviceCode}:interval:${target.order}" else null,
             ).onSuccess {
@@ -454,17 +461,22 @@ class DeploymentViewModel(
         }
     }
 
-    fun skip(deviceCode: String, reason: String, disposition: SkipDisposition, note: String = "") {
+    fun skip(device: DeploymentDeviceState, reason: String, disposition: SkipDisposition, note: String = "") {
         val id = _uiState.value.event?.deploymentId ?: return
         if (reason.isBlank()) {
             _uiState.update { it.copy(error = "请填写人工跳过原因") }
             return
         }
+        val deviceType = device.deviceType
+        if (deviceType == null) {
+            _uiState.update { it.copy(error = "设备 ${device.deviceCode} 缺少 device_type，无法跳过") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(busy = true) }
-            repository.skip(id, deviceCode, reason.trim(), disposition, note)
+            repository.skip(id, device.deviceCode, deviceType, reason.trim(), disposition, note)
                 .onSuccess {
-                    _uiState.update { it.copy(busy = false, message = "已人工跳过 $deviceCode；事件将记录为带异常完成") }
+                    _uiState.update { it.copy(busy = false, message = "已人工跳过 ${device.deviceCode}；事件将记录为带异常完成") }
                     refreshEvent()
                 }
                 .onFailure { e ->
@@ -473,11 +485,16 @@ class DeploymentViewModel(
         }
     }
 
-    fun verify(deviceCode: String, pass: Boolean, note: String) {
+    fun verify(device: DeploymentDeviceState, pass: Boolean, note: String) {
         val id = _uiState.value.event?.deploymentId ?: return
+        val deviceType = device.deviceType
+        if (deviceType == null) {
+            _uiState.update { it.copy(error = "设备 ${device.deviceCode} 缺少 device_type，无法核验") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(busy = true) }
-            repository.verify(id, deviceCode, pass, note)
+            repository.verify(id, device.deviceCode, deviceType, pass, note)
                 .onSuccess {
                     _uiState.update { it.copy(busy = false, message = "已记录核验结果") }
                     refreshEvent()

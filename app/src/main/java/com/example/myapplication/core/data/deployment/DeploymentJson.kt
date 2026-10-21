@@ -12,7 +12,7 @@ import com.example.myapplication.core.model.deployment.DeploymentPhase
 import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
 import com.example.myapplication.core.model.deployment.DeploymentReportState
 import com.example.myapplication.core.model.deployment.DeploymentResult
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeploymentSkip
 import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.DeploymentStep
@@ -29,11 +29,12 @@ import org.json.JSONObject
 object DeploymentJson {
 
     fun parseDeviceSummary(o: JSONObject): DeploymentDeviceSummary = DeploymentDeviceSummary(
-        deviceCode = o.optString("device_code", o.optString("deviceCode", "")),
+        deviceCode = o.optString("device_code", ""),
         name = o.optString("name", ""),
-        role = DeploymentRole.fromToken(o.optString("role")),
-        setId = o.optString("setId").takeIf { it.isNotBlank() && it != "null" },
-        masterCode = o.optString("masterCode").takeIf { it.isNotBlank() && it != "null" },
+        deviceType = DeploymentDeviceType.fromToken(o.optString("device_type")),
+        bindingCode = o.optString("binding_code").takeIf { it.isNotBlank() && it != "null" },
+        setId = o.optString("set_id").takeIf { it.isNotBlank() && it != "null" },
+        masterCode = o.optString("master_code").takeIf { it.isNotBlank() && it != "null" },
         online = !o.has("online") || o.optBoolean("online", true),
         available = !o.has("available") || o.optBoolean("available", true),
         occupied = o.optBoolean("occupied", false),
@@ -53,7 +54,7 @@ object DeploymentJson {
     }
 
     fun parseDeviceSet(o: JSONObject): DeviceSet = DeviceSet(
-        setId = o.optString("setId").takeIf { it.isNotBlank() && it != "null" },
+        setId = o.optString("set_id").takeIf { it.isNotBlank() && it != "null" },
         master = o.optJSONObject("master")?.let(::parseDeviceSummary),
         slaves = o.optJSONArray("slaves").let { arr ->
             buildList {
@@ -104,9 +105,10 @@ object DeploymentJson {
         val verify = o.optJSONObject("verify")
         val anomaly = o.optJSONObject("anomaly")
         return DeploymentDeviceState(
-            deviceCode = o.optString("device_code", o.optString("deviceCode", "")),
+            deviceCode = o.optString("device_code", ""),
             name = o.optString("name", ""),
-            role = DeploymentRole.fromToken(o.optString("role")),
+            deviceType = DeploymentDeviceType.fromToken(o.optString("device_type")),
+            bindingCode = o.optString("binding_code").takeIf { it.isNotBlank() && it != "null" },
             order = o.optInt("order", 0),
             online = !o.has("online") || o.optBoolean("online", true),
             targetM = o.optDouble("targetM", 0.0),
@@ -155,7 +157,7 @@ object DeploymentJson {
                 DeploymentAnomaly(
                     code = it.optString("code", ""),
                     message = it.optString("message", ""),
-                    deviceCode = o.optString("device_code", o.optString("deviceCode", "")),
+                    deviceCode = o.optString("device_code", ""),
                     detectedAt = it.optLong("detectedAt", 0L),
                 )
             },
@@ -164,9 +166,9 @@ object DeploymentJson {
 
     private fun parseNextExpected(o: JSONObject) = DeploymentNextExpected(
         type = o.optString("type", ""),
-        deviceCode = o.optString("deviceCode", o.optString("device_code", "")),
+        deviceCode = o.optString("device_code", ""),
         thresholdM = o.optDouble("thresholdM", 0.0),
-        afterReportTrigger = o.optString("afterReportTrigger").takeIf { it.isNotBlank() && it != "null" },
+        afterReportTrigger = o.optString("after_report_trigger").takeIf { it.isNotBlank() && it != "null" },
         state = o.optString("state", ""),
     )
 
@@ -199,7 +201,7 @@ object DeploymentJson {
                 DeploymentAnomaly(
                     code = o.optString("code", ""),
                     message = o.optString("message", ""),
-                    deviceCode = o.optString("deviceCode", o.optString("device_code", "")).takeIf { it.isNotBlank() && it != "null" },
+                    deviceCode = o.optString("device_code", "").takeIf { it.isNotBlank() && it != "null" },
                     detectedAt = o.optLong("detectedAt", 0L),
                 ),
             )
@@ -215,7 +217,7 @@ object DeploymentJson {
         L = o.optDouble("L", 0.0),
         d = o.optDouble("d", 0.0),
         N = o.optInt("N", 0),
-        masterCode = o.optString("masterCode").takeIf { it.isNotBlank() && it != "null" },
+        masterCode = o.optString("master_code").takeIf { it.isNotBlank() && it != "null" },
         createdAt = o.optLong("createdAt", 0L),
         startedAt = o.optLongOrNull("startedAt"),
         completedAt = o.optLongOrNull("completedAt"),

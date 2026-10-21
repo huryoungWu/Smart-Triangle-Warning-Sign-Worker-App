@@ -5,6 +5,7 @@
  * 锥桶协同布设 Mock 验收脚本（零依赖，Node 18+）
  *
  * 覆盖：
+ *  0. device_type / binding_code 一致性校验
  *  1. 正常链路：1 主 + 3 从，L=8/d=2，所有设备到达，核验后 completed
  *  2. 关键不变量：主桶到 2m 触发从1；从1到 2m 触发从2；不是主桶 4m 触发从2
  *  3. 同一作业人员只允许一个进行中事件
@@ -51,12 +52,22 @@ async function req(method, urlPath, body) {
   return { status: res.status, json, text };
 }
 
+const MASTER = {
+  device_code: 'CONE-M-001',
+  device_type: 'master_cone',
+  binding_code: '123456',
+};
+
+function slave(code, order) {
+  return { device_code: code, device_type: 'slave_cone', binding_code: '123456', order };
+}
+
 async function create(name, L, d, slaves) {
   const r = await req('POST', '/api/v1/deployments', {
     clientRequestId: `test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name,
     lane: 2,
-    masterCode: 'CONE-M-001',
+    master: MASTER,
     slaves,
     L,
     d,
@@ -80,7 +91,7 @@ async function start(id) {
 async function verifyAll(event) {
   for (const d of event.devices) {
     const r = await req('POST', `/api/v1/deployments/${event.deploymentId}/verify`, {
-      deviceCode: d.device_code, result: 'pass', note: 'test',
+      device_code: d.device_code, device_type: d.device_type, result: 'pass', note: 'test',
     });
     assert.strictEqual(r.status, 200, `verify failed: ${r.status} ${r.text}`);
   }
@@ -101,14 +112,38 @@ async function main() {
     try { return (await req('GET', '/api/v1/devices')).status === 200; } catch { return false; }
   }, 'server ready', 10000, 200);
 
+  console.log('0) device_type / binding_code validation');
+  const listed = await req('GET', '/api/v1/devices?device_type=master_cone');
+  assert.strictEqual(listed.status, 200);
+  assert.strictEqual(listed.json.devices[0].device_type, 'master_cone');
+  assert.strictEqual(listed.json.devices[0].binding_code, '123456');
+
+  const badBinding = await req('POST', '/api/v1/deployments', {
+    clientRequestId: 'bad-binding', name: 'bad', lane: 2,
+    master: { ...MASTER, binding_code: 'wrong' },
+    slaves: [slave('CONE-S-001', 1)], L: 8, d: 2,
+  });
+  assert.strictEqual(badBinding.status, 400);
+  assert.strictEqual(badBinding.json.error.code, 'invalid_binding_code');
+
+  const badType = await req('POST', '/api/v1/deployments', {
+    clientRequestId: 'bad-type', name: 'bad', lane: 2,
+    master: MASTER,
+    slaves: [{ ...slave('CONE-S-001', 1), device_type: 'master_cone' }], L: 8, d: 2,
+  });
+  assert.strictEqual(badType.status, 400);
+  assert.strictEqual(badType.json.error.code, 'invalid_device_type');
+  console.log('   ok: device_type/binding_code rejected when inconsistent');
+
   console.log('1) normal chain');
-  const slaves = [
-    { deviceCode: 'CONE-S-001', order: 1 },
-    { deviceCode: 'CONE-S-002', order: 2 },
-    { deviceCode: 'CONE-S-003', order: 3 },
-  ];
+  const slaves = [slave('CONE-S-001', 1), slave('CONE-S-002', 2), slave('CONE-S-003', 3)];
   let ev = await create('normal', 8, 2, slaves);
   assert.deepStrictEqual(ev.devices.map((x) => x.targetM), [8, 6, 4, 2]);
+  assert.deepStrictEqual(
+    ev.devices.map((x) => x.device_type),
+    ['master_cone', 'slave_cone', 'slave_cone', 'slave_cone'],
+  );
+  assert.deepStrictEqual(ev.devices.map((x) => x.binding_code), ['123456', '123456', '123456', '123456']);
   await start(ev.deploymentId);
   let masterTriggered = false;
   let slave1Triggered = false;
@@ -129,12 +164,12 @@ async function main() {
   console.log('   ok: targets [8,6,4,2], trigger chain, completed');
 
   console.log('2) one active event per operator');
-  ev = await create('one-active', 6, 2, [{ deviceCode: 'CONE-S-001', order: 1 }]);
+  ev = await create('one-active', 6, 2, [slave('CONE-S-001', 1)]);
   await start(ev.deploymentId);
   const dup = await req('POST', '/api/v1/deployments', {
     clientRequestId: `dup-${Date.now()}`,
-    name: 'dup', lane: 2, masterCode: 'CONE-M-001',
-    slaves: [{ deviceCode: 'CONE-S-001', order: 1 }], L: 6, d: 2,
+    name: 'dup', lane: 2, master: MASTER,
+    slaves: [slave('CONE-S-001', 1)], L: 6, d: 2,
   });
   assert.strictEqual(dup.status, 409);
   assert.strictEqual(dup.json.error.code, 'active_deployment_exists');
@@ -155,7 +190,8 @@ async function main() {
 
   const skip = await req('POST', `/api/v1/deployments/${ev.deploymentId}/skip`, {
     skipRequestId: 'skip-test-1',
-    deviceCode: 'CONE-S-001',
+    device_code: 'CONE-S-001',
+    device_type: 'slave_cone',
     reason: 'test stuck',
     disposition: 'removed_from_route',
     confirmations: {

@@ -185,7 +185,7 @@
       "started": true,
       "available": true,
       "batteryPercent": 86,
-      "deviceType": "triangle",
+      "device_type": "triangle",
       "fw": "0.3.1",
       "lastSeenAt": 1760083200000
     },
@@ -197,7 +197,7 @@
       "started": false,
       "available": false,
       "batteryPercent": null,
-      "deviceType": "triangle",
+      "device_type": "triangle",
       "fw": "0.3.1",
       "lastSeenAt": 1760083200000
     }
@@ -215,7 +215,10 @@
 | `devices[].started` | bool | 设备是否已上电/启动 |
 | `devices[].available` | bool | 设备是否可用于作业 |
 | `devices[].batteryPercent` | int \| null | 电量百分比；`null` = 无来源，APP 显示「未知」 |
-| `devices[].deviceType` | string | 设备类型；当前固定 `"triangle"`（三角警示牌小车） |
+| `devices[].device_type` | string | 设备类型：`triangle`（三角牌）/ `master_cone`（主锥桶）/ `slave_cone`（从锥桶） |
+| `devices[].binding_code` | string \| null | 设备绑定码（锥桶必有） |
+| `devices[].set_id` | string \| null | 锥桶套装 ID |
+| `devices[].master_code` | string \| null | 从桶所属主桶的 `device_code`（仅默认候选） |
 | `devices[].fw` | string | 固件版本 |
 | `devices[].lastSeenAt` | long | 服务端最后见到设备的时间（毫秒） |
 
@@ -247,7 +250,7 @@
 | `password` | string \| null | 是（可 null） | 登录密码；同上；Mock 不校验 |
 | `device_code` | string | 是 | 设备编号；非空，≤32 字符 |
 | `binding_code` | string | 是 | 绑定码；设备铭牌上的绑定码；空字符串会被拒绝 |
-| `device_type` | string | 是 | 设备类型；当前唯一取值 `"triangle"` |
+| `device_type` | string | 是 | 设备类型：`triangle` / `master_cone` / `slave_cone` |
 
 ### 响应 201
 
@@ -257,7 +260,10 @@
     "device_code": "TC-001",
     "name": "三角警示牌一号车",
     "bound": true,
-    "deviceType": "triangle"
+    "device_type": "triangle",
+    "binding_code": "123456",
+    "set_id": null,
+    "master_code": null
   }
 }
 ```
@@ -267,7 +273,10 @@
 | `device.device_code` | string | 绑定后的设备编号；APP 以该值为准，后续状态/命令都用它 |
 | `device.name` | string | 设备名称 |
 | `device.bound` | bool | 是否已绑定；成功为 `true` |
-| `device.deviceType` | string | 设备类型，回显请求中的 `device_type` |
+| `device.device_type` | string | 设备类型，回显请求中的 `device_type` |
+| `device.binding_code` | string | 绑定码，回显请求中的 `binding_code` |
+| `device.set_id` | string \| null | 锥桶套装 ID |
+| `device.master_code` | string \| null | 从桶所属主桶的 `device_code` |
 
 ### 失败示例
 
@@ -1007,7 +1016,10 @@ APP 以 multipart 表单发送，逻辑字段如下：
 {
   "device_code": "TC-001",
   "name": "三角警示牌一号车",
-  "deviceType": "triangle",
+  "device_type": "triangle",
+  "binding_code": "123456",
+  "set_id": null,
+  "master_code": null,
   "fw": "0.3.1",
   "sn": "ESP32-MOCK",
   "boundAt": 1760000000000,
@@ -1027,7 +1039,10 @@ APP 以 multipart 表单发送，逻辑字段如下：
 |---|---|---|
 | `device_code` | string | 设备编号 |
 | `name` | string | 设备名称 |
-| `deviceType` | string | 设备类型，当前 `"triangle"` |
+| `device_type` | string | 设备类型：`triangle` / `master_cone` / `slave_cone` |
+| `binding_code` | string \| null | 设备绑定码 |
+| `set_id` | string \| null | 锥桶套装 ID |
+| `master_code` | string \| null | 从桶所属主桶的 `device_code` |
 | `fw` | string | 固件版本 |
 | `sn` | string | 设备序列号 |
 | `boundAt` | long | 绑定时间（毫秒） |
@@ -1436,10 +1451,13 @@ APP 以 multipart 表单发送，逻辑字段如下：
 
 ---
 
-# 四、锥桶协同布设（2026-10-20 新增）
+# 四、锥桶协同布设（2026-10-20 新增，2026-10-21 字段统一）
 
 > 完整需求见 `docs/锥桶协同布设功能需求规格说明书.md`；协议设计见 `docs/后端接口设计文档.md` 第 18 节。
 > 以下均为 **APP 实际调用**的接口；Base/鉴权/错误信封同上。
+>
+> **2026-10-21 字段统一**：锥桶设备类型统一使用 `device_type`（主桶 `master_cone`、从桶 `slave_cone`），
+> 设备编号统一使用 `device_code`；每只锥桶都带 `binding_code`（绑定码），创建布设事件时必须回传。
 
 ## 22. 设备台账扩展
 
@@ -1456,12 +1474,12 @@ APP 以 multipart 表单发送，逻辑字段如下：
       "started": true,
       "available": true,
       "batteryPercent": 92,
-      "deviceType": "cone",
+      "device_type": "master_cone",
+      "binding_code": "123456",
       "fw": "0.3.1",
       "lastSeenAt": 1760083200000,
-      "role": "master",
-      "setId": "SET-CONE-001",
-      "masterCode": null,
+      "set_id": "SET-CONE-001",
+      "master_code": null,
       "occupied": false,
       "occupiedByEvent": null,
       "activeTaskId": null,
@@ -1471,7 +1489,10 @@ APP 以 multipart 表单发送，逻辑字段如下：
 }
 ```
 
-查询参数：`role=master|slave`、`available_for_deployment=1`。
+查询参数：`device_type=master_cone|slave_cone`、`available_for_deployment=1`。
+
+> 锥桶设备类型统一放在 `device_type`：主桶 `master_cone`、从桶 `slave_cone`；三角牌为 `triangle`。
+> 每只锥桶都带 `binding_code`（设备铭牌上的绑定码），创建布设事件时必须原样回传。
 
 ## 23. 套装从桶
 
@@ -1481,13 +1502,20 @@ GET /api/v1/device-sets?master_code=CONE-M-001
 
 ```json
 {
-  "setId": "SET-CONE-001",
-  "master": { "device_code": "CONE-M-001", "role": "master", "online": true, "occupied": false },
+  "set_id": "SET-CONE-001",
+  "master": {
+    "device_code": "CONE-M-001",
+    "device_type": "master_cone",
+    "binding_code": "123456",
+    "online": true,
+    "occupied": false
+  },
   "slaves": [
     {
       "device_code": "CONE-S-001",
       "name": "锥桶从桶1号",
-      "role": "slave",
+      "device_type": "slave_cone",
+      "binding_code": "123456",
       "order": 1,
       "online": true,
       "available": true,
@@ -1497,7 +1525,7 @@ GET /api/v1/device-sets?master_code=CONE-M-001
 }
 ```
 
-> 套装接口是精简字段；APP 需与 `/devices` 的完整摘要按 `device_code` 合并（保留 `setId`/电量/占用）。套装从桶可加入任意主桶。
+> 套装接口是精简字段；APP 需与 `/devices` 的完整摘要按 `device_code` 合并（保留 `set_id`/电量/占用）。套装从桶可加入任意主桶。
 
 ## 24. 创建布设事件
 
@@ -1512,17 +1540,23 @@ POST /api/v1/deployments
   "clientRequestId": "uuid",
   "name": "锥桶协同布设-1020-1930",
   "lane": 2,
-  "masterCode": "CONE-M-001",
+  "master": {
+    "device_code": "CONE-M-001",
+    "device_type": "master_cone",
+    "binding_code": "123456"
+  },
   "slaves": [
-    { "deviceCode": "CONE-S-001", "order": 1 },
-    { "deviceCode": "CONE-S-002", "order": 2 },
-    { "deviceCode": "CONE-S-003", "order": 3 }
+    { "device_code": "CONE-S-001", "device_type": "slave_cone", "binding_code": "123456", "order": 1 },
+    { "device_code": "CONE-S-002", "device_type": "slave_cone", "binding_code": "123456", "order": 2 },
+    { "device_code": "CONE-S-003", "device_type": "slave_cone", "binding_code": "123456", "order": 3 }
   ],
   "L": 60.0,
   "d": 10.0,
   "note": ""
 }
 ```
+
+> `master` 与每只 `slaves[]` 都必须带 `device_code`、`device_type`、`binding_code`；服务端会按设备登记信息校验绑定码。
 
 响应 `201`：
 
@@ -1536,10 +1570,10 @@ POST /api/v1/deployments
   "result": null,
   "params": { "L": 60.0, "d": 10.0, "N": 3, "unit": "m" },
   "devices": [
-    { "device_code": "CONE-M-001", "role": "master", "order": 0, "targetM": 60.0, "traveledM": 0, "phase": "not_started", "arrived": false },
-    { "device_code": "CONE-S-001", "role": "slave", "order": 1, "targetM": 50.0, "traveledM": 0, "phase": "not_started", "arrived": false },
-    { "device_code": "CONE-S-002", "role": "slave", "order": 2, "targetM": 40.0, "traveledM": 0, "phase": "not_started", "arrived": false },
-    { "device_code": "CONE-S-003", "role": "slave", "order": 3, "targetM": 30.0, "traveledM": 0, "phase": "not_started", "arrived": false }
+    { "device_code": "CONE-M-001", "device_type": "master_cone", "binding_code": "123456", "order": 0, "targetM": 60.0, "traveledM": 0, "phase": "not_started", "arrived": false },
+    { "device_code": "CONE-S-001", "device_type": "slave_cone", "binding_code": "123456", "order": 1, "targetM": 50.0, "traveledM": 0, "phase": "not_started", "arrived": false },
+    { "device_code": "CONE-S-002", "device_type": "slave_cone", "binding_code": "123456", "order": 2, "targetM": 40.0, "traveledM": 0, "phase": "not_started", "arrived": false },
+    { "device_code": "CONE-S-003", "device_type": "slave_cone", "binding_code": "123456", "order": 3, "targetM": 30.0, "traveledM": 0, "phase": "not_started", "arrived": false }
   ],
   "warnings": []
 }
@@ -1549,8 +1583,10 @@ POST /api/v1/deployments
 
 ```json
 400 { "error": { "code": "invalid_params", "message": "L 必须 ≥ N×d（39 < 4×10）" } }
+400 { "error": { "code": "invalid_device_type", "message": "从桶 CONE-S-002 的 device_type 必须为 slave_cone" } }
+400 { "error": { "code": "invalid_binding_code", "message": "从桶绑定码不正确：CONE-S-002" } }
 409 { "error": { "code": "device_occupied", "message": "部分设备不可用",
-                 "detail": { "conflicts": [{ "deviceCode": "CONE-S-002", "reason": "device_occupied" }] } } }
+                 "detail": { "conflicts": [{ "device_code": "CONE-S-002", "reason": "device_occupied" }] } } }
 409 { "error": { "code": "active_deployment_exists", "message": "你有一个进行中的布设事件",
                  "detail": { "deploymentId": "dep-1234" } } }
 ```
@@ -1595,7 +1631,8 @@ GET /api/v1/deployments/{deploymentId}
     {
       "device_code": "CONE-M-001",
       "name": "锥桶主桶一号",
-      "role": "master",
+      "device_type": "master_cone",
+      "binding_code": "123456",
       "order": 0,
       "online": true,
       "targetM": 60.0,
@@ -1613,7 +1650,7 @@ GET /api/v1/deployments/{deploymentId}
     }
   ],
   "chain": {
-    "nextExpected": { "type": "report", "deviceCode": "CONE-S-001", "thresholdM": 10.0, "afterReportTrigger": "CONE-S-002", "state": "waiting" },
+    "nextExpected": { "type": "report", "device_code": "CONE-S-001", "thresholdM": 10.0, "after_report_trigger": "CONE-S-002", "state": "waiting" },
     "steps": [
       { "seq": 1, "type": "start", "from": "server", "to": "CONE-M-001", "cause": "start", "state": "acked", "at": 1760083200000 }
     ]
@@ -1655,7 +1692,8 @@ POST /api/v1/deployments/{deploymentId}/retry
 {
   "requestId": "uuid",
   "type": "start_command",
-  "deviceCode": "CONE-S-002",
+  "device_code": "CONE-S-002",
+  "device_type": "slave_cone",
   "stepSeq": 4,
   "originalCommandId": "cmd-trigger-1"
 }
@@ -1667,7 +1705,8 @@ POST /api/v1/deployments/{deploymentId}/retry
 {
   "requestId": "uuid",
   "type": "report",
-  "deviceCode": "CONE-S-001",
+  "device_code": "CONE-S-001",
+  "device_type": "slave_cone",
   "reportId": "dep-7f3a:CONE-S-001:interval:1"
 }
 ```
@@ -1683,7 +1722,8 @@ POST /api/v1/deployments/{deploymentId}/skip
 ```json
 {
   "skipRequestId": "uuid",
-  "deviceCode": "CONE-S-001",
+  "device_code": "CONE-S-001",
+  "device_type": "slave_cone",
   "reason": "设备卡滞，已移出路线",
   "disposition": "removed_from_route",
   "confirmations": {
@@ -1722,7 +1762,8 @@ POST /api/v1/deployments/{deploymentId}/skip
 ```http
 POST /api/v1/deployments/{deploymentId}/verify
 {
-  "deviceCode": "CONE-S-001",
+  "device_code": "CONE-S-001",
+  "device_type": "slave_cone",
   "result": "pass",
   "note": "位置/朝向正常",
   "revision": 1
@@ -1761,7 +1802,7 @@ DELETE /api/v1/deployments/{deploymentId}     # 仅 READY
       "L": 60.0,
       "d": 10.0,
       "N": 3,
-      "masterCode": "CONE-M-001",
+      "master_code": "CONE-M-001",
       "createdAt": 1760083200000,
       "startedAt": 1760083201000,
       "completedAt": 1760083300000,

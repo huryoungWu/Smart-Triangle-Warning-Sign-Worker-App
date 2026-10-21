@@ -4,7 +4,7 @@ import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentEvent
 import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.SkipDisposition
 
@@ -18,14 +18,18 @@ import com.example.myapplication.core.model.deployment.SkipDisposition
  * 失败语义沿用现有 DeviceRepository：Result.failure 携带可读原因；服务端 409 冲突原样展示。
  */
 interface DeploymentRepository {
-    /** 设备台账（可选按角色过滤） */
-    suspend fun listDevices(role: DeploymentRole? = null): Result<List<DeploymentDeviceSummary>>
+    /** 设备台账（可选按 `device_type` 过滤：master_cone / slave_cone） */
+    suspend fun listDevices(deviceType: DeploymentDeviceType? = null): Result<List<DeploymentDeviceSummary>>
 
     /** 主桶所属套装的从桶（仅默认候选，不限制加入其他主桶） */
     suspend fun getDeviceSet(masterCode: String): Result<DeviceSet>
 
-    /** 扫码/编号绑定（device_type=cone；绑定≠加入事件） */
-    suspend fun bindDevice(deviceCode: String, bindingCode: String): Result<DeploymentDeviceSummary>
+    /** 扫码/编号绑定：device_code + device_type + binding_code；绑定≠加入事件 */
+    suspend fun bindDevice(
+        deviceCode: String,
+        bindingCode: String,
+        deviceType: DeploymentDeviceType,
+    ): Result<DeploymentDeviceSummary>
 
     /** 解绑（执行中/被占用时服务端拒绝） */
     suspend fun unbindDevice(deviceCode: String): Result<Unit>
@@ -54,6 +58,7 @@ interface DeploymentRepository {
         deploymentId: String,
         type: String,
         deviceCode: String,
+        deviceType: DeploymentDeviceType,
         originalCommandId: String? = null,
         reportId: String? = null,
     ): Result<Unit>
@@ -62,11 +67,18 @@ interface DeploymentRepository {
     suspend fun skip(
         deploymentId: String,
         deviceCode: String,
+        deviceType: DeploymentDeviceType,
         reason: String,
         disposition: SkipDisposition,
         note: String = "",
     ): Result<Unit>
 
-    suspend fun verify(deploymentId: String, deviceCode: String, pass: Boolean, note: String): Result<Unit>
+    suspend fun verify(
+        deploymentId: String,
+        deviceCode: String,
+        deviceType: DeploymentDeviceType,
+        pass: Boolean,
+        note: String,
+    ): Result<Unit>
     suspend fun complete(deploymentId: String): Result<Unit>
 }

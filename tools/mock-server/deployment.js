@@ -82,6 +82,21 @@ function load() {
     seq = Math.max(seq, Number(st.seq) || 1);
     for (const dep of st.deployments || []) {
       if (!dep || !dep.id) continue;
+      // 兼容旧落盘：role → device_type，masterCode → master_code，并补齐 binding_code
+      if (dep.masterCode && !dep.master_code) dep.master_code = dep.masterCode;
+      for (const dd of dep.devices || []) {
+        if (!dd.device_type && dd.role) {
+          dd.device_type = dd.role === 'master' ? 'master_cone'
+            : dd.role === 'slave' ? 'slave_cone' : dd.role;
+        }
+        if (!dd.binding_code) {
+          const g = ctx.devices.get(dd.device_code);
+          if (g) dd.binding_code = g.bindingCode;
+        }
+      }
+      for (const a of dep.anomalies || []) {
+        if (!a.device_code && a.deviceCode) a.device_code = a.deviceCode;
+      }
       deployments.set(dep.id, dep);
     }
     // 恢复占用与设备上的部署视图：READY 未启动、不占用设备
@@ -150,6 +165,24 @@ function byCode(dep, code) {
   return dep.devices.find((x) => x.device_code === code);
 }
 
+/** 控制类请求统一按 device_code + device_type 定位设备（二者都必须与事件内记录一致） */
+function targetDevice(dep, body) {
+  const code = String(body.device_code || '');
+  const deviceType = String(body.device_type || '');
+  const dd = byCode(dep, code);
+  if (!dd) return { error: { status: 404, code: 'not_found', message: '设备不在本事件中' } };
+  if (deviceType !== dd.device_type) {
+    return {
+      error: {
+        status: 400,
+        code: 'invalid_device_type',
+        message: `device_type 与事件设备不一致：${code}（应为 ${dd.device_type}）`,
+      },
+    };
+  }
+  return { dd };
+}
+
 function isActive(dep) {
   return !TERMINAL.has(dep.state);
 }
@@ -200,15 +233,15 @@ function activeDeployment(owner) {
 function addAnomaly(dep, dd, code, message) {
   if (dd.anomaly && dd.anomaly.code === code) return;
   dd.anomaly = { code, message };
-  if (!dep.anomalies.some((a) => a.deviceCode === dd.device_code && a.code === code)) {
-    dep.anomalies.push({ deviceCode: dd.device_code, code, message, detectedAt: Date.now() });
+  if (!dep.anomalies.some((a) => a.device_code === dd.device_code && a.code === code)) {
+    dep.anomalies.push({ device_code: dd.device_code, code, message, detectedAt: Date.now() });
   }
   log(`[布设] 异常 ${dep.id} ${dd.device_code} ${code}${message ? ' ' + message : ''}`);
 }
 
 function clearAnomaly(dep, dd, code) {
   if (dd.anomaly && (!code || dd.anomaly.code === code)) dd.anomaly = null;
-  dep.anomalies = dep.anomalies.filter((a) => !(a.deviceCode === dd.device_code && (!code || a.code === code)));
+  dep.anomalies = dep.anomalies.filter((a) => !(a.device_code === dd.device_code && (!code || a.code === code)));
 }
 
 function addStep(dep, step) {
@@ -218,7 +251,9 @@ function addStep(dep, step) {
 function deploymentView(dd, dep) {
   return {
     id: dep.id,
-    role: dd.role,
+    device_code: dd.device_code,
+    device_type: dd.device_type,
+    binding_code: dd.binding_code,
     order: dd.order,
     targetM: dd.targetM,
     traveledM: dd.traveledM,
@@ -277,7 +312,7 @@ function startDevice(dep, order, cause, causeReportId, commandId) {
     dd.startCommand = { state: 'rejected', commandId: cmdId, sentAt: now, ackedAt: null, reason: 'device_rejected' };
     dd.phase = 'failed';
     addAnomaly(dep, dd, 'start_rejected', '设备拒绝启动指令');
-    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.masterCode, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'rejected' });
+    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.master_code, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'rejected' });
     updateGlobal(dd, dep);
     return false;
   }
@@ -285,7 +320,7 @@ function startDevice(dep, order, cause, causeReportId, commandId) {
     dd.startCommand = { state: 'timeout', commandId: cmdId, sentAt: now, ackedAt: null, reason: null };
     dd.phase = 'start_sent';
     addAnomaly(dep, dd, 'start_timeout', '启动指令超时，结果未知');
-    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.masterCode, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'timeout' });
+    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.master_code, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'timeout' });
     updateGlobal(dd, dep);
     return false;
   }
@@ -299,14 +334,14 @@ function startDevice(dep, order, cause, causeReportId, commandId) {
     dd.report = { state: 'not_applicable', seq: dd.order, sentAt: now, ackedAt: now };
     g.motion = 'idle';
     g.mode = 'standby';
-    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.masterCode, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'acked', noMove: true });
+    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.master_code, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'acked', noMove: true });
     addStep(dep, { type: 'arrived', from: dd.device_code, to: null, state: 'acked', noMove: true });
   } else {
     dd.phase = 'moving';
     dd.report = { state: 'waiting', seq: dd.order, sentAt: null, ackedAt: null };
     g.motion = 'moving';
     g.mode = 'auto';
-    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.masterCode, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'acked' });
+    addStep(dep, { type: 'start', from: cause === 'start' ? 'server' : dep.master_code, to: dd.device_code, cause, causeReportId: causeReportId || null, commandId: cmdId, state: 'acked' });
   }
   updateGlobal(dd, dep);
   log(`[布设] ${dep.id} 启动 ${dd.device_code} order=${dd.order} target=${dd.targetM} cause=${cause}${causeReportId ? ' causeReport=' + causeReportId : ''}`);
@@ -363,11 +398,11 @@ function tick() {
         if (hasAnomaly(dd.device_code, 'report_lost')) {
           dd.report.state = 'lost';
           addAnomaly(dep, dd, 'report_lost', '已达到启动间隔，但上报丢失');
-          addStep(dep, { type: 'report', from: dd.device_code, to: dd.order === 0 ? null : dep.masterCode, reportId: reportId(dep, dd), state: 'lost' });
+          addStep(dep, { type: 'report', from: dd.device_code, to: dd.order === 0 ? null : dep.master_code, reportId: reportId(dep, dd), state: 'lost' });
         } else {
           dd.report.state = 'acked';
           dd.report.ackedAt = now;
-          addStep(dep, { type: 'report', from: dd.device_code, to: dd.order === 0 ? null : dep.masterCode, reportId: reportId(dep, dd), state: 'acked' });
+          addStep(dep, { type: 'report', from: dd.device_code, to: dd.order === 0 ? null : dep.master_code, reportId: reportId(dep, dd), state: 'acked' });
           if (dd.order === 0) {
             startDevice(dep, 1, 'master_interval', null);
           } else if (dd.order < dep.N) {
@@ -411,26 +446,49 @@ function reportId(dep, dd) {
 
 function validateCreate(body, owner) {
   const errors = [];
-  const masterCode = String(body.masterCode || body.master_code || '').trim();
-  if (!masterCode) errors.push({ code: 'invalid_params', message: 'masterCode 不能为空' });
+
+  // 主桶：{ device_code, device_type=master_cone, binding_code }
+  const rawMaster = body.master && typeof body.master === 'object' ? body.master : {};
+  const master = {
+    device_code: String(rawMaster.device_code || '').trim(),
+    device_type: String(rawMaster.device_type || '').trim(),
+    binding_code: String(rawMaster.binding_code || '').trim(),
+  };
+  if (!master.device_code) errors.push({ code: 'invalid_params', message: 'master.device_code 不能为空' });
+  if (master.device_type !== 'master_cone') {
+    errors.push({ code: 'invalid_device_type', message: 'master.device_type 必须为 master_cone' });
+  }
+  if (!master.binding_code) errors.push({ code: 'invalid_binding_code', message: 'master.binding_code 不能为空' });
+
+  // 从桶：每只都要 device_code / device_type=slave_cone / binding_code / order
   const rawSlaves = Array.isArray(body.slaves) ? body.slaves : [];
   const slaves = rawSlaves.map((s, i) => ({
-    deviceCode: String(s.deviceCode || s.device_code || '').trim(),
+    device_code: String(s.device_code || '').trim(),
+    device_type: String(s.device_type || '').trim(),
+    binding_code: String(s.binding_code || '').trim(),
     order: Number(s.order ?? i + 1),
   }));
   const n = slaves.length;
   if (n < 1 || n > LIMITS.nMax) errors.push({ code: 'invalid_params', message: `从桶数量必须为 1~${LIMITS.nMax}` });
   const codes = new Set();
   const orders = new Set();
-  for (const s of slaves) {
-    if (!s.deviceCode) errors.push({ code: 'invalid_params', message: '从桶 deviceCode 不能为空' });
+  slaves.forEach((s, i) => {
+    const label = s.device_code || `#${i + 1}`;
+    if (!s.device_code) errors.push({ code: 'invalid_params', message: `从桶 #${i + 1} 的 device_code 不能为空` });
+    if (s.device_type !== 'slave_cone') {
+      errors.push({ code: 'invalid_device_type', message: `从桶 ${label} 的 device_type 必须为 slave_cone` });
+    }
+    if (!s.binding_code) {
+      errors.push({ code: 'invalid_binding_code', message: `从桶 ${label} 的 binding_code 不能为空` });
+    }
     if (!Number.isInteger(s.order) || s.order < 1 || s.order > n) errors.push({ code: 'duplicate_order', message: '从桶顺序必须为连续的 1..N' });
-    if (codes.has(s.deviceCode)) errors.push({ code: 'invalid_params', message: `从桶重复：${s.deviceCode}` });
+    if (codes.has(s.device_code)) errors.push({ code: 'invalid_params', message: `从桶重复：${s.device_code}` });
     if (orders.has(s.order)) errors.push({ code: 'duplicate_order', message: `从桶顺序重复：${s.order}` });
-    codes.add(s.deviceCode);
+    codes.add(s.device_code);
     orders.add(s.order);
-  }
-  if (codes.has(masterCode)) errors.push({ code: 'invalid_role', message: '主桶不能同时作为从桶' });
+  });
+  if (codes.has(master.device_code)) errors.push({ code: 'invalid_device_type', message: '主桶不能同时作为从桶' });
+
   const L = Number(body.L);
   const d = Number(body.d);
   if (!Number.isFinite(L) || !Number.isFinite(d)) {
@@ -444,23 +502,39 @@ function validateCreate(body, owner) {
   const lane = normalizeLane(body.lane);
   if (lane === null || Number.isNaN(lane)) errors.push({ code: 'invalid_params', message: '作业车道必须为 1~8 的整数' });
 
-  // 设备校验
-  const master = ctx.devices.get(masterCode);
-  if (!master) errors.push({ code: 'unknown_device', message: `主桶不存在：${masterCode}` });
-  else if (master.role !== 'master') errors.push({ code: 'invalid_role', message: `主桶角色不正确：${masterCode}` });
+  // 设备校验：device_type 与 binding_code 必须与登记信息一致
+  const masterDev = ctx.devices.get(master.device_code);
+  if (!masterDev) {
+    errors.push({ code: 'unknown_device', message: `主桶不存在：${master.device_code}` });
+  } else {
+    if (masterDev.deviceType !== 'master_cone') {
+      errors.push({ code: 'invalid_device_type', message: `主桶 device_type 不正确：${master.device_code}` });
+    }
+    if (!masterDev.bindingCode || masterDev.bindingCode !== master.binding_code) {
+      errors.push({ code: 'invalid_binding_code', message: `主桶绑定码不正确：${master.device_code}` });
+    }
+  }
   for (const s of slaves) {
-    const dev = ctx.devices.get(s.deviceCode);
-    if (!dev) errors.push({ code: 'unknown_device', message: `从桶不存在：${s.deviceCode}` });
-    else if (dev.role !== 'slave') errors.push({ code: 'invalid_role', message: `从桶角色不正确：${s.deviceCode}` });
+    const dev = ctx.devices.get(s.device_code);
+    if (!dev) {
+      errors.push({ code: 'unknown_device', message: `从桶不存在：${s.device_code}` });
+      continue;
+    }
+    if (dev.deviceType !== 'slave_cone') {
+      errors.push({ code: 'invalid_device_type', message: `从桶 device_type 不正确：${s.device_code}` });
+    }
+    if (!dev.bindingCode || dev.bindingCode !== s.binding_code) {
+      errors.push({ code: 'invalid_binding_code', message: `从桶绑定码不正确：${s.device_code}` });
+    }
   }
   if (errors.length) return { errors };
 
   const conflicts = [];
-  for (const code of [masterCode, ...slaves.map((s) => s.deviceCode)]) {
+  for (const code of [master.device_code, ...slaves.map((s) => s.device_code)]) {
     const reason = conflictReason(ctx.devices.get(code), owner);
-    if (reason) conflicts.push({ deviceCode: code, reason });
+    if (reason) conflicts.push({ device_code: code, reason });
   }
-  return { masterCode, slaves, n, L: round1(L), d: round1(d), lane, conflicts };
+  return { master, slaves, n, L: round1(L), d: round1(d), lane, conflicts };
 }
 
 function normalizeLane(v) {
@@ -500,15 +574,16 @@ function createDeployment(body, owner) {
     L: v.L,
     d: v.d,
     N: v.n,
-    masterCode: v.masterCode,
+    master_code: v.master.device_code,
     note: String(body.note || '').slice(0, 100),
     createdAt: now,
     startedAt: null,
     completedAt: null,
     devices: [
       {
-        device_code: v.masterCode,
-        role: 'master',
+        device_code: v.master.device_code,
+        device_type: 'master_cone',
+        binding_code: v.master.binding_code,
         order: 0,
         targetM: v.L,
         traveledM: 0,
@@ -525,8 +600,9 @@ function createDeployment(body, owner) {
         anomaly: null,
       },
       ...v.slaves.sort((a, b) => a.order - b.order).map((s) => ({
-        device_code: s.deviceCode,
-        role: 'slave',
+        device_code: s.device_code,
+        device_type: 'slave_cone',
+        binding_code: s.binding_code,
         order: s.order,
         targetM: round1(v.L - s.order * v.d),
         traveledM: 0,
@@ -548,7 +624,7 @@ function createDeployment(body, owner) {
   };
   deployments.set(dep.id, dep);
   persist();
-  log(`[布设] 创建 ${dep.id} owner=${owner} ${dep.masterCode} + ${dep.N} 从 L=${dep.L} d=${dep.d} lane=${dep.lane}`);
+  log(`[布设] 创建 ${dep.id} owner=${owner} ${dep.master_code} + ${dep.N} 从 L=${dep.L} d=${dep.d} lane=${dep.lane}`);
   return { dep };
 }
 
@@ -557,7 +633,7 @@ function startDeployment(dep, body) {
   const conflicts = [];
   for (const dd of dep.devices) {
     const reason = conflictReason(deviceOf(dd), dep.owner);
-    if (reason) conflicts.push({ deviceCode: dd.device_code, reason });
+    if (reason) conflicts.push({ device_code: dd.device_code, reason });
   }
   if (conflicts.length) {
     return { status: 409, code: conflicts[0].reason, message: '部分设备不可用', detail: { conflicts } };
@@ -582,7 +658,7 @@ function startDeployment(dep, body) {
       dep.completedAt = Date.now();
       releaseAll(dep);
       persist();
-      return { status: 409, code: 'start_rejected', message: '主桶拒绝启动指令', detail: { deviceCode: master.device_code } };
+      return { status: 409, code: 'start_rejected', message: '主桶拒绝启动指令', detail: { device_code: master.device_code } };
     }
     // ack 超时/离线：保持 starting，等待核对/重试/终止
     persist();
@@ -649,8 +725,9 @@ function abortDeployment(dep, body) {
 
 function retryDeployment(dep, body) {
   const type = body.type;
-  const dd = byCode(dep, String(body.deviceCode || ''));
-  if (!dd) return { status: 404, code: 'not_found', message: '设备不在本事件中' };
+  const t = targetDevice(dep, body);
+  if (t.error) return t.error;
+  const dd = t.dd;
   if (type === 'start_command') {
     if (dd.phase !== 'failed' && dd.startCommand.state !== 'timeout' && dd.phase !== 'start_sent') {
       return { status: 409, code: 'deployment_state_invalid', message: '当前启动步骤不需要重试' };
@@ -668,7 +745,7 @@ function retryDeployment(dep, body) {
     clearAnomaly(dep, dd, 'report_lost');
     dd.report.state = 'acked';
     dd.report.ackedAt = Date.now();
-    addStep(dep, { type: 'report', from: dd.device_code, to: dd.order === 0 ? null : dep.masterCode, reportId: reportId(dep, dd), state: 'acked', retry: true });
+    addStep(dep, { type: 'report', from: dd.device_code, to: dd.order === 0 ? null : dep.master_code, reportId: reportId(dep, dd), state: 'acked', retry: true });
     if (dd.order < dep.N) startDevice(dep, dd.order + 1, 'report', reportId(dep, dd));
     persist();
     return { ok: true, state: dep.state };
@@ -707,9 +784,10 @@ function blockedDevice(dep) {
 
 function skipDeployment(dep, body) {
   if (dep.state !== 'running') return { status: 409, code: 'skip_not_allowed', message: '仅 RUNNING 状态可人工跳过（暂停请先继续）' };
-  const dd = byCode(dep, String(body.deviceCode || ''));
-  if (!dd) return { status: 404, code: 'not_found', message: '设备不在本事件中' };
-  if (dd.role === 'master' || dd.order === 0) return { status: 409, code: 'cannot_skip_master', message: '主桶不可人工跳过' };
+  const t = targetDevice(dep, body);
+  if (t.error) return t.error;
+  const dd = t.dd;
+  if (dd.device_type === 'master_cone' || dd.order === 0) return { status: 409, code: 'cannot_skip_master', message: '主桶不可人工跳过' };
   const blocked = blockedDevice(dep);
   if (!blocked || blocked.device_code !== dd.device_code) {
     return { status: 409, code: 'skip_not_allowed', message: '只能跳过当前异常阻断步骤对应的从桶' };
@@ -770,8 +848,9 @@ function verifyDeployment(dep, body) {
   if (dep.state !== 'pending_verify' && dep.state !== 'verify_failed') {
     return { status: 409, code: 'deployment_state_invalid', message: '当前状态不能核验' };
   }
-  const dd = byCode(dep, String(body.deviceCode || ''));
-  if (!dd) return { status: 404, code: 'not_found', message: '设备不在本事件中' };
+  const t = targetDevice(dep, body);
+  if (t.error) return t.error;
+  const dd = t.dd;
   const result = String(body.result || '');
   if (result !== 'pass' && result !== 'fail') return { status: 400, code: 'invalid_params', message: 'result 必须是 pass/fail' };
   dd.verify = { state: result, note: String(body.note || ''), verifiedAt: Date.now() };
@@ -805,7 +884,8 @@ function deviceJson(dep, dd) {
   return {
     device_code: dd.device_code,
     name: g ? g.name : dd.device_code,
-    role: dd.role,
+    device_type: dd.device_type,
+    binding_code: dd.binding_code,
     order: dd.order,
     online: !!(g && g.online !== false),
     targetM: round1(dd.targetM),
@@ -814,7 +894,7 @@ function deviceJson(dep, dd) {
     startState: dd.phase,
     startCommand: dd.startCommand,
     report: dd.report,
-    trigger: dd.role === 'master' ? dd.trigger : null,
+    trigger: dd.device_type === 'master_cone' ? dd.trigger : null,
     reachedInterval: dd.reachedInterval,
     arrived: dd.arrived,
     skip: dd.skip,
@@ -830,9 +910,9 @@ function nextExpected(dep) {
     if (!dd.reachedInterval) {
       return {
         type: dd.order === 0 ? 'trigger' : 'report',
-        deviceCode: dd.device_code,
+        device_code: dd.device_code,
         thresholdM: dep.d,
-        afterReportTrigger: dd.order < dep.N ? byOrder(dep, dd.order + 1)?.device_code : null,
+        after_report_trigger: dd.order < dep.N ? byOrder(dep, dd.order + 1)?.device_code : null,
         state: 'waiting',
       };
     }
@@ -868,7 +948,7 @@ function listJson(dep) {
     L: dep.L,
     d: dep.d,
     N: dep.N,
-    masterCode: dep.masterCode,
+    master_code: dep.master_code,
     createdAt: dep.createdAt,
     startedAt: dep.startedAt,
     completedAt: dep.completedAt,
@@ -893,23 +973,30 @@ async function handle(req, res, path, url, body, log) {
     const user = ownerOf(req);
     if (!masterCode) return send(res, 400, 'bad_request', '缺少 master_code');
     const master = ctx.devices.get(masterCode);
-    if (!master || master.role !== 'master') return send(res, 404, 'set_not_found', '主桶或套装不存在');
+    if (!master || master.deviceType !== 'master_cone') return send(res, 404, 'set_not_found', '主桶或套装不存在');
     if ((master.owner || ctx.defaultUser) !== user) return send(res, 404, 'set_not_found', '主桶或套装不存在');
     const slaves = [...ctx.devices.values()]
-      .filter((d) => d.role === 'slave' && d.setId && d.setId === master.setId)
+      .filter((d) => d.deviceType === 'slave_cone' && d.setId && d.setId === master.setId)
       .sort((a, b) => (a.setOrder || 0) - (b.setOrder || 0))
       .map((d) => ({
         device_code: d.id,
         name: d.name,
-        role: 'slave',
+        device_type: 'slave_cone',
+        binding_code: d.bindingCode,
         order: d.setOrder || 0,
         online: d.online !== false,
         available: d.available !== false && !d.occupied && !(d.task && d.task.state === 'running'),
         occupied: !!d.occupied,
       }));
     return ok(res, 200, {
-      setId: master.setId || null,
-      master: { device_code: master.id, role: 'master', online: master.online !== false, occupied: !!master.occupied },
+      set_id: master.setId || null,
+      master: {
+        device_code: master.id,
+        device_type: 'master_cone',
+        binding_code: master.bindingCode,
+        online: master.online !== false,
+        occupied: !!master.occupied,
+      },
       slaves,
     });
   }

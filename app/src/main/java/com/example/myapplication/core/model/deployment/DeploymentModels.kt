@@ -5,15 +5,19 @@ import kotlin.math.abs
 
 /** 锥桶协同布设领域模型（纯数据，可单测；协议字段见 docs/锥桶协同布设功能需求规格说明书.md 第 9 章） */
 
-enum class DeploymentRole(val token: String, val label: String) {
-    MASTER("master", "主桶"),
-    SLAVE("slave", "从桶"),
+/**
+ * 锥桶设备类型（协议字段 `device_type`，统一 snake_case）：
+ * 主桶 = `master_cone`，从桶 = `slave_cone`。
+ */
+enum class DeploymentDeviceType(val token: String, val label: String) {
+    MASTER_CONE("master_cone", "主桶"),
+    SLAVE_CONE("slave_cone", "从桶"),
     ;
 
     companion object {
-        fun fromToken(v: String?): DeploymentRole? = when (v?.lowercase()) {
-            "master" -> MASTER
-            "slave" -> SLAVE
+        fun fromToken(v: String?): DeploymentDeviceType? = when (v?.lowercase()) {
+            "master_cone" -> MASTER_CONE
+            "slave_cone" -> SLAVE_CONE
             else -> null
         }
     }
@@ -130,11 +134,12 @@ object DeploymentLimits {
         abs(v * 10.0 - Math.round(v * 10.0)) < 1e-6
 }
 
-/** 设备选择用摘要（设备台账） */
+/** 设备选择用摘要（设备台账）；字段名与协议 `device_code` / `device_type` / `binding_code` 对齐 */
 data class DeploymentDeviceSummary(
     val deviceCode: String,
     val name: String,
-    val role: DeploymentRole?,
+    val deviceType: DeploymentDeviceType?,
+    val bindingCode: String? = null,
     val setId: String? = null,
     val masterCode: String? = null,
     val online: Boolean = true,
@@ -148,10 +153,10 @@ data class DeploymentDeviceSummary(
     val batteryText: String get() = if (batteryPercent < 0) "未知" else "$batteryPercent%"
 
     val selectable: Boolean
-        get() = role != null && online && available && !occupied && activeTaskId == null && !estopLocked
+        get() = deviceType != null && online && available && !occupied && activeTaskId == null && !estopLocked
 
     fun unavailableReason(): String? = when {
-        role == null -> "角色未知（不是锥桶设备）"
+        deviceType == null -> "设备类型未知（不是锥桶设备）"
         estopLocked -> "急停锁定中"
         // 布设事件占用优先于单设备任务展示，避免把“被事件占用”误写成“正在执行任务”
         occupied -> occupiedByEvent?.let { "已被事件 $it 占用" } ?: "已被其他事件占用"
@@ -174,12 +179,12 @@ data class SelectedSlave(
 )
 
 data class TargetPreview(
-    val role: DeploymentRole,
+    val deviceType: DeploymentDeviceType,
     val deviceCode: String,
     val order: Int,
     val targetM: Double,
 ) {
-    val orderLabel: String get() = if (role == DeploymentRole.MASTER) "主桶" else "从 $order"
+    val orderLabel: String get() = if (deviceType == DeploymentDeviceType.MASTER_CONE) "主桶" else "从 $order"
 }
 
 /**
@@ -213,9 +218,9 @@ data class DeploymentDraft(
             val l = L ?: return emptyList()
             val interval = d ?: return emptyList()
             return buildList {
-                master?.let { add(TargetPreview(DeploymentRole.MASTER, it.deviceCode, 0, round1(l))) }
+                master?.let { add(TargetPreview(DeploymentDeviceType.MASTER_CONE, it.deviceCode, 0, round1(l))) }
                 slaves.sortedBy { it.order }.forEach { s ->
-                    add(TargetPreview(DeploymentRole.SLAVE, s.device.deviceCode, s.order, round1(l - s.order * interval)))
+                    add(TargetPreview(DeploymentDeviceType.SLAVE_CONE, s.device.deviceCode, s.order, round1(l - s.order * interval)))
                 }
             }
         }
@@ -235,9 +240,19 @@ data class DeploymentDraft(
         if (orders.sorted() != (1..n).toList()) errors.add("从桶顺序必须为连续的 1..$n")
         if (slaves.map { it.device.deviceCode }.toSet().size != slaves.size) errors.add("从桶不能重复")
         if (master != null && slaves.any { it.device.deviceCode == master.deviceCode }) errors.add("主桶不能同时作为从桶")
-        if (master != null && master.role != DeploymentRole.MASTER) errors.add("所选主桶角色不正确")
-        if (slaves.any { it.device.role != DeploymentRole.SLAVE }) errors.add("所选从桶中存在角色不正确的设备")
+        if (master != null && master.deviceType != DeploymentDeviceType.MASTER_CONE) {
+            errors.add("所选主桶 device_type 必须为 master_cone")
+        }
+        if (slaves.any { it.device.deviceType != DeploymentDeviceType.SLAVE_CONE }) {
+            errors.add("所选从桶中存在 device_type 不为 slave_cone 的设备")
+        }
+        if (master != null && master.bindingCode.isNullOrBlank()) {
+            errors.add("主桶 ${master.deviceCode} 缺少 binding_code，请重新绑定")
+        }
         slaves.forEach { s ->
+            if (s.device.bindingCode.isNullOrBlank()) {
+                errors.add("从桶 ${s.device.deviceCode} 缺少 binding_code，请重新绑定")
+            }
             val reason = s.device.unavailableReason()
             if (reason != null) errors.add("从桶 ${s.device.deviceCode}：$reason")
         }
@@ -341,7 +356,8 @@ data class DeploymentAnomaly(
 data class DeploymentDeviceState(
     val deviceCode: String,
     val name: String,
-    val role: DeploymentRole?,
+    val deviceType: DeploymentDeviceType?,
+    val bindingCode: String? = null,
     val order: Int,
     val online: Boolean,
     val targetM: Double,
@@ -359,7 +375,7 @@ data class DeploymentDeviceState(
     val progress: Float
         get() = if (targetM <= 0.001) 1f else (traveledM / targetM).toFloat().coerceIn(0f, 1f)
 
-    val isMaster: Boolean get() = role == DeploymentRole.MASTER || order == 0
+    val isMaster: Boolean get() = deviceType == DeploymentDeviceType.MASTER_CONE || order == 0
     val orderLabel: String get() = if (isMaster) "主桶" else "从 $order"
     val started: Boolean get() = phase != DeploymentPhase.NOT_STARTED
     val skipped: Boolean get() = skip?.skipped == true || phase == DeploymentPhase.SKIPPED_MANUAL

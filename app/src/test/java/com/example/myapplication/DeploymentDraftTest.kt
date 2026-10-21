@@ -2,7 +2,7 @@ package com.example.myapplication
 
 import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.SelectedSlave
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,10 +12,11 @@ import org.junit.Test
 /** 锥桶协同布设参数/顺序/预览校验（对应 TC-DEP-001～004、022、023、031 的纯函数部分） */
 class DeploymentDraftTest {
 
-    private fun dev(code: String, role: DeploymentRole) = DeploymentDeviceSummary(
+    private fun dev(code: String, deviceType: DeploymentDeviceType) = DeploymentDeviceSummary(
         deviceCode = code,
         name = code,
-        role = role,
+        deviceType = deviceType,
+        bindingCode = "123456",
         online = true,
         available = true,
     )
@@ -28,12 +29,12 @@ class DeploymentDraftTest {
         orders: List<Int>? = null,
     ): DeploymentDraft {
         val slaves = (1..n).map { i ->
-            SelectedSlave(dev("S$i", DeploymentRole.SLAVE), orders?.getOrNull(i - 1) ?: i)
+            SelectedSlave(dev("S$i", DeploymentDeviceType.SLAVE_CONE), orders?.getOrNull(i - 1) ?: i)
         }
         return DeploymentDraft(
             name = "test",
             lane = lane,
-            master = dev("M", DeploymentRole.MASTER),
+            master = dev("M", DeploymentDeviceType.MASTER_CONE),
             slaves = slaves,
             lText = L,
             dText = d,
@@ -94,7 +95,7 @@ class DeploymentDraftTest {
 
     @Test
     fun `master cannot be a slave`() {
-        val master = dev("M", DeploymentRole.MASTER)
+        val master = dev("M", DeploymentDeviceType.MASTER_CONE)
         val d = DeploymentDraft(
             lane = 2,
             master = master,

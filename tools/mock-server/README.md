@@ -43,7 +43,7 @@ IPv6 访问:  http://[2408:xxxx::1]:8080   ← 全局 IPv6 地址（带方括号
 
 APP 连接页「连接设备」会向 `POST /api/v1/devices/bind` 上报 5 个字段：
 `username`、`password`（登录后自动带入）、`device_code`（设备编号）、**`binding_code`（用户在连接页输入）**、
-`device_type`（默认常量 `triangle`）。
+`device_type`（`triangle` / `master_cone` / `slave_cone`）。锥桶绑定主桶时上报 `master_cone`，绑定从桶时上报 `slave_cone`。
 
 | 账号/密码 | 设备编号 device_code | 绑定码 binding_code | 结果 |
 |---|---|---|---|
@@ -153,7 +153,8 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 | 鉴权 | 宽松：无 token 按默认用户 `demo`；任意账号均可登录（新账号自动建号） | Bearer token，401 刷新 |
 | 车端 GPS | 默认发送 `gps` 块（**WGS-84**）：位置 = 手机锚点 A（APP 随状态上报 `&lat=&lng=`）/默认点 **+ 车辆局部坐标**（默认正北、1m/s 沿任务/手动方向移动），**随状态刷新更新（服务端定时推进）** — APP 端转 GCJ-02 后映射到高德地图。置 `EMIT_GPS=false` 可模拟无 GPS（APP 自动走行程估算降级） | 真实车端 GPS 模块（同为 WGS-84） |
 | 设备列表 | **按登录用户过滤**（demo 有 2 台；新账号为空） | 同左（按绑定关系） |
-| 连接设备（bind） | **只校验绑定码非空**（任意非空都算通过）；账号/密码仅记日志 | 必须比对设备登记的绑定码，不符 → 400 `invalid_binding_code`；账号与 Bearer 身份一致 |
+| 连接设备（bind） | **只校验绑定码非空**（任意非空都算通过）；锥桶的 `device_type` 必须与登记类型一致；账号/密码仅记日志 | 必须比对设备登记的绑定码，不符 → 400 `invalid_binding_code`；`device_type` 不一致 → 400 `invalid_device_type`；账号与 Bearer 身份一致 |
+| 创建锥桶布设 | 校验每只锥桶的 `device_type` 和 `binding_code` 与设备登记信息一致 | 同左 |
 | 绑定未知设备 | **自动注册为「自定义设备」**并归属当前用户（方便扫码演示） | 404 `unknown_device` |
 | 内置设备解绑 | TC-001/TC-002 返回 400 `cannot_unbind_builtin` | 同左 |
 | 快照上传 | 仅元数据；**图片由服务端从视频流截帧**（当前帧）并**落盘** `tools/mock-server/data/media/`，经 `/media/{id}.png` 回放（**重启后仍可回放**）；**自动登记为风险事件**（风险页 `source=worker`）。未带坐标时按查询点就近放置（演示友好）；带 `lat/lng` 时按真实坐标、半径过滤 | 存盘返回 url；同左（按上报真实坐标过滤） |
@@ -187,12 +188,13 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 
 ### 预置设备
 
-| 设备 | 角色 | 套装 |
-|---|---|---|
-| `CONE-M-001` | 主桶 | `SET-CONE-001` |
-| `CONE-S-001..005` | 从桶 | `SET-CONE-001` |
+| 设备 | `device_type` | `binding_code` | 套装 |
+|---|---|---|---|
+| `CONE-M-001` | `master_cone` | `123456` | `SET-CONE-001` |
+| `CONE-S-001..005` | `slave_cone` | `123456` | `SET-CONE-001` |
 
 - 套装关联**只用于默认候选**；任意从桶可加入任意主桶。
+- 创建布设事件时，主桶与每只从桶都必须带 `device_code`、`device_type`、`binding_code`；服务端校验绑定码。
 - 同一作业人员（Mock 默认 `demo`）同一时间只允许 **1 个**非终态布设事件。
 - 一键正常联调（L=8 m、d=2 m、N=3，约 10 秒走完）：
 
@@ -200,8 +202,11 @@ curl -N "http://127.0.0.1:8080/api/v1/device/video/stream?device_code=TC-001" | 
 # 1) 创建
 curl -s -X POST http://127.0.0.1:8080/api/v1/deployments \
   -H 'Content-Type: application/json' \
-  -d '{"clientRequestId":"demo-1","name":"demo","lane":2,"masterCode":"CONE-M-001",
-       "slaves":[{"deviceCode":"CONE-S-001","order":1},{"deviceCode":"CONE-S-002","order":2},{"deviceCode":"CONE-S-003","order":3}],
+  -d '{"clientRequestId":"demo-1","name":"demo","lane":2,
+       "master":{"device_code":"CONE-M-001","device_type":"master_cone","binding_code":"123456"},
+       "slaves":[{"device_code":"CONE-S-001","device_type":"slave_cone","binding_code":"123456","order":1},
+                 {"device_code":"CONE-S-002","device_type":"slave_cone","binding_code":"123456","order":2},
+                 {"device_code":"CONE-S-003","device_type":"slave_cone","binding_code":"123456","order":3}],
        "L":8,"d":2}'
 
 # 2) 启动（把 <id> 换成上一步返回的 deploymentId）
@@ -229,7 +234,7 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/deployment-sim/anomaly \
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/skip \
   -H 'Content-Type: application/json' \
-  -d '{"skipRequestId":"s1","deviceCode":"CONE-S-001","reason":"stuck",
+  -d '{"skipRequestId":"s1","device_code":"CONE-S-001","device_type":"slave_cone","reason":"stuck",
        "disposition":"removed_from_route",
        "confirmations":{"deviceStoppedOrRemoved":true,"nextPathSafe":true,"understandException":true}}'
 ```

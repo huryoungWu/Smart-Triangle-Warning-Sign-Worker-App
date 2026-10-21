@@ -51,7 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentLimits
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.SelectedSlave
 import com.example.myapplication.core.model.deployment.TargetPreview
 import com.example.myapplication.core.model.vehicle.LaneRange
@@ -94,7 +94,7 @@ fun DeploymentCreateScreen(
         vm.loadActiveEvent(force = true)
     }
 
-    var showBind by remember { mutableStateOf(false) }
+    var bindType by remember { mutableStateOf<DeploymentDeviceType?>(null) }
     var pendingUnbind by remember { mutableStateOf<DeploymentDeviceSummary?>(null) }
     var showStartConfirm by remember { mutableStateOf(false) }
     var showDiscardConfirm by remember { mutableStateOf(false) }
@@ -128,7 +128,7 @@ fun DeploymentCreateScreen(
                 masterCandidates = state.masterCandidates,
                 slaveCandidates = state.slaveCandidates,
                 setName = draft.master?.setId ?: state.deviceSet?.setId,
-                onBind = { showBind = true },
+                onBind = { bindType = it },
                 onUnbind = { pendingUnbind = it },
             )
 
@@ -171,13 +171,14 @@ fun DeploymentCreateScreen(
         Spacer(Modifier.height(24.dp))
     }
 
-    if (showBind) {
+    bindType?.let { type ->
         BindDeviceDialog(
+            deviceType = type,
             busy = state.busy,
-            onDismiss = { showBind = false },
+            onDismiss = { bindType = null },
             onBind = { code, bindingCode ->
-                vm.bindDevice(code, bindingCode)
-                showBind = false
+                vm.bindDevice(code, bindingCode, type)
+                bindType = null
             },
         )
     }
@@ -304,7 +305,7 @@ private fun StepDeviceSelection(
     masterCandidates: List<DeploymentDeviceSummary>,
     slaveCandidates: List<DeploymentDeviceSummary>,
     setName: String?,
-    onBind: () -> Unit,
+    onBind: (DeploymentDeviceType) -> Unit,
     onUnbind: (DeploymentDeviceSummary) -> Unit,
 ) {
     SectionCard(title = "事件信息") {
@@ -353,7 +354,10 @@ private fun StepDeviceSelection(
             }
         }
         Spacer(Modifier.height(8.dp))
-        SecondaryActionButton("扫码 / 输入编号绑定主桶", onClick = onBind)
+        SecondaryActionButton(
+            "扫码 / 输入编号绑定主桶",
+            onClick = { onBind(DeploymentDeviceType.MASTER_CONE) },
+        )
     }
 
     SectionCard(title = "选择从桶（${draft.n}/${DeploymentLimits.N_MAX}）") {
@@ -395,7 +399,10 @@ private fun StepDeviceSelection(
             }
         }
         Spacer(Modifier.height(8.dp))
-        SecondaryActionButton("扫码 / 输入编号绑定从桶", onClick = onBind)
+        SecondaryActionButton(
+            "扫码 / 输入编号绑定从桶",
+            onClick = { onBind(DeploymentDeviceType.SLAVE_CONE) },
+        )
     }
 
     if (draft.slaves.isNotEmpty()) {
@@ -572,8 +579,8 @@ private fun TargetRow(p: TargetPreview) {
     ) {
         StatusChip(
             p.orderLabel,
-            if (p.role == DeploymentRole.MASTER) InfoBlue else NeutralGrey,
-            if (p.role == DeploymentRole.MASTER) InfoBlueBg else NeutralGreyBg,
+            if (p.deviceType == DeploymentDeviceType.MASTER_CONE) InfoBlue else NeutralGrey,
+            if (p.deviceType == DeploymentDeviceType.MASTER_CONE) InfoBlueBg else NeutralGreyBg,
         )
         Spacer(Modifier.width(8.dp))
         Text(p.deviceCode, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
@@ -681,6 +688,7 @@ private fun SafetyBanner() {
 
 @Composable
 private fun BindDeviceDialog(
+    deviceType: DeploymentDeviceType,
     busy: Boolean,
     onDismiss: () -> Unit,
     onBind: (String, String) -> Unit,
@@ -715,9 +723,15 @@ private fun BindDeviceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("绑定设备") },
+        title = { Text("绑定${deviceType.label}") },
         text = {
             Column {
+                Text(
+                    "device_type = ${deviceType.token}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeutralGrey,
+                )
+                Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
                     value = code,
                     onValueChange = { code = it.take(32) },

@@ -5,7 +5,7 @@ import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentEvent
 import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
-import com.example.myapplication.core.model.deployment.DeploymentRole
+import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.SkipDisposition
 import com.example.myapplication.core.util.FALLBACK_SERVER_BASE_URL
@@ -34,10 +34,10 @@ class ServerDeploymentRepository(
 
     private val baseUrl: String get() = baseUrlProvider()
 
-    override suspend fun listDevices(role: DeploymentRole?): Result<List<DeploymentDeviceSummary>> =
+    override suspend fun listDevices(deviceType: DeploymentDeviceType?): Result<List<DeploymentDeviceSummary>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val suffix = role?.let { "?role=${it.token}" } ?: ""
+                val suffix = deviceType?.let { "?device_type=${it.token}" } ?: ""
                 DeploymentJson.parseDeviceList(
                     JSONObject(request("GET", "$baseUrl/api/v1/devices$suffix", null)),
                 )
@@ -59,21 +59,26 @@ class ServerDeploymentRepository(
             }
         }
 
-    override suspend fun bindDevice(deviceCode: String, bindingCode: String): Result<DeploymentDeviceSummary> =
+    override suspend fun bindDevice(
+        deviceCode: String,
+        bindingCode: String,
+        deviceType: DeploymentDeviceType,
+    ): Result<DeploymentDeviceSummary> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val body = JSONObject()
                     .put("device_code", deviceCode)
                     .put("binding_code", bindingCode)
-                    .put("device_type", "cone")
+                    .put("device_type", deviceType.token)
                 val o = JSONObject(request("POST", "$baseUrl/api/v1/devices/bind", body.toString()))
                 val d = o.optJSONObject("device") ?: JSONObject()
                 DeploymentDeviceSummary(
                     deviceCode = d.optString("device_code", deviceCode),
                     name = d.optString("name", deviceCode),
-                    role = DeploymentRole.fromToken(d.optString("role")),
-                    setId = d.optString("setId").takeIf { it.isNotBlank() && it != "null" },
-                    masterCode = d.optString("masterCode").takeIf { it.isNotBlank() && it != "null" },
+                    deviceType = DeploymentDeviceType.fromToken(d.optString("device_type")),
+                    bindingCode = d.optString("binding_code").takeIf { it.isNotBlank() && it != "null" },
+                    setId = d.optString("set_id").takeIf { it.isNotBlank() && it != "null" },
+                    masterCode = d.optString("master_code").takeIf { it.isNotBlank() && it != "null" },
                 )
             }
         }
@@ -115,16 +120,31 @@ class ServerDeploymentRepository(
             runCatching {
                 val L = draft.L ?: throw IOException("L 未填写")
                 val d = draft.d ?: throw IOException("d 未填写")
+                val master = draft.master ?: throw IOException("主桶未选择")
+                val masterBinding = master.bindingCode?.takeIf { it.isNotBlank() }
+                    ?: throw IOException("主桶 ${master.deviceCode} 缺少 binding_code，请重新绑定")
+                val masterObj = JSONObject()
+                    .put("device_code", master.deviceCode)
+                    .put("device_type", DeploymentDeviceType.MASTER_CONE.token)
+                    .put("binding_code", masterBinding)
                 val slaves = JSONArray()
                 draft.slaves.sortedBy { it.order }.forEach { s ->
-                    slaves.put(JSONObject().put("deviceCode", s.device.deviceCode).put("order", s.order))
+                    val binding = s.device.bindingCode?.takeIf { it.isNotBlank() }
+                        ?: throw IOException("从桶 ${s.device.deviceCode} 缺少 binding_code，请重新绑定")
+                    slaves.put(
+                        JSONObject()
+                            .put("device_code", s.device.deviceCode)
+                            .put("device_type", DeploymentDeviceType.SLAVE_CONE.token)
+                            .put("binding_code", binding)
+                            .put("order", s.order),
+                    )
                 }
                 val body = JSONObject()
                     .put("clientRequestId", clientRequestId)
                     .put("name", draft.name.ifBlank { "锥桶协同布设" })
                     .put("lane", draft.lane ?: JSONObject.NULL)
                     .put("note", draft.note)
-                    .put("masterCode", draft.master?.deviceCode ?: throw IOException("主桶未选择"))
+                    .put("master", masterObj)
                     .put("slaves", slaves)
                     .put("L", L)
                     .put("d", d)
@@ -173,12 +193,14 @@ class ServerDeploymentRepository(
         deploymentId: String,
         type: String,
         deviceCode: String,
+        deviceType: DeploymentDeviceType,
         originalCommandId: String?,
         reportId: String?,
     ): Result<Unit> = control(deploymentId, "retry") {
         it.put("requestId", UUID.randomUUID().toString())
             .put("type", type)
-            .put("deviceCode", deviceCode)
+            .put("device_code", deviceCode)
+            .put("device_type", deviceType.token)
         if (originalCommandId != null) it.put("originalCommandId", originalCommandId)
         if (reportId != null) it.put("reportId", reportId)
     }
@@ -186,12 +208,14 @@ class ServerDeploymentRepository(
     override suspend fun skip(
         deploymentId: String,
         deviceCode: String,
+        deviceType: DeploymentDeviceType,
         reason: String,
         disposition: SkipDisposition,
         note: String,
     ): Result<Unit> = control(deploymentId, "skip") {
         it.put("skipRequestId", UUID.randomUUID().toString())
-            .put("deviceCode", deviceCode)
+            .put("device_code", deviceCode)
+            .put("device_type", deviceType.token)
             .put("reason", reason)
             .put("disposition", disposition.token)
             .put("note", note)
@@ -204,12 +228,18 @@ class ServerDeploymentRepository(
             )
     }
 
-    override suspend fun verify(deploymentId: String, deviceCode: String, pass: Boolean, note: String): Result<Unit> =
-        control(deploymentId, "verify") {
-            it.put("deviceCode", deviceCode)
-                .put("result", if (pass) "pass" else "fail")
-                .put("note", note)
-        }
+    override suspend fun verify(
+        deploymentId: String,
+        deviceCode: String,
+        deviceType: DeploymentDeviceType,
+        pass: Boolean,
+        note: String,
+    ): Result<Unit> = control(deploymentId, "verify") {
+        it.put("device_code", deviceCode)
+            .put("device_type", deviceType.token)
+            .put("result", if (pass) "pass" else "fail")
+            .put("note", note)
+    }
 
     override suspend fun complete(deploymentId: String): Result<Unit> =
         control(deploymentId, "complete") {}

@@ -50,8 +50,14 @@ const TICK_INTERVAL_MS = 250;
 const STATUS_LOG_EVERY = Number(process.env.STATUS_LOG_EVERY || 10);
 let statusPollCount = 0;
 
-/** 设备类型（连接设备时上报的 device_type）：当前唯一取值，APP 端为默认常量 */
+/** 设备类型（连接/绑定设备时上报的 device_type） */
 const DEVICE_TYPE_TRIANGLE = 'triangle';
+/** 锥桶设备类型：主桶 / 从桶（统一写进 device_type，不再使用 role） */
+const DEVICE_TYPE_MASTER_CONE = 'master_cone';
+const DEVICE_TYPE_SLAVE_CONE = 'slave_cone';
+const CONE_TYPES = new Set([DEVICE_TYPE_MASTER_CONE, DEVICE_TYPE_SLAVE_CONE]);
+/** 锥桶绑定码（Mock 预置值；正式服务端以设备登记信息为准） */
+const CONE_BINDING_CODE = '123456';
 /** 作业车道（第几车道）取值范围：与 APP TaskSpec / LaneRange 一致 */
 const LANE_MIN = 1;
 const LANE_MAX = 8;
@@ -77,17 +83,15 @@ function newDevice(id, name, opts = {}) {
     task: { id: null, kind: null, source: 'app', targetM: 0, traveledM: 0, state: 'idle', stage: null, resultNote: null, heading: 0, lane: null, segments: [] },
     odo: { leftPulse: 0, rightPulse: 0, traveledM: 0, speedMps: 0, diffPulse: 0 },
     batteryPercent: opts.battery ?? null,   // null = 无来源
-    /** 设备类型（连接时上报）；连接过的设备记住最后一次的类型 */
+    /** 设备类型（device_type）：triangle / master_cone / slave_cone */
     deviceType: opts.deviceType || DEVICE_TYPE_TRIANGLE,
-    /** 设备绑定码（连接时用户输入的 binding_code，Mock 仅记录不比对 —— 宽松模式） */
-    bindingCode: null,
+    /** 设备绑定码（binding_code）：连接/绑定与创建布设时使用 */
+    bindingCode: opts.bindingCode || null,
     custom: !!opts.custom,
     /** 绑定归属：设备信息按登录用户获取（见 docs 第 4 节） */
     owner: opts.owner || DEFAULT_USER,
     started: opts.started ?? true,
     available: opts.available ?? true,
-    /** 锥桶角色：none（三角牌/普通设备）| master | slave */
-    role: opts.role || 'none',
     /** 套装 ID / 主桶编号（仅从桶有意义） */
     setId: opts.setId || null,
     masterCode: opts.masterCode || null,
@@ -174,13 +178,15 @@ const CONE_SET_ID = 'SET-CONE-001';
 const CONE_MASTER_CODE = 'CONE-M-001';
 const coneDevices = [
   newDevice(CONE_MASTER_CODE, '锥桶主桶一号', {
-    role: 'master', setId: CONE_SET_ID, deviceType: 'cone', battery: 92, owner: DEFAULT_USER,
+    deviceType: DEVICE_TYPE_MASTER_CONE, bindingCode: CONE_BINDING_CODE,
+    setId: CONE_SET_ID, battery: 92, owner: DEFAULT_USER,
   }),
   ...Array.from({ length: 5 }, (_, i) => {
     const code = `CONE-S-${String(i + 1).padStart(3, '0')}`;
     return newDevice(code, `锥桶从桶${i + 1}号`, {
-      role: 'slave', setId: CONE_SET_ID, masterCode: CONE_MASTER_CODE, setOrder: i + 1,
-      deviceType: 'cone', battery: 80 - i * 3, owner: DEFAULT_USER,
+      deviceType: DEVICE_TYPE_SLAVE_CONE, bindingCode: CONE_BINDING_CODE,
+      setId: CONE_SET_ID, masterCode: CONE_MASTER_CODE, setOrder: i + 1,
+      battery: 80 - i * 3, owner: DEFAULT_USER,
     });
   }),
 ];
@@ -189,13 +195,14 @@ for (const d of coneDevices) devices.set(d.id, d);
 function getDevice(id, owner = DEFAULT_USER) {
   if (!devices.has(id)) {
     const cone = /^CONE-([MS])-/i.exec(id);
-    devices.set(id, newDevice(id, cone ? (cone[1].toUpperCase() === 'M' ? '自定义主桶' : '自定义从桶') : '自定义设备', {
-      custom: true,
-      battery: null,
-      owner,
-      role: cone ? (cone[1].toUpperCase() === 'M' ? 'master' : 'slave') : 'none',
-      deviceType: cone ? 'cone' : DEVICE_TYPE_TRIANGLE,
-    }));
+    const deviceType = cone
+      ? (cone[1].toUpperCase() === 'M' ? DEVICE_TYPE_MASTER_CONE : DEVICE_TYPE_SLAVE_CONE)
+      : DEVICE_TYPE_TRIANGLE;
+    devices.set(id, newDevice(
+      id,
+      cone ? (cone[1].toUpperCase() === 'M' ? '自定义主桶' : '自定义从桶') : '自定义设备',
+      { custom: true, battery: null, owner, deviceType },
+    ));
   }
   return devices.get(id);
 }
@@ -1083,27 +1090,27 @@ const server = http.createServer(async (req, res) => {
   // ── 设备台账（按登录用户过滤：设备信息根据用户登录状态获取）──
   if (path === '/api/v1/devices' && req.method === 'GET') {
     const user = currentUser(req);
-    const roleFilter = url.searchParams.get('role');
+    const typeFilter = url.searchParams.get('device_type');
     const onlyAvailable = url.searchParams.get('available_for_deployment') === '1';
     let mine = [...devices.values()].filter((d) => d.owner === user);
-    if (roleFilter) mine = mine.filter((d) => d.role === roleFilter);
+    if (typeFilter) mine = mine.filter((d) => d.deviceType === typeFilter);
     if (onlyAvailable) {
       mine = mine.filter((d) =>
-        d.role !== 'none' && d.online !== false && d.available !== false &&
+        CONE_TYPES.has(d.deviceType) && d.online !== false && d.available !== false &&
         !d.occupied && !d.estopLocked && !(d.task && d.task.state === 'running'),
       );
     }
-    log(`[设备] u=${user} 共 ${mine.length} 台${roleFilter ? ` role=${roleFilter}` : ''}${onlyAvailable ? ' 仅可用' : ''}`);
+    log(`[设备] u=${user} 共 ${mine.length} 台${typeFilter ? ` device_type=${typeFilter}` : ''}${onlyAvailable ? ' 仅可用' : ''}`);
     return sendJson(res, 200, {
       devices: mine.map((d) => ({
         device_code: d.id, name: d.name, bound: true,
         online: d.online !== false,
         started: d.started, available: d.available, batteryPercent: d.batteryPercent,
-        deviceType: d.deviceType, fw: d.fw, lastSeenAt: Date.now(),
-        // 锥桶协同布设扩展字段（旧客户端可忽略）
-        role: d.role || 'none',
-        setId: d.setId || null,
-        masterCode: d.masterCode || null,
+        device_type: d.deviceType, fw: d.fw, lastSeenAt: Date.now(),
+        // 锥桶协同布设扩展字段
+        binding_code: d.bindingCode,
+        set_id: d.setId || null,
+        master_code: d.masterCode || null,
         occupied: !!d.occupied,
         occupiedByEvent: d.occupiedByEvent || null,
         activeTaskId: d.task && d.task.state === 'running' ? (d.task.id || null) : null,
@@ -1149,21 +1156,29 @@ const server = http.createServer(async (req, res) => {
     }
     const d = getDevice(id, user); // 未知编号自动注册到当前用户（Mock 便利行为，正式服务端应按 doc 返回 404）
     d.owner = user;
-    // 锥桶角色由平台/编号决定，不能被单设备连接按 triangle 覆盖
-    d.deviceType = (d.role === 'master' || d.role === 'slave') ? 'cone' : deviceType;
-    d.bindingCode = bindingCode;
-    // 锥桶角色：预置设备已带角色；自定义 CONE-* 由 getDevice 推断；其他保持 none
-    if (deviceType === 'cone' && (!d.role || d.role === 'none')) {
-      d.role = /^CONE-M-/i.test(id) ? 'master' : /^CONE-S-/i.test(id) ? 'slave' : 'none';
+    // 已登记的锥桶类型不可被改写成另一种；三角牌不能被绑定成锥桶（自定义设备除外）
+    if (CONE_TYPES.has(d.deviceType)) {
+      if (d.deviceType !== deviceType) {
+        return sendError(res, 400, 'invalid_device_type', `设备 ${id} 的 device_type 必须为 ${d.deviceType}`);
+      }
+    } else if (CONE_TYPES.has(deviceType)) {
+      if (!d.custom) {
+        return sendError(res, 400, 'invalid_device_type', `设备 ${id} 不是锥桶，不能绑定为 ${deviceType}`);
+      }
+      d.deviceType = deviceType;
+    } else {
+      d.deviceType = deviceType;
     }
+    d.bindingCode = bindingCode;
     log(
       `[设备] u=${user} 连接/绑定 ${id}（${d.custom ? '自动注册为自定义设备' : '内置设备'}）` +
         ` 账号=${loginName} 绑定码=已提供 类型=${deviceType}`,
     );
     return sendJson(res, 201, {
       device: {
-        device_code: d.id, name: d.name, bound: true, deviceType: d.deviceType,
-        role: d.role || 'none', setId: d.setId || null, masterCode: d.masterCode || null,
+        device_code: d.id, name: d.name, bound: true,
+        device_type: d.deviceType, binding_code: d.bindingCode,
+        set_id: d.setId || null, master_code: d.masterCode || null,
       },
     });
   }
@@ -1171,9 +1186,10 @@ const server = http.createServer(async (req, res) => {
   if (mDev && req.method === 'GET') {
     const d = getDevice(decodeURIComponent(mDev[1]), currentUser(req));
     return sendJson(res, 200, {
-      device_code: d.id, name: d.name, deviceType: d.deviceType, fw: d.fw, sn: 'ESP32-MOCK', boundAt: Date.now() - 86400000,
+      device_code: d.id, name: d.name, device_type: d.deviceType, binding_code: d.bindingCode,
+      fw: d.fw, sn: 'ESP32-MOCK', boundAt: Date.now() - 86400000,
       lastSeenAt: Date.now(), online: d.online !== false,
-      role: d.role || 'none', setId: d.setId || null, masterCode: d.masterCode || null,
+      set_id: d.setId || null, master_code: d.masterCode || null,
       occupied: !!d.occupied, occupiedByEvent: d.occupiedByEvent || null,
       estopLocked: !!d.estopLocked,
       capabilities: { gps: EMIT_GPS, camera: true, battery: d.batteryPercent !== null, tilt: false, obstacle: false },
