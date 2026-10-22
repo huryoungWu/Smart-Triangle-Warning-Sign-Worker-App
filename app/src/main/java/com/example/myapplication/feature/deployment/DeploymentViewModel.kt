@@ -23,6 +23,7 @@ import com.example.myapplication.core.model.deployment.SelectedSlave
 import com.example.myapplication.core.model.deployment.SkipDisposition
 import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.DeploymentTurnDir
+import com.example.myapplication.core.model.deployment.DeploymentTurnDraft
 import com.example.myapplication.core.model.deployment.VerifyResultState
 import com.example.myapplication.core.model.vehicle.MoveDir
 import kotlinx.coroutines.Job
@@ -89,6 +90,9 @@ class DeploymentViewModel(
 
     private var pollJob: Job? = null
     private var createClientId: String? = null
+
+    /** 转弯列表行的稳定 key（只增不减，避免删除后复用导致 Compose 焦点跳动） */
+    private var nextTurnId = 1L
 
     /** 按事件缓存轨记忆，最多保留 [MAX_TRAIL_EVENTS] 个，避免长时间使用无限增长。 */
     private val coneTrailMemories = mutableMapOf<String, DeploymentConeTrailMemory>()
@@ -246,8 +250,30 @@ class DeploymentViewModel(
     fun updateNote(v: String) = updateDraft { it.copy(note = v.take(120)) }
     fun updateL(v: String) = updateDraft { it.copy(lText = v.filter { c -> c.isDigit() || c == '.' || c == '-' }) }
     fun updateD(v: String) = updateDraft { it.copy(dText = v.filter { c -> c.isDigit() || c == '.' || c == '-' }) }
-    fun updateTurnDir(dir: DeploymentTurnDir?) = updateDraft { it.copy(turnDir = dir) }
-    fun updateTurnAt(v: String) = updateDraft { it.copy(turnAtText = v.filter { c -> c.isDigit() || c == '.' || c == '-' }) }
+    fun addTurn() = updateDraft { d ->
+        if (d.turns.size >= com.example.myapplication.core.model.deployment.DeploymentLimits.MAX_TURNS) {
+            d
+        } else {
+            d.copy(turns = d.turns + DeploymentTurnDraft(id = nextTurnId++))
+        }
+    }
+
+    fun removeTurn(index: Int) = updateDraft { d ->
+        d.copy(turns = d.turns.filterIndexed { i, _ -> i != index })
+    }
+
+    fun updateTurnDir(index: Int, dir: DeploymentTurnDir) = updateDraft { d ->
+        d.copy(
+            turns = d.turns.mapIndexed { i, row -> if (i == index) row.copy(dir = dir) else row },
+        )
+    }
+
+    fun updateTurnAt(index: Int, v: String) = updateDraft { d ->
+        val text = v.filter { c -> c.isDigit() || c == '.' || c == '-' }
+        d.copy(
+            turns = d.turns.mapIndexed { i, row -> if (i == index) row.copy(atText = text) else row },
+        )
+    }
     fun toggleSafety() = updateDraft { it.copy(precheckSafety = !it.precheckSafety) }
     fun toggleOrder() = updateDraft { it.copy(precheckOrder = !it.precheckOrder) }
 
@@ -330,9 +356,9 @@ class DeploymentViewModel(
             _uiState.update { it.copy(busy = true, error = null) }
             repository.createDeployment(s.draft, clientId)
                 .onSuccess { created ->
-                    // 新 App + 旧服务端：旧服务端会静默忽略 turn，事件实际仍是直行。
-                    // 必须先核对服务端回显，不一致就取消这次 READY 事件，避免“界面写左转、车却直走”。
-                    if (!s.draft.turnEchoMatches(created.params.turn)) {
+                    // 新 App + 旧服务端：旧服务端会静默忽略转弯字段，事件实际仍是直行。
+                    // 必须先核对服务端回显（turns / 单转弯兼容 turn），不一致就取消这次 READY 事件。
+                    if (!s.draft.turnsEchoMatches(created.params)) {
                         val cancelled = repository.cancelDeployment(created.deploymentId)
                         createClientId = null
                         val hint = if (cancelled.isFailure) {
@@ -343,7 +369,8 @@ class DeploymentViewModel(
                         _uiState.update {
                             it.copy(
                                 busy = false,
-                                error = "当前服务端不支持转弯参数：创建结果未回显 params.turn。$hint，请升级服务端后重试。",
+                                error = "当前服务端不支持转弯参数：创建结果未回显 params.turns（单转弯兼容 params.turn）。" +
+                                    "$hint，请升级服务端后重试。",
                             )
                         }
                         return@onSuccess

@@ -51,7 +51,9 @@ fun DeploymentActiveCard(event: DeploymentEvent, onOpen: () -> Unit) {
         Spacer(Modifier.height(4.dp))
         Text(
             "L=${fmtDeployment(event.params.L)} m · d=${fmtDeployment(event.params.d)} m · N=${event.params.N}" +
-                (event.lane?.let { " · 第 $it 车道" } ?: ""),
+                (event.lane?.let { " · 第 $it 车道" } ?: "") +
+                (event.params.effectiveTurns.takeIf { it.isNotEmpty() }
+                    ?.let { " · 转弯 ${it.size} 处" } ?: ""),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

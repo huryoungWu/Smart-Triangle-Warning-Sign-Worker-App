@@ -92,6 +92,10 @@ object DeploymentJson {
     fun parseEvent(o: JSONObject): DeploymentEvent {
         val params = o.optJSONObject("params")
         val chain = o.optJSONObject("chain")
+        val (parsedTurns, turnsValid) = parseTurns(
+            raw = params?.opt("turns"),
+            legacy = params?.optJSONObject("turn"),
+        )
         return DeploymentEvent(
             deploymentId = o.optString("deploymentId", o.optString("deployment_id", "")),
             eventId = o.optString("eventId").takeIf { it.isNotBlank() && it != "null" },
@@ -103,6 +107,9 @@ object DeploymentJson {
                 L = params?.optDouble("L", 0.0) ?: 0.0,
                 d = params?.optDouble("d", 0.0) ?: 0.0,
                 N = params?.optInt("N", 0) ?: 0,
+                turns = parsedTurns,
+                turnsValid = turnsValid,
+                // 单转弯旧服务端只返回 turn；多转弯时新服务端返回 turns + turn=null
                 turn = parseTurn(params?.optJSONObject("turn")),
             ),
             devices = o.optJSONArray("devices").let { arr ->
@@ -121,7 +128,35 @@ object DeploymentJson {
         )
     }
 
-    /** 解析 `params.turn`；缺失/null/非法一律按直行（null）处理，兼容旧服务端 */
+    /**
+     * 解析 `params.turns`；旧服务端没有该数组时回退到 `params.turn` 单元素。
+     *
+     * 回显校验要求**全有或全无**：数组里只要有一项结构非法，就返回
+     * `turnsValid=false`，避免服务端返回“2 项但 1 项坏了”被静默缩成 1 项后误判通过。
+     */
+    private fun parseTurns(raw: Any?, legacy: JSONObject?): Pair<List<DeploymentTurn>, Boolean> {
+        if (raw == null || raw == JSONObject.NULL) {
+            return listOfNotNull(parseTurn(legacy)) to true
+        }
+        if (raw !is JSONArray) return emptyList<DeploymentTurn>() to false
+        val turns = mutableListOf<DeploymentTurn>()
+        for (i in 0 until raw.length()) {
+            val obj = raw.optJSONObject(i) ?: return emptyList<DeploymentTurn>() to false
+            val turn = parseTurn(obj) ?: return emptyList<DeploymentTurn>() to false
+            turns += turn
+        }
+        if (turns.size > DeploymentLimits.MAX_TURNS) {
+            return emptyList<DeploymentTurn>() to false
+        }
+        for (i in 1 until turns.size) {
+            if (turns[i].atM <= turns[i - 1].atM + 1e-9) {
+                return emptyList<DeploymentTurn>() to false
+            }
+        }
+        return turns to true
+    }
+
+    /** 解析单个 `turn`；缺失/null/非法返回 null，兼容旧服务端 */
     private fun parseTurn(o: JSONObject?): DeploymentTurn? {
         if (o == null) return null
         val dir = DeploymentTurnDir.fromToken(o.optString("dir")) ?: return null

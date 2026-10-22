@@ -149,15 +149,25 @@ class ServerDeploymentRepository(
                     .put("slaves", slaves)
                     .put("L", L)
                     .put("d", d)
-                // 仅在用户选择左/右转时下发；直行保持原请求体完全不变（旧服务端兼容）
-                draft.turnDir?.let { dir ->
-                    val atM = draft.turnAt ?: throw IOException("转弯点未填写")
-                    body.put(
-                        "turn",
-                        JSONObject()
-                            .put("dir", dir.token)
-                            .put("atM", atM),
-                    )
+                // 直行不发字段；单转弯继续用旧字段 turn（兼容旧服务端）；多转弯发 turns 数组
+                val turns = draft.parsedTurns
+                if (turns.size != draft.turns.size) throw IOException("有转弯点未填写")
+                when {
+                    turns.size == 1 -> {
+                        val t = turns.first()
+                        body.put(
+                            "turn",
+                            JSONObject().put("dir", t.dir.token).put("atM", t.atM),
+                        )
+                    }
+
+                    turns.size >= 2 -> {
+                        val arr = JSONArray()
+                        turns.forEach { t ->
+                            arr.put(JSONObject().put("dir", t.dir.token).put("atM", t.atM))
+                        }
+                        body.put("turns", arr)
+                    }
                 }
                 DeploymentJson.parseEvent(
                     JSONObject(request("POST", "$baseUrl/api/v1/deployments", body.toString())),

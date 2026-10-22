@@ -3,8 +3,10 @@ package com.example.myapplication
 import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
+import com.example.myapplication.core.model.deployment.DeploymentParams
 import com.example.myapplication.core.model.deployment.DeploymentTurn
 import com.example.myapplication.core.model.deployment.DeploymentTurnDir
+import com.example.myapplication.core.model.deployment.DeploymentTurnDraft
 import com.example.myapplication.core.model.deployment.SelectedSlave
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -176,47 +178,109 @@ class DeploymentDraftTest {
         assertTrue(tooMany.validate().any { it.contains("不能超过 5") })
     }
 
-    // ── 单次 90° 转弯 ──
+    // ── 多处 90° 转弯 ──
+
+    private fun turnRow(dir: DeploymentTurnDir, at: String, id: Long = 0L) =
+        DeploymentTurnDraft(dir = dir, atText = at, id = id)
+
+    private fun params(
+        turns: List<DeploymentTurn> = emptyList(),
+        legacy: DeploymentTurn? = null,
+        turnsValid: Boolean = true,
+    ) = DeploymentParams(
+        L = 60.0,
+        d = 10.0,
+        N = 2,
+        turns = turns,
+        turn = legacy,
+        turnsValid = turnsValid,
+    )
 
     @Test
-    fun `straight is the default and ignores turnAt input`() {
-        val d = draft("60", "10", 2).copy(turnAtText = "not-a-number")
+    fun `straight is the default`() {
+        val d = draft("60", "10", 2)
         assertTrue(d.turnErrors().isEmpty())
         assertTrue(d.validate().isEmpty())
-        assertEquals(null, d.turn)
-        assertTrue(d.turnEchoMatches(null))
-        assertFalse(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)))
+        assertTrue(d.parsedTurns.isEmpty())
+        assertTrue(d.turnsEchoMatches(params()))
+        assertFalse(d.turnsEchoMatches(params(turns = listOf(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)))))
     }
 
     @Test
-    fun `left and right turn accept a valid turn point`() {
-        val left = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.LEFT, turnAtText = "30")
-        assertTrue(left.turnErrors().isEmpty())
-        assertTrue(left.validate().isEmpty())
-        assertTrue(left.canStart())
-        assertEquals(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0), left.turn)
+    fun `valid turn lists are accepted`() {
+        val one = draft("60", "10", 2).copy(turns = listOf(turnRow(DeploymentTurnDir.LEFT, "30")))
+        assertTrue(one.turnErrors().isEmpty())
+        assertTrue(one.validate().isEmpty())
+        assertTrue(one.canStart())
+        assertEquals(listOf(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)), one.parsedTurns)
 
-        val right = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.RIGHT, turnAtText = "20.5")
-        assertTrue(right.turnErrors().isEmpty())
-        assertEquals(DeploymentTurn(DeploymentTurnDir.RIGHT, 20.5), right.turn)
+        val two = draft("60", "10", 2).copy(
+            turns = listOf(
+                turnRow(DeploymentTurnDir.LEFT, "20"),
+                turnRow(DeploymentTurnDir.RIGHT, "40.5"),
+            ),
+        )
+        assertTrue(two.turnErrors().isEmpty())
+        assertEquals(
+            listOf(
+                DeploymentTurn(DeploymentTurnDir.LEFT, 20.0),
+                DeploymentTurn(DeploymentTurnDir.RIGHT, 40.5),
+            ),
+            two.parsedTurns,
+        )
+
+        val five = draft("60", "10", 2).copy(
+            turns = (1..5).map { turnRow(DeploymentTurnDir.LEFT, (it * 10).toString()) },
+        )
+        assertTrue(five.turnErrors().isEmpty())
+        assertTrue(five.canStart())
     }
 
     @Test
     fun `turn point must be entered within 0 and L`() {
-        fun errors(dir: DeploymentTurnDir?, at: String) =
-            draft("60", "10", 2).copy(turnDir = dir, turnAtText = at).turnErrors()
+        fun errors(at: String) = draft("60", "10", 2)
+            .copy(turns = listOf(turnRow(DeploymentTurnDir.LEFT, at)))
+            .turnErrors()
 
-        assertTrue(errors(DeploymentTurnDir.LEFT, "").any { it.contains("请输入转弯点") })
-        assertTrue(errors(DeploymentTurnDir.LEFT, "0").any { it.contains("大于 0") })
-        assertTrue(errors(DeploymentTurnDir.LEFT, "-1").any { it.contains("大于 0") })
-        assertTrue(errors(DeploymentTurnDir.LEFT, "60").any { it.contains("小于 L") })
-        assertTrue(errors(DeploymentTurnDir.LEFT, "61").any { it.contains("小于 L") })
-        assertTrue(errors(DeploymentTurnDir.LEFT, "20.05").any { it.contains("精度") })
+        assertTrue(errors("").any { it.contains("请输入转弯点") })
+        assertTrue(errors("0").any { it.contains("大于 0") })
+        assertTrue(errors("-1").any { it.contains("大于 0") })
+        assertTrue(errors("60").any { it.contains("小于 L") })
+        assertTrue(errors("61").any { it.contains("小于 L") })
+        assertTrue(errors("20.05").any { it.contains("精度") })
+    }
+
+    @Test
+    fun `turn points must be strictly increasing`() {
+        val descending = draft("60", "10", 2).copy(
+            turns = listOf(
+                turnRow(DeploymentTurnDir.LEFT, "30"),
+                turnRow(DeploymentTurnDir.RIGHT, "20"),
+            ),
+        )
+        assertTrue(descending.turnErrors().any { it.contains("第 2 个转弯：必须大于第 1 个转弯点") })
+
+        val duplicate = draft("60", "10", 2).copy(
+            turns = listOf(
+                turnRow(DeploymentTurnDir.LEFT, "30"),
+                turnRow(DeploymentTurnDir.RIGHT, "30"),
+            ),
+        )
+        assertTrue(duplicate.turnErrors().any { it.contains("第 2 个转弯：必须大于第 1 个转弯点") })
+    }
+
+    @Test
+    fun `at most five turns are allowed`() {
+        val six = draft("60", "10", 2).copy(
+            turns = (1..6).map { turnRow(DeploymentTurnDir.LEFT, (it * 5).toString()) },
+        )
+        assertTrue(six.turnErrors().any { it.contains("不能超过 5 处") })
+        assertFalse(six.canStart())
     }
 
     @Test
     fun `turn errors do not leak into L and d field errors`() {
-        val d = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.LEFT, turnAtText = "70")
+        val d = draft("60", "10", 2).copy(turns = listOf(turnRow(DeploymentTurnDir.LEFT, "70")))
         assertTrue(d.step2Errors().isEmpty())
         assertTrue(d.turnErrors().isNotEmpty())
         assertFalse(d.canStart())
@@ -224,10 +288,39 @@ class DeploymentDraftTest {
 
     @Test
     fun `turn echo must match what the server confirmed`() {
-        val d = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.LEFT, turnAtText = "30")
-        assertTrue(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)))
-        assertFalse(d.turnEchoMatches(null))
-        assertFalse(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.RIGHT, 30.0)))
-        assertFalse(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.LEFT, 31.0)))
+        val single = draft("60", "10", 2).copy(turns = listOf(turnRow(DeploymentTurnDir.LEFT, "30")))
+        val e = DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)
+        assertTrue(single.turnsEchoMatches(params(turns = listOf(e))))
+        assertTrue(single.turnsEchoMatches(params(legacy = e)))
+        assertTrue(single.turnsEchoMatches(params(turns = listOf(e), legacy = e)))
+        assertFalse(
+            single.turnsEchoMatches(
+                params(turns = listOf(DeploymentTurn(DeploymentTurnDir.RIGHT, 30.0)), legacy = e),
+            ),
+        )
+        assertFalse(
+            single.turnsEchoMatches(
+                params(turns = listOf(e), legacy = DeploymentTurn(DeploymentTurnDir.RIGHT, 30.0)),
+            ),
+        )
+        assertFalse(single.turnsEchoMatches(params()))
+        assertFalse(single.turnsEchoMatches(params(turns = listOf(e), turnsValid = false)))
+
+        val multi = draft("60", "10", 2).copy(
+            turns = listOf(
+                turnRow(DeploymentTurnDir.LEFT, "20"),
+                turnRow(DeploymentTurnDir.RIGHT, "40"),
+            ),
+        )
+        val m1 = DeploymentTurn(DeploymentTurnDir.LEFT, 20.0)
+        val m2 = DeploymentTurn(DeploymentTurnDir.RIGHT, 40.0)
+        assertTrue(multi.turnsEchoMatches(params(turns = listOf(m1, m2))))
+        assertFalse(multi.turnsEchoMatches(params(turns = listOf(m2, m1))))
+        assertFalse(multi.turnsEchoMatches(params(turns = listOf(m1))))
+        assertFalse(multi.turnsEchoMatches(params(turns = listOf(m1, m2), legacy = m1)))
+
+        val straight = draft("60", "10", 2)
+        assertTrue(straight.turnsEchoMatches(params()))
+        assertFalse(straight.turnsEchoMatches(params(legacy = e)))
     }
 }

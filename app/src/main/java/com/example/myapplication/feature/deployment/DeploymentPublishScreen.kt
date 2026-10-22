@@ -27,6 +27,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -191,50 +192,77 @@ fun DeploymentPublishScreen(
                 )
             }
 
-            // 路线转弯（可选）：v1 固定单次 90°，转弯点按沿路线累计行程填写
+            // 路线转弯（可选）：可添加多处 90° 转弯，转弯点按沿路线累计行程填写
             Spacer(Modifier.height(12.dp))
-            Text("路线转弯（可选）", style = MaterialTheme.typography.bodyMedium)
+            Text("路线转弯（可选，每处固定 90°）", style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = draft.turnDir == null,
-                    onClick = { vm.updateTurnDir(null) },
-                    label = { Text("直行") },
-                )
-                FilterChip(
-                    selected = draft.turnDir == DeploymentTurnDir.LEFT,
-                    onClick = { vm.updateTurnDir(DeploymentTurnDir.LEFT) },
-                    label = { Text("左转 90°") },
-                )
-                FilterChip(
-                    selected = draft.turnDir == DeploymentTurnDir.RIGHT,
-                    onClick = { vm.updateTurnDir(DeploymentTurnDir.RIGHT) },
-                    label = { Text("右转 90°") },
+            if (draft.turns.isEmpty()) {
+                Text(
+                    "当前为直行。需要转弯时点击下方「添加转弯」。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (draft.turnDir != null) {
-                Spacer(Modifier.height(8.dp))
-                val turnErrors = draft.turnErrors()
-                OutlinedTextField(
-                    value = draft.turnAtText,
-                    onValueChange = vm::updateTurnAt,
-                    label = { Text("转弯点距离（米，从起点沿路线累计）") },
-                    singleLine = true,
-                    isError = turnErrors.isNotEmpty(),
-                    supportingText = {
-                        val remaining = draft.L?.let { l -> draft.turnAt?.let { at -> l - at } }
-                        when {
-                            turnErrors.isNotEmpty() -> Text(turnErrors.first(), color = WarningRed)
-                            remaining != null -> Text(
-                                "转弯后剩余 ${DeploymentDraft.fmt(remaining)} m",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            draft.turns.forEachIndexed { index, row ->
+                key(row.id) {
+                    if (index > 0) Spacer(Modifier.height(10.dp))
+                    val rowError = draft.turnErrors()
+                        .firstOrNull { it.startsWith("第 ${index + 1} 个") }
+                    val at = row.atM
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(
+                                selected = row.dir == DeploymentTurnDir.LEFT,
+                                onClick = { vm.updateTurnDir(index, DeploymentTurnDir.LEFT) },
+                                label = { Text("左转") },
+                            )
+                            FilterChip(
+                                selected = row.dir == DeploymentTurnDir.RIGHT,
+                                onClick = { vm.updateTurnDir(index, DeploymentTurnDir.RIGHT) },
+                                label = { Text("右转") },
                             )
                         }
-                    },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                        TextButton(onClick = { vm.removeTurn(index) }) {
+                            Text("删除", color = WarningRed)
+                        }
+                    }
+                    val prevAt = draft.turns.take(index).mapNotNull { it.atM }.lastOrNull() ?: 0.0
+                    OutlinedTextField(
+                        value = row.atText,
+                        onValueChange = { vm.updateTurnAt(index, it) },
+                        label = { Text("第 ${index + 1} 处转弯点（米，从起点累计）") },
+                        singleLine = true,
+                        isError = rowError != null,
+                        supportingText = {
+                            when {
+                                rowError != null -> Text(rowError, color = WarningRed)
+                                at != null -> Text(
+                                    "本段直行 ${DeploymentDraft.fmt(at - prevAt)} m",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
+            Spacer(Modifier.height(8.dp))
+            SecondaryActionButton(
+                text = "添加转弯（${draft.turns.size}/${DeploymentLimits.MAX_TURNS}）",
+                onClick = vm::addTurn,
+                enabled = draft.turns.size < DeploymentLimits.MAX_TURNS,
+            )
+            draft.turnErrors()
+                .filterNot { it.startsWith("第 ") || it.startsWith("请先填写主桶目标行程") }
+                .forEach { err ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(err, color = WarningRed, style = MaterialTheme.typography.labelSmall)
+                }
             Spacer(Modifier.height(10.dp))
             Text(
                 if (draft.n == 0) "从桶数量 N = 0（仅主桶执行）" else "从桶数量 N = ${draft.n}",
@@ -244,27 +272,34 @@ fun DeploymentPublishScreen(
 
         SectionCard(title = "布设预览（沿路线累计行程）") {
             val l = draft.L
-            val at = draft.turnAt
-            val turnSummary = when {
-                l == null || l <= 0.0 -> null
-                draft.turnDir == null -> "路线：直行 ${DeploymentDraft.fmt(l)} m"
-                at != null && at > 0.0 && at < l ->
-                    "路线：直行 ${DeploymentDraft.fmt(at)} m → ${draft.turnDir.label} ${DeploymentDraft.fmt(DeploymentLimits.TURN_DEG)}° → " +
-                        "直行 ${DeploymentDraft.fmt(l - at)} m"
-                else -> null
+            val turns = draft.parsedTurns
+            val turnValid = turns.size == draft.turns.size && draft.turnErrors().isEmpty()
+            val turnSummary = if (l != null && l > 0.0 && turnValid) {
+                val parts = buildList {
+                    var prev = 0.0
+                    turns.forEach { t ->
+                        add("直行 ${DeploymentDraft.fmt(t.atM - prev)} m")
+                        add("${t.dir.label} ${DeploymentDraft.fmt(t.deg)}°")
+                        prev = t.atM
+                    }
+                    add("直行 ${DeploymentDraft.fmt(l - prev)} m")
+                }
+                "路线：${parts.joinToString(" → ")}"
+            } else {
+                null
             }
             if (turnSummary != null) {
                 Text(
                     text = turnSummary,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (draft.turnDir == null) NeutralGrey else WarnOrange,
+                    color = if (turns.isEmpty()) NeutralGrey else WarnOrange,
                 )
-                if (draft.turnDir != null && at != null) {
-                    val beforeTurn = draft.preview.count { it.targetM <= at + 1e-9 }
+                turns.firstOrNull()?.let { firstTurn ->
+                    val beforeTurn = draft.preview.count { it.targetM <= firstTurn.atM + 1e-9 }
                     if (beforeTurn > 0) {
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "其中 $beforeTurn 只桶的目标在转弯点之前，不会过弯。",
+                            "其中 $beforeTurn 只桶的目标在第 1 个转弯点之前，不会过弯。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -356,10 +391,16 @@ fun DeploymentPublishScreen(
             onDismissRequest = { showStartConfirm = false },
             title = { Text("开始协同布设？") },
             text = {
-                val turnHint = draft.turn?.let { t ->
-                    "\n\n本次路线在 ${DeploymentDraft.fmt(t.atM)} m 处${t.dir.label} " +
-                        "${DeploymentDraft.fmt(t.deg)}°，请确认转弯点及转弯后的第二段路线无障碍。"
-                }.orEmpty()
+                val turns = draft.parsedTurns
+                val turnHint = if (turns.isEmpty()) {
+                    ""
+                } else {
+                    val detail = turns.mapIndexed { i, t ->
+                        "第 ${i + 1} 处在 ${DeploymentDraft.fmt(t.atM)} m ${t.dir.label} ${DeploymentDraft.fmt(t.deg)}°"
+                    }.joinToString("；")
+                    "\n\n本次路线含 ${turns.size} 处转弯：$detail。" +
+                        "请确认各转弯点及转弯后的路线无障碍。"
+                }
                 Text(
                     "开始后主桶将首先移动；从桶会按“前一只自身行程达到 d”逐级启动。\n\n" +
                         "请确认：所有锥桶已按编队顺序置于同一起始线，现场安全条件已满足。" +

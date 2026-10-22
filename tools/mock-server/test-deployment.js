@@ -19,6 +19,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert');
+// 纯函数：一步跨多个转弯点的确定性测试
+const { _advanceAlongRoute } = require('./deployment.js');
 
 const PORT = 8091;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -62,7 +64,7 @@ function slave(code, order) {
   return { device_code: code, device_type: 'slave_cone', binding_code: '123456', order };
 }
 
-async function create(name, L, d, slaves, turn) {
+async function create(name, L, d, slaves, turnOrTurns) {
   const body = {
     clientRequestId: `test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name,
@@ -72,7 +74,9 @@ async function create(name, L, d, slaves, turn) {
     L,
     d,
   };
-  if (turn) body.turn = turn;
+  // 数组 = 多转弯 turns；对象 = 单转弯旧字段 turn
+  if (Array.isArray(turnOrTurns)) body.turns = turnOrTurns;
+  else if (turnOrTurns) body.turn = turnOrTurns;
   const r = await req('POST', '/api/v1/deployments', body);
   assert.strictEqual(r.status, 201, `create failed: ${r.status} ${r.text}`);
   return r.json;
@@ -149,6 +153,53 @@ async function main() {
     try { return (await req('GET', '/api/v1/devices')).status === 200; } catch { return false; }
   }, 'server ready', 10000, 200);
 
+  console.log('0.0) route step across multiple turns (pure function)');
+  const routeDep = {
+    id: 'dep-pure',
+    turns: [{ dir: 'left', atM: 1 }, { dir: 'right', atM: 2 }],
+    steps: [],
+  };
+  const routeDd = {
+    device_code: 'T', targetM: 3, traveledM: 0,
+    posX: 0, posY: 0, headingDeg: 0, nextTurnIndex: 0,
+  };
+  _advanceAlongRoute(routeDd, routeDep, 3);
+  assert.ok(Math.abs(routeDd.posX + 1) < 1e-9, `x=${routeDd.posX}`);
+  assert.ok(Math.abs(routeDd.posY - 2) < 1e-9, `y=${routeDd.posY}`);
+  assert.strictEqual(routeDd.headingDeg, 0, 'left then right restores north');
+  assert.strictEqual(routeDd.nextTurnIndex, 2);
+  assert.strictEqual(routeDep.steps.filter((s) => s.type === 'turn').length, 2);
+
+  // target == atM：停在拐角，不转
+  const stopDd = {
+    device_code: 'T', targetM: 1, traveledM: 0,
+    posX: 0, posY: 0, headingDeg: 0, nextTurnIndex: 0,
+  };
+  const stopDep = { id: 'dep-pure-stop', turns: [{ dir: 'left', atM: 1 }], steps: [] };
+  _advanceAlongRoute(stopDd, stopDep, 1);
+  assert.strictEqual(stopDd.headingDeg, 0);
+  assert.strictEqual(stopDd.nextTurnIndex, 0);
+  assert.ok(Math.abs(stopDd.posX) < 1e-9 && Math.abs(stopDd.posY - 1) < 1e-9);
+
+  // 手动已越过两处转弯：resume 时先补齐，且不会重复转
+  const resumeDd = {
+    device_code: 'T', targetM: 5, traveledM: 2.5,
+    posX: 1, posY: 1.5, headingDeg: 0, nextTurnIndex: 0,
+  };
+  const resumeDep = {
+    id: 'dep-pure-resume',
+    turns: [{ dir: 'left', atM: 1 }, { dir: 'right', atM: 2 }],
+    steps: [],
+  };
+  _advanceAlongRoute(resumeDd, resumeDep, 0.5);
+  assert.strictEqual(resumeDd.nextTurnIndex, 2);
+  assert.strictEqual(resumeDd.headingDeg, 0);
+  assert.strictEqual(resumeDep.steps.filter((s) => s.type === 'turn').length, 2);
+  _advanceAlongRoute(resumeDd, resumeDep, 0.5);
+  assert.strictEqual(resumeDd.nextTurnIndex, 2, 'turns must not be re-applied');
+  assert.strictEqual(resumeDep.steps.filter((s) => s.type === 'turn').length, 2);
+  console.log('   ok: one step crosses two turns; target==atM no turn; resume applies once');
+
   console.log('0) device_type / binding_code validation');
   const listed = await req('GET', '/api/v1/devices?device_type=master_cone');
   assert.strictEqual(listed.status, 200);
@@ -190,12 +241,33 @@ async function main() {
     assert.strictEqual(r.status, 400, `${label}: expected 400, got ${r.status} ${r.text}`);
     assert.strictEqual(r.json.error.code, 'invalid_turn', `${label}: ${r.text}`);
   }
-  console.log('   ok: invalid turn rejected (dir/atM/range/precision/deg)');
+  for (const [label, extra] of [
+    ['turns not array', { turns: { dir: 'left', atM: 3 } }],
+    ['bad dir in turns', { turns: [{ dir: 'up', atM: 3 }] }],
+    ['not increasing', { turns: [{ dir: 'left', atM: 4 }, { dir: 'right', atM: 3 }] }],
+    ['duplicate atM', { turns: [{ dir: 'left', atM: 3 }, { dir: 'right', atM: 3 }] }],
+    ['too many turns', { turns: Array.from({ length: 6 }, (_, i) => ({ dir: 'left', atM: i + 1 })) }],
+    ['atM >= L', { turns: [{ dir: 'left', atM: 8 }] }],
+    ['turn and turns together', {
+      turn: { dir: 'left', atM: 3 },
+      turns: [{ dir: 'left', atM: 3 }],
+    }],
+  ]) {
+    const r = await req('POST', '/api/v1/deployments', {
+      clientRequestId: `bad-turns-${Math.random().toString(36).slice(2, 8)}`,
+      name: 'bad-turns', lane: 2, master: MASTER, slaves: [], L: 8, d: 1,
+      ...extra,
+    });
+    assert.strictEqual(r.status, 400, `${label}: expected 400, got ${r.status} ${r.text}`);
+    assert.strictEqual(r.json.error.code, 'invalid_turn', `${label}: ${r.text}`);
+  }
+  console.log('   ok: invalid turn(s) rejected (dir/atM/range/precision/deg/order/count)');
 
   console.log('1) normal chain');
   const slaves = [slave('CONE-S-001', 1), slave('CONE-S-002', 2), slave('CONE-S-003', 3)];
   let ev = await create('normal', 8, 2, slaves);
   assert.strictEqual(ev.params.turn, null, 'straight deployment must echo turn=null');
+  assert.deepStrictEqual(ev.params.turns, [], 'straight deployment must echo turns=[]');
   assert.deepStrictEqual(ev.devices.map((x) => x.targetM), [8, 6, 4, 2]);
   assert.deepStrictEqual(
     ev.devices.map((x) => x.device_type),
@@ -424,6 +496,8 @@ async function main() {
   console.log('6) automatic left turn (single 90° corner)');
   ev = await create('left-turn', 8, 2, slaves, { dir: 'left', atM: 4 });
   assert.deepStrictEqual(ev.params.turn, { dir: 'left', atM: 4, deg: 90 });
+  assert.deepStrictEqual(ev.params.turns, [{ dir: 'left', atM: 4, deg: 90 }],
+    'legacy turn must also be exposed as turns[]');
   await start(ev.deploymentId);
   ev = await waitFor(async () => {
     const s = await status(ev.deploymentId);
@@ -485,6 +559,47 @@ async function main() {
   assert.ok(manualTurn.pos.y >= beforeResume.pos.y - 0.05, 'must not teleport back to the nominal corner');
   await verifyAll(ev);
   console.log('   ok: manual crossing applies planned turn once on resume, no teleport');
+
+  console.log('9) multi-turn S shape (left then right)');
+  ev = await create('s-shape', 12, 3, [slave('CONE-S-001', 1), slave('CONE-S-002', 2)], [
+    { dir: 'left', atM: 4 },
+    { dir: 'right', atM: 8 },
+  ]);
+  assert.deepStrictEqual(ev.params.turns, [
+    { dir: 'left', atM: 4, deg: 90 },
+    { dir: 'right', atM: 8, deg: 90 },
+  ]);
+  assert.strictEqual(ev.params.turn, null, 'multi-turn must not expose a single-turn alias');
+  await start(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'S shape all arrived');
+  assert.deepStrictEqual(ev.devices.map((x) => x.targetM), [12, 9, 6]);
+  // 主桶 N4→W4→N4；从1 N4→W4→N1；从2 N4→W2（第二转弯点在其目标之后，不转）
+  assert.deepStrictEqual(
+    ev.devices.map((x) => [x.pos.x, x.pos.y]),
+    [[-4, 8], [-4, 5], [-2, 4]],
+  );
+  assert.deepStrictEqual(ev.devices.map((x) => x.headingDeg), [0, 0, 270]);
+  await verifyAll(ev);
+  console.log('   ok: S shape positions/headings; turn beyond slave target skipped');
+
+  console.log('10) two left turns -> heading 180');
+  ev = await create('double-left', 8, 1, [], [
+    { dir: 'left', atM: 2 },
+    { dir: 'left', atM: 4 },
+  ]);
+  await start(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'double left arrived');
+  // N2 → W2 → S4
+  assert.deepStrictEqual([ev.devices[0].pos.x, ev.devices[0].pos.y], [-2, -2]);
+  assert.strictEqual(ev.devices[0].headingDeg, 180);
+  await verifyAll(ev);
+  console.log('   ok: consecutive left turns compose to south');
 
   console.log('\nALL DEPLOYMENT TESTS PASSED');
 }

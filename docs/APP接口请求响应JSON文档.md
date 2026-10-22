@@ -7,10 +7,12 @@
 > [《APP接口请求响应JSON文档-UDP视频流变更.md》](APP接口请求响应JSON文档-UDP视频流变更.md)，
 > 给后端开发时可直接使用该增量文档；未列出的接口仍以本文为准。
 >
-> **2026-10-22 锥桶布设转弯改造**：创建布设事件新增可选 `turn`（单次 90° 左/右转），
-> 响应 `params` 增加 `turn`。本次涉及/受影响的接口已单独整理为
-> [《APP接口请求响应JSON文档-锥桶布设转弯变更.md》](APP接口请求响应JSON文档-锥桶布设转弯变更.md)，
-> 给后端开发时可直接使用该增量文档；未列出的接口仍以本文为准。
+> **2026-10-22 锥桶布设转弯改造**：创建布设事件新增可选 `turns`（最多 5 处 90° 左/右转）；
+> 旧字段 `turn`（单处）继续兼容。响应 `params` 增加 `turns`，并保留单转弯别名 `turn`。
+> 本次涉及/受影响的接口已单独整理为
+> [《APP接口请求响应JSON文档-锥桶布设多转弯变更.md》](APP接口请求响应JSON文档-锥桶布设多转弯变更.md)
+> （单转弯旧契约见 [《APP接口请求响应JSON文档-锥桶布设转弯变更.md》](APP接口请求响应JSON文档-锥桶布设转弯变更.md)），
+> 给后端开发时可直接使用增量文档；未列出的接口仍以本文为准。
 >
 > - Base URL：`http://<server>:<port>/api/v1`
 > - 鉴权：登录、版本检查、刷新 token 不需要 Bearer；其余接口建议带
@@ -1633,24 +1635,26 @@ POST /api/v1/deployments
 
 响应中 `params.N = 0`，`devices` 只有主桶一项。
 
-**路线转弯（可选，2026-10-22 新增）**：在请求体上追加 `turn` 即可让自动路线在指定位置转一次 90°。
-缺省或 `null` = 直行，旧客户端行为完全不变。
+**路线转弯（可选，2026-10-22 新增）**：在请求体上追加 `turns` 数组，最多 5 处、每处 90°。
+缺省 / `null` / 空数组 = 直行；单转弯也可继续用旧字段 `turn`（等价于 `turns:[turn]`）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `turn` | object/null | 否 | 单次 90° 转弯；省略/`null` = 直行 |
-| `turn.dir` | string | 有 `turn` 时必填 | `left` / `right` |
-| `turn.atM` | number | 有 `turn` 时必填 | 从起点沿路线累计到拐角的距离（米），0.1 m 精度，`0 < atM < L` |
+| `turns` | array/null | 否 | 转弯序列；省略/`null`/`[]` = 直行；最多 5 处 |
+| `turns[].dir` | string | 有 `turns` 时必填 | `left` / `right` |
+| `turns[].atM` | number | 有 `turns` 时必填 | 从起点沿路线累计到该拐角的距离（米），0.1 m 精度，严格递增，`0 < atM < L` |
+| `turn` | object/null | 否 | **旧单转弯字段**，等价于 `turns:[turn]`；不能与非空 `turns` 同时出现 |
 
 > `atM` 是**沿路线累计行程**，不是地图直线距离；`L` 仍是主桶沿路线总行程。
-> 目标行程 `targetM <= atM` 的从桶不会过弯。v1 角度固定 90°，请求中不需要（也不应）传角度。
+> 目标行程 `targetM <= atM` 的从桶不会经过该转弯点。每处角度固定 90°，
+> 请求中不需要（也不应）传角度。完整契约见多转弯变更文档。
 
-左转示例（右转把 `left` 改为 `right`）：
+两处转弯示例（先左后右；右转把 `left` 改为 `right`）：
 
 ```json
 {
-  "clientRequestId": "uuid-left-turn",
-  "name": "锥桶协同布设-左转",
+  "clientRequestId": "uuid-two-turns",
+  "name": "锥桶协同布设-两处转弯",
   "lane": 2,
   "master": {
     "device_code": "CONE-M-001",
@@ -1660,11 +1664,20 @@ POST /api/v1/deployments
   "slaves": [
     { "device_code": "CONE-S-001", "device_type": "slave_cone", "binding_code": "123456", "order": 1 }
   ],
-  "L": 60.0,
-  "d": 10.0,
+  "L": 12.0,
+  "d": 3.0,
   "note": "",
-  "turn": { "dir": "left", "atM": 30.0 }
+  "turns": [
+    { "dir": "left",  "atM": 4.0 },
+    { "dir": "right", "atM": 8.0 }
+  ]
 }
+```
+
+单转弯可继续使用旧写法（新服务端也会回显 `params.turns`）：
+
+```json
+"turn": { "dir": "left", "atM": 30.0 }
 ```
 
 响应 `201`：
@@ -1682,6 +1695,7 @@ POST /api/v1/deployments
     "d": 10.0,
     "N": 3,
     "unit": "m",
+    "turns": [],
     "turn": null
   },
   "devices": [
@@ -1694,8 +1708,9 @@ POST /api/v1/deployments
 }
 ```
 
-> `params.turn`：直行为 `null`；带转弯的事件回显
-> `{ "dir": "left|right", "atM": 30.0, "deg": 90.0 }`。
+> `params.turns`：直行为 `[]`；带转弯的事件按顺序回显
+> `[{ "dir": "left|right", "atM": 4.0, "deg": 90.0 }, ...]`。
+> `params.turn`：仅**恰好 1 处**转弯时返回该对象（旧单转弯兼容），0 处或 ≥2 处为 `null`。
 > `deg` 为服务端固定下发值（v1 恒为 90），请求中不传。
 
 错误：
@@ -1704,7 +1719,8 @@ POST /api/v1/deployments
 400 { "error": { "code": "invalid_params", "message": "L 必须 ≥ N×d（39 < 4×10）" } }
 400 { "error": { "code": "invalid_device_type", "message": "从桶 CONE-S-002 的 device_type 必须为 slave_cone" } }
 400 { "error": { "code": "invalid_binding_code", "message": "从桶绑定码不正确：CONE-S-002" } }
-400 { "error": { "code": "invalid_turn", "message": "turn.atM 必须小于 L（60 ≥ 60）" } }
+400 { "error": { "code": "invalid_turn", "message": "第 2 个转弯的 atM 必须大于前一个转弯点（4 m）" } }
+400 { "error": { "code": "invalid_turn", "message": "转弯不能超过 5 处" } }
 409 { "error": { "code": "device_occupied", "message": "部分设备不可用",
                  "detail": { "conflicts": [{ "device_code": "CONE-S-002", "reason": "device_occupied" }] } } }
 409 { "error": { "code": "active_deployment_exists", "message": "你有一个进行中的布设事件",
@@ -1751,6 +1767,7 @@ GET /api/v1/deployments/{deploymentId}
     "d": 10.0,
     "N": 3,
     "unit": "m",
+    "turns": [],
     "turn": null
   },
   "devices": [
@@ -1795,11 +1812,11 @@ GET /api/v1/deployments/{deploymentId}
 > `manualActive`（该桶是否正在手动点动）。旧客户端忽略这些字段；
 > 旧服务端不返回 `pos` 时 App 回退到按 `traveledM` 沿正北投影。
 >
-> **2026-10-22 转弯扩展**：`params.turn` 为
-> `{ "dir": "left|right", "atM": 30.0, "deg": 90.0 }` 或 `null`（直行）。
-> 带转弯时 `devices[].pos/headingDeg` 会在拐角后沿第二段路线变化：
-> 左转 heading=270°、右转 heading=90°。详见
-> [《APP接口请求响应JSON文档-锥桶布设转弯变更.md》](APP接口请求响应JSON文档-锥桶布设转弯变更.md)。
+> **2026-10-22 转弯扩展**：`params.turns` 为
+> `[{ "dir": "left|right", "atM": 4.0, "deg": 90.0 }, ...]`，直行为 `[]`。
+> `params.turn` 仅作为单转弯旧客户端别名（恰好 1 处时非 null）。
+> 带转弯时 `devices[].pos/headingDeg` 会沿多段折线变化（每处按计划朝向 ±90°）。
+> 详见 [《APP接口请求响应JSON文档-锥桶布设多转弯变更.md》](APP接口请求响应JSON文档-锥桶布设多转弯变更.md)。
 
 ## 27. 暂停 / 继续 / 终止
 

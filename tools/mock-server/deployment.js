@@ -26,8 +26,10 @@ const LIMITS = {
   speed: 1.0,
   slowSpeed: 0.5,
   turnDps: 60,
-  /** v1 自动路线固定单次转弯角度 */
+  /** v1 自动路线固定转弯角度 */
   turnDeg: 90,
+  /** 自动路线最多允许的转弯次数 */
+  maxTurns: 5,
   manualWatchdogMs: 800,
   readyTtlMs: 30 * 60 * 1000,
   persistEveryMs: 2000,
@@ -90,15 +92,24 @@ function load() {
       if (!dep || !dep.id) continue;
       // 兼容旧落盘：role → device_type，masterCode → master_code，并补齐 binding_code
       if (dep.masterCode && !dep.master_code) dep.master_code = dep.masterCode;
-      // 兼容旧落盘：没有 turn = 直行；非法 turn 直接丢弃
-      if (dep.turn && dep.turn.dir !== 'left' && dep.turn.dir !== 'right') dep.turn = null;
-      if (dep.turn && (
-        !Number.isFinite(dep.turn.atM) ||
-        dep.turn.atM <= 0 ||
-        (Number.isFinite(dep.L) && dep.turn.atM >= dep.L - 1e-9)
-      )) {
-        dep.turn = null;
-      }
+      // 兼容旧落盘：单个 turn → turns 数组；非法项丢弃并按 atM 去重排序
+      const rawTurns = Array.isArray(dep.turns)
+        ? dep.turns
+        : (dep.turn && typeof dep.turn === 'object' ? [dep.turn] : []);
+      let lastAt = -Infinity;
+      dep.turns = rawTurns
+        .filter((t) => t && typeof t === 'object' &&
+          (t.dir === 'left' || t.dir === 'right') &&
+          Number.isFinite(t.atM) && t.atM > 0 &&
+          (!Number.isFinite(dep.L) || t.atM < dep.L - 1e-9))
+        .map((t) => ({ dir: t.dir, atM: t.atM }))
+        .sort((a, b) => a.atM - b.atM)
+        .filter((t) => {
+          if (t.atM <= lastAt + 1e-9) return false;
+          lastAt = t.atM;
+          return true;
+        });
+      delete dep.turn;
       for (const dd of dep.devices || []) {
         if (!dd.device_type && dd.role) {
           dd.device_type = dd.role === 'master' ? 'master_cone'
@@ -112,7 +123,13 @@ function load() {
         if (!Number.isFinite(dd.posX)) dd.posX = 0;
         if (!Number.isFinite(dd.posY)) dd.posY = Number(dd.traveledM) || 0;
         if (!Number.isFinite(dd.headingDeg)) dd.headingDeg = 0;
-        dd.turnApplied = dd.turnApplied === true;
+        // 旧数据只有 turnApplied；新数据用 nextTurnIndex。只读不写回旧字段。
+        if (Number.isFinite(dd.nextTurnIndex)) {
+          dd.nextTurnIndex = Math.max(0, Math.min(dep.turns.length, Math.floor(dd.nextTurnIndex)));
+        } else {
+          dd.nextTurnIndex = dd.turnApplied === true ? Math.min(1, dep.turns.length) : 0;
+        }
+        delete dd.turnApplied;
         dd.manual = null;
         dd.lastManual = null;
       }
@@ -676,44 +693,81 @@ function tick() {
 }
 
 /**
+ * 计划朝向序列：第一段 0°，之后每处 left 减 90°、right 加 90°（归一化 0..360）。
+ * 注意：dir 是相对**计划中的前一段**，不是设备手动转过的实际 heading；
+ * 到转弯点时会按计划绝对朝向纠正（与单转弯版本一致）。
+ */
+function plannedHeadings(turns) {
+  let heading = 0;
+  return turns.map((t) => {
+    heading = (heading + (t.dir === 'left' ? -90 : 90) + 360) % 360;
+    return heading;
+  });
+}
+
+function addTurnStep(dd, dep, turn, index, headingDeg) {
+  addStep(dep, {
+    type: 'turn',
+    from: dd.device_code,
+    to: null,
+    turnIndex: index + 1,
+    dir: turn.dir,
+    atM: turn.atM,
+    deg: LIMITS.turnDeg,
+    headingDeg,
+    state: 'done',
+  });
+}
+
+/**
  * 沿自动路线推进 step 米（只更新 traveledM/pos/heading；odo/触发/到位由 tick 统一处理）。
  *
- * - 无 turn：沿用当前 heading 直行，保持旧行为；
- * - 有 turn：第一段沿当前 heading 走到 atM，再切到绝对朝向 270°（左）/90°（右）走完剩余；
- * - turnApplied 单向：手动倒退跨过 atM 不会反转/重转；手动前进跨过 atM 后，
- *   恢复自动时在第一次 tick 补上转弯；
- * - 目标 targetM <= atM 的桶在拐角前/拐角处停车，不转弯。
+ * - 无 turns：沿用当前 heading 直行，保持旧行为；
+ * - 有 turns：按 atM 顺序推进，到达每个转弯点时应用预计算的绝对朝向；
+ * - 一次 step 可跨过多处转弯；
+ * - nextTurnIndex 单向：手动倒退跨过已转点不会反转/重转；手动前进跨过未转点时，
+ *   恢复自动后先补齐这些转弯再继续；
+ * - 目标 targetM <= atM 的桶在拐角前/拐角处停车，不应用该转弯及后续转弯。
  */
 function advanceAlongRoute(dd, dep, step) {
   if (step <= 0) return;
-  const turn = dep.turn;
-  if (!turn) {
+  const turns = Array.isArray(dep.turns) ? dep.turns : [];
+  if (turns.length === 0) {
     moveByHeading(dd, dd.headingDeg, step);
     return;
   }
-  let moved = 0;
-  if (!dd.turnApplied && dd.targetM > turn.atM + 1e-9) {
-    if (dd.traveledM < turn.atM - 1e-9) {
-      const toCorner = Math.min(step, turn.atM - dd.traveledM);
-      moveByHeading(dd, dd.headingDeg, toCorner);
-      moved += toCorner;
-      // 这一步还没走到拐角：保持当前朝向，本 tick 结束
-      if (dd.traveledM < turn.atM - 1e-9) return;
-    }
-    dd.turnApplied = true;
-    dd.headingDeg = turn.dir === 'left' ? 270 : 90;
-    addStep(dep, {
-      type: 'turn',
-      from: dd.device_code,
-      to: null,
-      dir: turn.dir,
-      atM: turn.atM,
-      deg: LIMITS.turnDeg,
-      state: 'done',
-    });
+  const planned = plannedHeadings(turns);
+
+  // 手动前进可能已越过一个/多个转弯点：仅在本次确实要移动时补齐
+  while (dd.nextTurnIndex < turns.length) {
+    const t = turns[dd.nextTurnIndex];
+    if (dd.targetM <= t.atM + 1e-9) break;
+    if (dd.traveledM < t.atM - 1e-9) break;
+    dd.headingDeg = planned[dd.nextTurnIndex];
+    addTurnStep(dd, dep, t, dd.nextTurnIndex, dd.headingDeg);
+    dd.nextTurnIndex += 1;
   }
-  const rest = step - moved;
-  if (rest > 1e-9) moveByHeading(dd, dd.headingDeg, rest);
+
+  let remaining = step;
+  while (remaining > 1e-9) {
+    const i = dd.nextTurnIndex;
+    const t = turns[i];
+    // 目标没有越过该转弯点（后续转弯点只会更远）：直线走到目标
+    if (!t || dd.targetM <= t.atM + 1e-9) {
+      moveByHeading(dd, dd.headingDeg, remaining);
+      return;
+    }
+    const toCorner = t.atM - dd.traveledM;
+    if (toCorner > 1e-9) {
+      const d = Math.min(remaining, toCorner);
+      moveByHeading(dd, dd.headingDeg, d);
+      remaining -= d;
+      if (dd.traveledM < t.atM - 1e-9) return;
+    }
+    dd.headingDeg = planned[i];
+    addTurnStep(dd, dep, t, i, dd.headingDeg);
+    dd.nextTurnIndex += 1;
+  }
 }
 
 function moveByHeading(dd, headingDeg, distance) {
@@ -784,8 +838,8 @@ function validateCreate(body, owner) {
     if (d <= 0 || d > LIMITS.dMax) errors.push({ code: 'invalid_params', message: `d 必须大于 0 且不超过 ${LIMITS.dMax} m` });
     if (L < n * d - 1e-9) errors.push({ code: 'invalid_params', message: `L 必须 ≥ N×d（${L} < ${n}×${d}）` });
   }
-  // 可选单次 90° 转弯：turn = { dir: 'left'|'right', atM: number }
-  const turn = validateTurn(body.turn, Number.isFinite(L) ? L : null, errors);
+  // 可选多处 90° 转弯：turns = [{dir, atM}, ...]；旧字段 turn 作为单元素兼容
+  const turns = validateTurns(body, Number.isFinite(L) ? L : null, errors);
 
   const lane = normalizeLane(body.lane);
   if (lane === null || Number.isNaN(lane)) errors.push({ code: 'invalid_params', message: '作业车道必须为 1~8 的整数' });
@@ -822,42 +876,78 @@ function validateCreate(body, owner) {
     const reason = conflictReason(ctx.devices.get(code), owner);
     if (reason) conflicts.push({ device_code: code, reason });
   }
-  return { master, slaves, n, L: round1(L), d: round1(d), lane, turn, conflicts };
+  return { master, slaves, n, L: round1(L), d: round1(d), lane, turns, conflicts };
 }
 
 /**
- * 校验可选自动转弯参数。
+ * 校验可选多处自动转弯参数。
  *
- * - 缺省/null → 直行（返回 null）
- * - atM 是从起点沿路线累计到拐角的距离，0.1m 精度，必须 0 < atM < L
- * - v1 固定 90°；显式传了非 90 的 deg 直接拒绝，避免客户端误以为可自定义
+ * 请求形态（二选一，不能同时出现）：
+ * - 新：`turns: [{ dir: 'left'|'right', atM: number }, ...]`
+ * - 旧：`turn: { dir, atM }`（等价于单元素 turns）
+ *
+ * - 缺省/null/空数组 → 直行（返回 []）
+ * - atM 为从起点沿路线累计到拐角的距离，0.1m 精度，严格递增，且 0 < atM < L
+ * - v1 每处固定 90°；显式传非 90 的 deg 直接拒绝
+ * - 最多 LIMITS.maxTurns 处
  */
-function validateTurn(raw, L, errors) {
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw !== 'object' || Array.isArray(raw)) {
-    errors.push({ code: 'invalid_turn', message: 'turn 必须是对象 { dir, atM }' });
-    return null;
+function validateTurns(body, L, errors) {
+  const rawTurns = body.turns;
+  const hasTurn = body.turn !== undefined && body.turn !== null;
+  const hasNonEmptyTurns = Array.isArray(rawTurns) && rawTurns.length > 0;
+  if (hasNonEmptyTurns && hasTurn) {
+    errors.push({ code: 'invalid_turn', message: 'turn 与 turns 不能同时出现' });
+    return [];
   }
-  const dir = String(raw.dir || '').trim().toLowerCase();
-  if (dir !== 'left' && dir !== 'right') {
-    errors.push({ code: 'invalid_turn', message: 'turn.dir 必须为 left 或 right' });
+  let raw;
+  if (hasNonEmptyTurns) {
+    raw = rawTurns;
+  } else if (hasTurn) {
+    raw = [body.turn];
+  } else if (rawTurns !== undefined && rawTurns !== null && !Array.isArray(rawTurns)) {
+    errors.push({ code: 'invalid_turn', message: 'turns 必须是数组' });
+    return [];
+  } else {
+    // 缺省 / null / 空数组 = 直行
+    return [];
   }
-  if (raw.deg !== undefined && raw.deg !== null && Number(raw.deg) !== LIMITS.turnDeg) {
-    errors.push({ code: 'invalid_turn', message: `turn.deg 当前固定为 ${LIMITS.turnDeg}，请勿自定义` });
+  if (raw.length === 0) return [];
+  if (raw.length > LIMITS.maxTurns) {
+    errors.push({ code: 'invalid_turn', message: `转弯不能超过 ${LIMITS.maxTurns} 处` });
+    return [];
   }
-  const atM = Number(raw.atM);
-  if (!Number.isFinite(atM)) {
-    errors.push({ code: 'invalid_turn', message: 'turn.atM 必须是数字' });
-    return null;
-  }
-  if (!isPrecisionOk(atM)) errors.push({ code: 'invalid_turn', message: 'turn.atM 精度最多 0.1 m' });
-  if (atM <= 0) errors.push({ code: 'invalid_turn', message: 'turn.atM 必须大于 0' });
-  if (L !== null && Number.isFinite(L) && atM >= L - 1e-9) {
-    errors.push({ code: 'invalid_turn', message: `turn.atM 必须小于 L（${atM} ≥ ${L}）` });
-  }
-  if (dir !== 'left' && dir !== 'right') return null;
-  if (atM <= 0) return null;
-  return { dir, atM: round1(atM) };
+  const turns = [];
+  let prevAt = 0;
+  raw.forEach((item, i) => {
+    const label = `第 ${i + 1} 个转弯`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push({ code: 'invalid_turn', message: `${label}必须是对象 { dir, atM }` });
+      return;
+    }
+    const dir = String(item.dir || '').trim().toLowerCase();
+    if (dir !== 'left' && dir !== 'right') {
+      errors.push({ code: 'invalid_turn', message: `${label}的 dir 必须为 left 或 right` });
+    }
+    if (item.deg !== undefined && item.deg !== null && Number(item.deg) !== LIMITS.turnDeg) {
+      errors.push({ code: 'invalid_turn', message: `${label}的 deg 当前固定为 ${LIMITS.turnDeg}，请勿自定义` });
+    }
+    const atM = Number(item.atM);
+    if (!Number.isFinite(atM)) {
+      errors.push({ code: 'invalid_turn', message: `${label}的 atM 必须是数字` });
+      return;
+    }
+    if (!isPrecisionOk(atM)) errors.push({ code: 'invalid_turn', message: `${label}的 atM 精度最多 0.1 m` });
+    if (atM <= 0) errors.push({ code: 'invalid_turn', message: `${label}的 atM 必须大于 0` });
+    if (L !== null && Number.isFinite(L) && atM >= L - 1e-9) {
+      errors.push({ code: 'invalid_turn', message: `${label}的 atM 必须小于 L（${atM} ≥ ${L}）` });
+    }
+    if (atM <= prevAt + 1e-9) {
+      errors.push({ code: 'invalid_turn', message: `${label}的 atM 必须大于前一个转弯点（${prevAt} m）` });
+    }
+    prevAt = atM;
+    if (dir === 'left' || dir === 'right') turns.push({ dir, atM: round1(atM) });
+  });
+  return turns;
 }
 
 function normalizeLane(v) {
@@ -897,8 +987,8 @@ function createDeployment(body, owner) {
     L: v.L,
     d: v.d,
     N: v.n,
-    /** 可选单次 90° 转弯；null/undefined = 直行（旧事件） */
-    turn: v.turn,
+    /** 可选多处 90° 转弯；空数组 = 直行（旧事件） */
+    turns: v.turns,
     master_code: v.master.device_code,
     note: String(body.note || '').slice(0, 100),
     createdAt: now,
@@ -915,7 +1005,7 @@ function createDeployment(body, owner) {
         posX: 0,
         posY: 0,
         headingDeg: 0,
-        turnApplied: false,
+        nextTurnIndex: 0,
         manual: null,
         lastManual: null,
         phase: 'not_started',
@@ -940,7 +1030,7 @@ function createDeployment(body, owner) {
         posX: 0,
         posY: 0,
         headingDeg: 0,
-        turnApplied: false,
+        nextTurnIndex: 0,
         manual: null,
         lastManual: null,
         phase: 'not_started',
@@ -982,7 +1072,7 @@ function startDeployment(dep, body) {
     dd.posX = 0;
     dd.posY = 0;
     dd.headingDeg = 0;
-    dd.turnApplied = false;
+    dd.nextTurnIndex = 0;
     dd.manual = null;
     dd.lastManual = null;
     g.occupied = true;
@@ -1308,8 +1398,14 @@ function deploymentJson(dep) {
       d: dep.d,
       N: dep.N,
       unit: 'm',
-      turn: dep.turn
-        ? { dir: dep.turn.dir, atM: dep.turn.atM, deg: LIMITS.turnDeg }
+      turns: (dep.turns || []).map((t) => ({
+        dir: t.dir,
+        atM: t.atM,
+        deg: LIMITS.turnDeg,
+      })),
+      // 单转弯旧客户端兼容别名：仅恰好 1 处时返回
+      turn: (dep.turns && dep.turns.length === 1)
+        ? { dir: dep.turns[0].dir, atM: dep.turns[0].atM, deg: LIMITS.turnDeg }
         : null,
     },
     devices: dep.devices.map((dd) => deviceJson(dep, dd)),
@@ -1538,4 +1634,6 @@ module.exports = {
   // 供测试/调试
   _deployments: deployments,
   _setAnomaly: setAnomaly,
+  // 纯函数（供单测一步跨多弯等场景）
+  _advanceAlongRoute: advanceAlongRoute,
 };
