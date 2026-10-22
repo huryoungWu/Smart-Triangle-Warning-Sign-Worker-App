@@ -14,10 +14,13 @@ import com.example.myapplication.core.model.deployment.DeploymentRecordSummary
 import com.example.myapplication.core.model.deployment.DeploymentReportState
 import com.example.myapplication.core.model.deployment.DeploymentResult
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
+import com.example.myapplication.core.model.deployment.DeploymentLimits
 import com.example.myapplication.core.model.deployment.DeploymentSkip
 import com.example.myapplication.core.model.deployment.DeploymentState
 import com.example.myapplication.core.model.deployment.DeploymentStep
 import com.example.myapplication.core.model.deployment.DeploymentTriggerState
+import com.example.myapplication.core.model.deployment.DeploymentTurn
+import com.example.myapplication.core.model.deployment.DeploymentTurnDir
 import com.example.myapplication.core.model.deployment.DeploymentVerifyState
 import com.example.myapplication.core.model.deployment.DeviceSet
 import com.example.myapplication.core.model.deployment.ReportResultState
@@ -100,6 +103,7 @@ object DeploymentJson {
                 L = params?.optDouble("L", 0.0) ?: 0.0,
                 d = params?.optDouble("d", 0.0) ?: 0.0,
                 N = params?.optInt("N", 0) ?: 0,
+                turn = parseTurn(params?.optJSONObject("turn")),
             ),
             devices = o.optJSONArray("devices").let { arr ->
                 buildList {
@@ -115,6 +119,18 @@ object DeploymentJson {
             updatedAt = o.optLong("updatedAt", 0L),
             completedAt = o.optLongOrNull("completedAt"),
         )
+    }
+
+    /** 解析 `params.turn`；缺失/null/非法一律按直行（null）处理，兼容旧服务端 */
+    private fun parseTurn(o: JSONObject?): DeploymentTurn? {
+        if (o == null) return null
+        val dir = DeploymentTurnDir.fromToken(o.optString("dir")) ?: return null
+        val atM = o.optDouble("atM", Double.NaN)
+        if (!atM.isFinite() || atM <= 0.0) return null
+        val deg = o.optDouble("deg", DeploymentLimits.TURN_DEG)
+            .takeIf { it.isFinite() && it > 0.0 }
+            ?: DeploymentLimits.TURN_DEG
+        return DeploymentTurn(dir = dir, atM = atM, deg = deg)
     }
 
     fun parseDeviceState(o: JSONObject): DeploymentDeviceState {

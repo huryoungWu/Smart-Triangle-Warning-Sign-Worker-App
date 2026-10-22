@@ -3,6 +3,8 @@ package com.example.myapplication
 import com.example.myapplication.core.model.deployment.DeploymentDeviceSummary
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
+import com.example.myapplication.core.model.deployment.DeploymentTurn
+import com.example.myapplication.core.model.deployment.DeploymentTurnDir
 import com.example.myapplication.core.model.deployment.SelectedSlave
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -172,5 +174,60 @@ class DeploymentDraftTest {
         assertTrue(none.validate().isEmpty())
         val tooMany = draft("100", "10", 6)
         assertTrue(tooMany.validate().any { it.contains("不能超过 5") })
+    }
+
+    // ── 单次 90° 转弯 ──
+
+    @Test
+    fun `straight is the default and ignores turnAt input`() {
+        val d = draft("60", "10", 2).copy(turnAtText = "not-a-number")
+        assertTrue(d.turnErrors().isEmpty())
+        assertTrue(d.validate().isEmpty())
+        assertEquals(null, d.turn)
+        assertTrue(d.turnEchoMatches(null))
+        assertFalse(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)))
+    }
+
+    @Test
+    fun `left and right turn accept a valid turn point`() {
+        val left = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.LEFT, turnAtText = "30")
+        assertTrue(left.turnErrors().isEmpty())
+        assertTrue(left.validate().isEmpty())
+        assertTrue(left.canStart())
+        assertEquals(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0), left.turn)
+
+        val right = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.RIGHT, turnAtText = "20.5")
+        assertTrue(right.turnErrors().isEmpty())
+        assertEquals(DeploymentTurn(DeploymentTurnDir.RIGHT, 20.5), right.turn)
+    }
+
+    @Test
+    fun `turn point must be entered within 0 and L`() {
+        fun errors(dir: DeploymentTurnDir?, at: String) =
+            draft("60", "10", 2).copy(turnDir = dir, turnAtText = at).turnErrors()
+
+        assertTrue(errors(DeploymentTurnDir.LEFT, "").any { it.contains("请输入转弯点") })
+        assertTrue(errors(DeploymentTurnDir.LEFT, "0").any { it.contains("大于 0") })
+        assertTrue(errors(DeploymentTurnDir.LEFT, "-1").any { it.contains("大于 0") })
+        assertTrue(errors(DeploymentTurnDir.LEFT, "60").any { it.contains("小于 L") })
+        assertTrue(errors(DeploymentTurnDir.LEFT, "61").any { it.contains("小于 L") })
+        assertTrue(errors(DeploymentTurnDir.LEFT, "20.05").any { it.contains("精度") })
+    }
+
+    @Test
+    fun `turn errors do not leak into L and d field errors`() {
+        val d = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.LEFT, turnAtText = "70")
+        assertTrue(d.step2Errors().isEmpty())
+        assertTrue(d.turnErrors().isNotEmpty())
+        assertFalse(d.canStart())
+    }
+
+    @Test
+    fun `turn echo must match what the server confirmed`() {
+        val d = draft("60", "10", 2).copy(turnDir = DeploymentTurnDir.LEFT, turnAtText = "30")
+        assertTrue(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.LEFT, 30.0)))
+        assertFalse(d.turnEchoMatches(null))
+        assertFalse(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.RIGHT, 30.0)))
+        assertFalse(d.turnEchoMatches(DeploymentTurn(DeploymentTurnDir.LEFT, 31.0)))
     }
 }

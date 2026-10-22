@@ -7,6 +7,11 @@
 > [《APP接口请求响应JSON文档-UDP视频流变更.md》](APP接口请求响应JSON文档-UDP视频流变更.md)，
 > 给后端开发时可直接使用该增量文档；未列出的接口仍以本文为准。
 >
+> **2026-10-22 锥桶布设转弯改造**：创建布设事件新增可选 `turn`（单次 90° 左/右转），
+> 响应 `params` 增加 `turn`。本次涉及/受影响的接口已单独整理为
+> [《APP接口请求响应JSON文档-锥桶布设转弯变更.md》](APP接口请求响应JSON文档-锥桶布设转弯变更.md)，
+> 给后端开发时可直接使用该增量文档；未列出的接口仍以本文为准。
+>
 > - Base URL：`http://<server>:<port>/api/v1`
 > - 鉴权：登录、版本检查、刷新 token 不需要 Bearer；其余接口建议带
 >   `Authorization: Bearer <token>`；实时视频 UDP 订阅的 `target` query 里带 `token`（UDP 无 Header）
@@ -1628,6 +1633,40 @@ POST /api/v1/deployments
 
 响应中 `params.N = 0`，`devices` 只有主桶一项。
 
+**路线转弯（可选，2026-10-22 新增）**：在请求体上追加 `turn` 即可让自动路线在指定位置转一次 90°。
+缺省或 `null` = 直行，旧客户端行为完全不变。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `turn` | object/null | 否 | 单次 90° 转弯；省略/`null` = 直行 |
+| `turn.dir` | string | 有 `turn` 时必填 | `left` / `right` |
+| `turn.atM` | number | 有 `turn` 时必填 | 从起点沿路线累计到拐角的距离（米），0.1 m 精度，`0 < atM < L` |
+
+> `atM` 是**沿路线累计行程**，不是地图直线距离；`L` 仍是主桶沿路线总行程。
+> 目标行程 `targetM <= atM` 的从桶不会过弯。v1 角度固定 90°，请求中不需要（也不应）传角度。
+
+左转示例（右转把 `left` 改为 `right`）：
+
+```json
+{
+  "clientRequestId": "uuid-left-turn",
+  "name": "锥桶协同布设-左转",
+  "lane": 2,
+  "master": {
+    "device_code": "CONE-M-001",
+    "device_type": "master_cone",
+    "binding_code": "123456"
+  },
+  "slaves": [
+    { "device_code": "CONE-S-001", "device_type": "slave_cone", "binding_code": "123456", "order": 1 }
+  ],
+  "L": 60.0,
+  "d": 10.0,
+  "note": "",
+  "turn": { "dir": "left", "atM": 30.0 }
+}
+```
+
 响应 `201`：
 
 ```json
@@ -1638,7 +1677,13 @@ POST /api/v1/deployments
   "lane": 2,
   "state": "ready",
   "result": null,
-  "params": { "L": 60.0, "d": 10.0, "N": 3, "unit": "m" },
+  "params": {
+    "L": 60.0,
+    "d": 10.0,
+    "N": 3,
+    "unit": "m",
+    "turn": null
+  },
   "devices": [
     { "device_code": "CONE-M-001", "device_type": "master_cone", "binding_code": "123456", "order": 0, "targetM": 60.0, "traveledM": 0, "phase": "not_started", "arrived": false },
     { "device_code": "CONE-S-001", "device_type": "slave_cone", "binding_code": "123456", "order": 1, "targetM": 50.0, "traveledM": 0, "phase": "not_started", "arrived": false },
@@ -1649,12 +1694,17 @@ POST /api/v1/deployments
 }
 ```
 
+> `params.turn`：直行为 `null`；带转弯的事件回显
+> `{ "dir": "left|right", "atM": 30.0, "deg": 90.0 }`。
+> `deg` 为服务端固定下发值（v1 恒为 90），请求中不传。
+
 错误：
 
 ```json
 400 { "error": { "code": "invalid_params", "message": "L 必须 ≥ N×d（39 < 4×10）" } }
 400 { "error": { "code": "invalid_device_type", "message": "从桶 CONE-S-002 的 device_type 必须为 slave_cone" } }
 400 { "error": { "code": "invalid_binding_code", "message": "从桶绑定码不正确：CONE-S-002" } }
+400 { "error": { "code": "invalid_turn", "message": "turn.atM 必须小于 L（60 ≥ 60）" } }
 409 { "error": { "code": "device_occupied", "message": "部分设备不可用",
                  "detail": { "conflicts": [{ "device_code": "CONE-S-002", "reason": "device_occupied" }] } } }
 409 { "error": { "code": "active_deployment_exists", "message": "你有一个进行中的布设事件",
@@ -1696,7 +1746,13 @@ GET /api/v1/deployments/{deploymentId}
   "lane": 2,
   "state": "running",
   "result": null,
-  "params": { "L": 60.0, "d": 10.0, "N": 3, "unit": "m" },
+  "params": {
+    "L": 60.0,
+    "d": 10.0,
+    "N": 3,
+    "unit": "m",
+    "turn": null
+  },
   "devices": [
     {
       "device_code": "CONE-M-001",
@@ -1738,6 +1794,12 @@ GET /api/v1/deployments/{deploymentId}
 > `pos: { x, y }`（相对部署起始线的米，x=东、y=北）、`headingDeg`（0=正北）、
 > `manualActive`（该桶是否正在手动点动）。旧客户端忽略这些字段；
 > 旧服务端不返回 `pos` 时 App 回退到按 `traveledM` 沿正北投影。
+>
+> **2026-10-22 转弯扩展**：`params.turn` 为
+> `{ "dir": "left|right", "atM": 30.0, "deg": 90.0 }` 或 `null`（直行）。
+> 带转弯时 `devices[].pos/headingDeg` 会在拐角后沿第二段路线变化：
+> 左转 heading=270°、右转 heading=90°。详见
+> [《APP接口请求响应JSON文档-锥桶布设转弯变更.md》](APP接口请求响应JSON文档-锥桶布设转弯变更.md)。
 
 ## 27. 暂停 / 继续 / 终止
 

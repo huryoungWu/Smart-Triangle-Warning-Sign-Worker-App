@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -39,6 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.core.model.deployment.DeploymentDeviceType
 import com.example.myapplication.core.model.deployment.DeploymentDraft
 import com.example.myapplication.core.model.deployment.DeploymentLimits
+import com.example.myapplication.core.model.deployment.DeploymentTurnDir
 import com.example.myapplication.core.model.deployment.TargetPreview
 import com.example.myapplication.core.model.vehicle.LaneRange
 import com.example.myapplication.core.ui.PageTitle
@@ -177,7 +179,7 @@ fun DeploymentPublishScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "按累计行程计算，不是直线距离。",
+                    "按沿路线累计行程计算，不是地图直线距离。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -188,6 +190,51 @@ fun DeploymentPublishScreen(
                     color = NeutralGrey,
                 )
             }
+
+            // 路线转弯（可选）：v1 固定单次 90°，转弯点按沿路线累计行程填写
+            Spacer(Modifier.height(12.dp))
+            Text("路线转弯（可选）", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = draft.turnDir == null,
+                    onClick = { vm.updateTurnDir(null) },
+                    label = { Text("直行") },
+                )
+                FilterChip(
+                    selected = draft.turnDir == DeploymentTurnDir.LEFT,
+                    onClick = { vm.updateTurnDir(DeploymentTurnDir.LEFT) },
+                    label = { Text("左转 90°") },
+                )
+                FilterChip(
+                    selected = draft.turnDir == DeploymentTurnDir.RIGHT,
+                    onClick = { vm.updateTurnDir(DeploymentTurnDir.RIGHT) },
+                    label = { Text("右转 90°") },
+                )
+            }
+            if (draft.turnDir != null) {
+                Spacer(Modifier.height(8.dp))
+                val turnErrors = draft.turnErrors()
+                OutlinedTextField(
+                    value = draft.turnAtText,
+                    onValueChange = vm::updateTurnAt,
+                    label = { Text("转弯点距离（米，从起点沿路线累计）") },
+                    singleLine = true,
+                    isError = turnErrors.isNotEmpty(),
+                    supportingText = {
+                        val remaining = draft.L?.let { l -> draft.turnAt?.let { at -> l - at } }
+                        when {
+                            turnErrors.isNotEmpty() -> Text(turnErrors.first(), color = WarningRed)
+                            remaining != null -> Text(
+                                "转弯后剩余 ${DeploymentDraft.fmt(remaining)} m",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             Spacer(Modifier.height(10.dp))
             Text(
                 if (draft.n == 0) "从桶数量 N = 0（仅主桶执行）" else "从桶数量 N = ${draft.n}",
@@ -196,6 +243,35 @@ fun DeploymentPublishScreen(
         }
 
         SectionCard(title = "布设预览（沿路线累计行程）") {
+            val l = draft.L
+            val at = draft.turnAt
+            val turnSummary = when {
+                l == null || l <= 0.0 -> null
+                draft.turnDir == null -> "路线：直行 ${DeploymentDraft.fmt(l)} m"
+                at != null && at > 0.0 && at < l ->
+                    "路线：直行 ${DeploymentDraft.fmt(at)} m → ${draft.turnDir.label} ${DeploymentDraft.fmt(DeploymentLimits.TURN_DEG)}° → " +
+                        "直行 ${DeploymentDraft.fmt(l - at)} m"
+                else -> null
+            }
+            if (turnSummary != null) {
+                Text(
+                    text = turnSummary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (draft.turnDir == null) NeutralGrey else WarnOrange,
+                )
+                if (draft.turnDir != null && at != null) {
+                    val beforeTurn = draft.preview.count { it.targetM <= at + 1e-9 }
+                    if (beforeTurn > 0) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "其中 $beforeTurn 只桶的目标在转弯点之前，不会过弯。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             if (draft.preview.isEmpty()) {
                 Text("填写参数后显示目标行程。", color = NeutralGrey)
             } else {
@@ -280,9 +356,14 @@ fun DeploymentPublishScreen(
             onDismissRequest = { showStartConfirm = false },
             title = { Text("开始协同布设？") },
             text = {
+                val turnHint = draft.turn?.let { t ->
+                    "\n\n本次路线在 ${DeploymentDraft.fmt(t.atM)} m 处${t.dir.label} " +
+                        "${DeploymentDraft.fmt(t.deg)}°，请确认转弯点及转弯后的第二段路线无障碍。"
+                }.orEmpty()
                 Text(
                     "开始后主桶将首先移动；从桶会按“前一只自身行程达到 d”逐级启动。\n\n" +
-                        "请确认：所有锥桶已按编队顺序置于同一起始线，现场安全条件已满足。",
+                        "请确认：所有锥桶已按编队顺序置于同一起始线，现场安全条件已满足。" +
+                        turnHint,
                 )
             },
             confirmButton = {

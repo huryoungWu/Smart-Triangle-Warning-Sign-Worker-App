@@ -23,6 +23,28 @@ enum class DeploymentDeviceType(val token: String, val label: String) {
     }
 }
 
+/**
+ * 布设路线单次转弯方向（创建请求 `turn.dir`）。
+ * v1 固定转 90°：左转后 heading=270°，右转后 heading=90°（0=正北，顺时针）。
+ */
+enum class DeploymentTurnDir(val token: String, val label: String) {
+    LEFT("left", "左转"),
+    RIGHT("right", "右转"),
+    ;
+
+    companion object {
+        fun fromToken(v: String?): DeploymentTurnDir? =
+            entries.firstOrNull { it.token == v?.lowercase() }
+    }
+}
+
+/** 布设路线上的单次 90° 转弯（服务端响应 `params.turn`） */
+data class DeploymentTurn(
+    val dir: DeploymentTurnDir,
+    val atM: Double,
+    val deg: Double = DeploymentLimits.TURN_DEG,
+)
+
 enum class DeploymentState(val token: String, val label: String) {
     READY("ready", "准备中"),
     STARTING("starting", "启动中"),
@@ -130,6 +152,9 @@ object DeploymentLimits {
     const val MAX_NAME_LEN = 30
     const val MAX_NOTE_LEN = 100
 
+    /** v1 自动路线固定单次转弯角度 */
+    const val TURN_DEG = 90.0
+
     fun hasValidPrecision(v: Double): Boolean =
         abs(v * 10.0 - Math.round(v * 10.0)) < 1e-6
 }
@@ -200,6 +225,10 @@ data class DeploymentDraft(
     val slaves: List<SelectedSlave> = emptyList(),
     val lText: String = "",
     val dText: String = "",
+    /** 路线单次转弯方向；null = 直行 */
+    val turnDir: DeploymentTurnDir? = null,
+    /** 转弯点累计行程输入（米）；仅在 [turnDir] 非空时参与校验 */
+    val turnAtText: String = "",
     val precheckSafety: Boolean = false,
     val precheckOrder: Boolean = false,
 ) {
@@ -217,6 +246,53 @@ data class DeploymentDraft(
         val l = L ?: return null
         val interval = d ?: return null
         return round1(l - order * interval)
+    }
+
+    /** 转弯点累计行程（米）；未填/非法时为 null */
+    val turnAt: Double? get() = turnAtText.trim().replace('−', '-').toDoubleOrNull()
+
+    /** 当前草稿对应的转弯参数；直行或缺转弯点时为 null */
+    val turn: DeploymentTurn?
+        get() {
+            val dir = turnDir ?: return null
+            val at = turnAt ?: return null
+            return DeploymentTurn(dir, at)
+        }
+
+    /** 单次 90° 转弯参数校验；直行时恒为空（不要并入 [step2Errors]，避免 L/d 输入框误标红） */
+    fun turnErrors(): List<String> {
+        if (turnDir == null) return emptyList()
+        val errors = mutableListOf<String>()
+        val at = turnAt
+        val l = L
+        when {
+            turnAtText.isBlank() -> errors.add("请输入转弯点距离")
+            at == null -> errors.add("转弯点距离必须是数字")
+            else -> {
+                if (!DeploymentLimits.hasValidPrecision(at)) errors.add("转弯点精度最多 0.1 m")
+                if (at <= 0.0) errors.add("转弯点必须大于 0 m")
+                when {
+                    l == null -> errors.add("请先填写主桶目标行程 L")
+                    at >= l - 1e-9 -> errors.add("转弯点必须小于 L（当前 ${fmt(at)} ≥ ${fmt(l)}）")
+                }
+            }
+        }
+        return errors
+    }
+
+    /**
+     * 服务端回显校验：选了转弯时服务端必须在 `params.turn` 原样确认；
+     * 直行时服务端不应回显转弯。
+     *
+     * 用于拦截「新 App + 旧服务端」：旧服务端会静默忽略 `turn`，若不校验就会
+     * 显示“左转”但实际直行。
+     */
+    fun turnEchoMatches(actual: DeploymentTurn?): Boolean {
+        val expectedDir = turnDir
+        if (expectedDir == null) return actual == null
+        if (actual == null || actual.dir != expectedDir) return false
+        val at = turnAt ?: return false
+        return abs(actual.atM - at) < 0.05 && abs(actual.deg - DeploymentLimits.TURN_DEG) < 0.01
     }
 
     val preview: List<TargetPreview>
@@ -298,7 +374,7 @@ data class DeploymentDraft(
         return errors
     }
 
-    fun validate(): List<String> = eventErrors() + deviceErrors() + step2Errors()
+    fun validate(): List<String> = eventErrors() + deviceErrors() + step2Errors() + turnErrors()
 
     val precheckDone: Boolean get() = precheckSafety && precheckOrder
 
@@ -317,6 +393,8 @@ data class DeploymentParams(
     val L: Double,
     val d: Double,
     val N: Int,
+    /** 自动路线单次转弯；null/缺失 = 直行（旧服务端） */
+    val turn: DeploymentTurn? = null,
 )
 
 data class DeploymentCommandState(

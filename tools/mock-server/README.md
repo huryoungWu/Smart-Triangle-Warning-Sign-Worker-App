@@ -197,7 +197,8 @@ node tools/mock-server/test-video-udp.js   # 自动验收：协议/分片/心跳
 ## 锥桶协同布设联调（2026-10-20 新增）
 
 > 需求/状态机/测试用例：`docs/锥桶协同布设功能需求规格说明书.md`
-> 协议：`docs/后端接口设计文档.md` 第 18 节、`docs/APP接口请求响应JSON文档.md` 第四节
+> 协议：`docs/后端接口设计文档.md` 第 18 节、`docs/APP接口请求响应JSON文档.md` 第四节；
+> 转弯变更：`docs/APP接口请求响应JSON文档-锥桶布设转弯变更.md`
 > 实现：`tools/mock-server/deployment.js`（独立模块，不影响单设备状态机）
 
 ### 预置设备
@@ -230,6 +231,24 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/deployments/<id>/start \
 # 3) 轮询聚合状态（设备自身行程/触发/上报/到达）
 curl -s http://127.0.0.1:8080/api/v1/deployments/<id>
 ```
+
+### 自动路线单次 90° 转弯（2026-10-22 新增）
+
+创建时追加可选 `turn`；`atM` 为从起点沿路线累计到拐角的距离，`0 < atM < L`：
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/deployments \
+  -H 'Content-Type: application/json' \
+  -d '{"clientRequestId":"demo-turn-1","name":"demo-left","lane":2,
+       "master":{"device_code":"CONE-M-001","device_type":"master_cone","binding_code":"123456"},
+       "slaves":[{"device_code":"CONE-S-001","device_type":"slave_cone","binding_code":"123456","order":1}],
+       "L":8,"d":2,"turn":{"dir":"left","atM":4}}'
+```
+
+- `dir` = `left` / `right`；v1 固定 90°；直行不传或传 `null`；
+- 响应 `params.turn = {dir, atM, deg:90}`；到位后左转 `pos.x` 为负、右转 `pos.x` 为正；
+- `targetM <= atM` 的桶不转弯；`d` 触发/到位/核验逻辑不变；
+- 暂停中手动越过拐角后继续，只转一次；手动退过拐角不会反转。
 
 ### 异常注入（仅 Mock）
 
@@ -287,7 +306,8 @@ node tools/mock-server/test-deployment.js
 ```
 
 覆盖：正常逐级触发与目标行程、单进行中事件、上报丢失→人工跳过→`completed_with_exception`、
-N=0、暂停/四向点动/保活/看门狗/暂停不触发后继/resume 触发。
+N=0、暂停/四向点动/保活/看门狗/暂停不触发后继/resume 触发、非法 turn 校验、
+左/右转最终位置与 heading、`targetM==atM` 不转弯、手动跨越拐角后只转一次且不瞬移。
 
 ### 数据持久化
 

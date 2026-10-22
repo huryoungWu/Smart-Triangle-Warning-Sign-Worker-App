@@ -149,9 +149,27 @@ class ServerDeploymentRepository(
                     .put("slaves", slaves)
                     .put("L", L)
                     .put("d", d)
+                // 仅在用户选择左/右转时下发；直行保持原请求体完全不变（旧服务端兼容）
+                draft.turnDir?.let { dir ->
+                    val atM = draft.turnAt ?: throw IOException("转弯点未填写")
+                    body.put(
+                        "turn",
+                        JSONObject()
+                            .put("dir", dir.token)
+                            .put("atM", atM),
+                    )
+                }
                 DeploymentJson.parseEvent(
                     JSONObject(request("POST", "$baseUrl/api/v1/deployments", body.toString())),
                 )
+            }
+        }
+
+    override suspend fun cancelDeployment(deploymentId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                request("DELETE", "$baseUrl/api/v1/deployments/${enc(deploymentId)}", null)
+                Unit
             }
         }
 

@@ -44,6 +44,9 @@ interface DeploymentRepository {
     /** 创建（READY，不启动） */
     suspend fun createDeployment(draft: DeploymentDraft, clientRequestId: String): Result<DeploymentEvent>
 
+    /** 取消尚未启动的事件（READY → DELETE）；用于“服务端不支持转弯参数”时回收创建结果 */
+    suspend fun cancelDeployment(deploymentId: String): Result<Unit>
+
     /** 启动（服务端原子占用设备；成功返回最新事件） */
     suspend fun startDeployment(deploymentId: String, commandId: String): Result<DeploymentEvent>
 

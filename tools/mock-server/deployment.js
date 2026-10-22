@@ -26,6 +26,8 @@ const LIMITS = {
   speed: 1.0,
   slowSpeed: 0.5,
   turnDps: 60,
+  /** v1 自动路线固定单次转弯角度 */
+  turnDeg: 90,
   manualWatchdogMs: 800,
   readyTtlMs: 30 * 60 * 1000,
   persistEveryMs: 2000,
@@ -88,6 +90,15 @@ function load() {
       if (!dep || !dep.id) continue;
       // 兼容旧落盘：role → device_type，masterCode → master_code，并补齐 binding_code
       if (dep.masterCode && !dep.master_code) dep.master_code = dep.masterCode;
+      // 兼容旧落盘：没有 turn = 直行；非法 turn 直接丢弃
+      if (dep.turn && dep.turn.dir !== 'left' && dep.turn.dir !== 'right') dep.turn = null;
+      if (dep.turn && (
+        !Number.isFinite(dep.turn.atM) ||
+        dep.turn.atM <= 0 ||
+        (Number.isFinite(dep.L) && dep.turn.atM >= dep.L - 1e-9)
+      )) {
+        dep.turn = null;
+      }
       for (const dd of dep.devices || []) {
         if (!dd.device_type && dd.role) {
           dd.device_type = dd.role === 'master' ? 'master_cone'
@@ -101,6 +112,7 @@ function load() {
         if (!Number.isFinite(dd.posX)) dd.posX = 0;
         if (!Number.isFinite(dd.posY)) dd.posY = Number(dd.traveledM) || 0;
         if (!Number.isFinite(dd.headingDeg)) dd.headingDeg = 0;
+        dd.turnApplied = dd.turnApplied === true;
         dd.manual = null;
         dd.lastManual = null;
       }
@@ -605,14 +617,11 @@ function tick() {
       const speed = hasAnomaly(dd.device_code, 'slow') ? LIMITS.slowSpeed : LIMITS.speed;
       const remaining = Math.max(0, dd.targetM - dd.traveledM);
       const step = Math.min(speed * dt, remaining);
-      dd.traveledM += step;
+      advanceAlongRoute(dd, dep, step);
       g.odo.traveledM += step;
       g.odo.leftPulse += Math.round(step * 500);
       g.odo.rightPulse += Math.round(step * 500);
       g.odo.speedMps = speed;
-      const rad = (dd.headingDeg * Math.PI) / 180;
-      dd.posX += step * Math.sin(rad);
-      dd.posY += step * Math.cos(rad);
       g.pos = { x: dd.posX, y: dd.posY };
       g.motion = 'moving';
       g.mode = 'auto';
@@ -664,6 +673,55 @@ function tick() {
     }
   }
   if (now - lastPersistAt > LIMITS.persistEveryMs) persist();
+}
+
+/**
+ * 沿自动路线推进 step 米（只更新 traveledM/pos/heading；odo/触发/到位由 tick 统一处理）。
+ *
+ * - 无 turn：沿用当前 heading 直行，保持旧行为；
+ * - 有 turn：第一段沿当前 heading 走到 atM，再切到绝对朝向 270°（左）/90°（右）走完剩余；
+ * - turnApplied 单向：手动倒退跨过 atM 不会反转/重转；手动前进跨过 atM 后，
+ *   恢复自动时在第一次 tick 补上转弯；
+ * - 目标 targetM <= atM 的桶在拐角前/拐角处停车，不转弯。
+ */
+function advanceAlongRoute(dd, dep, step) {
+  if (step <= 0) return;
+  const turn = dep.turn;
+  if (!turn) {
+    moveByHeading(dd, dd.headingDeg, step);
+    return;
+  }
+  let moved = 0;
+  if (!dd.turnApplied && dd.targetM > turn.atM + 1e-9) {
+    if (dd.traveledM < turn.atM - 1e-9) {
+      const toCorner = Math.min(step, turn.atM - dd.traveledM);
+      moveByHeading(dd, dd.headingDeg, toCorner);
+      moved += toCorner;
+      // 这一步还没走到拐角：保持当前朝向，本 tick 结束
+      if (dd.traveledM < turn.atM - 1e-9) return;
+    }
+    dd.turnApplied = true;
+    dd.headingDeg = turn.dir === 'left' ? 270 : 90;
+    addStep(dep, {
+      type: 'turn',
+      from: dd.device_code,
+      to: null,
+      dir: turn.dir,
+      atM: turn.atM,
+      deg: LIMITS.turnDeg,
+      state: 'done',
+    });
+  }
+  const rest = step - moved;
+  if (rest > 1e-9) moveByHeading(dd, dd.headingDeg, rest);
+}
+
+function moveByHeading(dd, headingDeg, distance) {
+  if (distance <= 0) return;
+  const rad = (headingDeg * Math.PI) / 180;
+  dd.posX += distance * Math.sin(rad);
+  dd.posY += distance * Math.cos(rad);
+  dd.traveledM += distance;
 }
 
 function reportId(dep, dd) {
@@ -726,6 +784,9 @@ function validateCreate(body, owner) {
     if (d <= 0 || d > LIMITS.dMax) errors.push({ code: 'invalid_params', message: `d 必须大于 0 且不超过 ${LIMITS.dMax} m` });
     if (L < n * d - 1e-9) errors.push({ code: 'invalid_params', message: `L 必须 ≥ N×d（${L} < ${n}×${d}）` });
   }
+  // 可选单次 90° 转弯：turn = { dir: 'left'|'right', atM: number }
+  const turn = validateTurn(body.turn, Number.isFinite(L) ? L : null, errors);
+
   const lane = normalizeLane(body.lane);
   if (lane === null || Number.isNaN(lane)) errors.push({ code: 'invalid_params', message: '作业车道必须为 1~8 的整数' });
 
@@ -761,7 +822,42 @@ function validateCreate(body, owner) {
     const reason = conflictReason(ctx.devices.get(code), owner);
     if (reason) conflicts.push({ device_code: code, reason });
   }
-  return { master, slaves, n, L: round1(L), d: round1(d), lane, conflicts };
+  return { master, slaves, n, L: round1(L), d: round1(d), lane, turn, conflicts };
+}
+
+/**
+ * 校验可选自动转弯参数。
+ *
+ * - 缺省/null → 直行（返回 null）
+ * - atM 是从起点沿路线累计到拐角的距离，0.1m 精度，必须 0 < atM < L
+ * - v1 固定 90°；显式传了非 90 的 deg 直接拒绝，避免客户端误以为可自定义
+ */
+function validateTurn(raw, L, errors) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push({ code: 'invalid_turn', message: 'turn 必须是对象 { dir, atM }' });
+    return null;
+  }
+  const dir = String(raw.dir || '').trim().toLowerCase();
+  if (dir !== 'left' && dir !== 'right') {
+    errors.push({ code: 'invalid_turn', message: 'turn.dir 必须为 left 或 right' });
+  }
+  if (raw.deg !== undefined && raw.deg !== null && Number(raw.deg) !== LIMITS.turnDeg) {
+    errors.push({ code: 'invalid_turn', message: `turn.deg 当前固定为 ${LIMITS.turnDeg}，请勿自定义` });
+  }
+  const atM = Number(raw.atM);
+  if (!Number.isFinite(atM)) {
+    errors.push({ code: 'invalid_turn', message: 'turn.atM 必须是数字' });
+    return null;
+  }
+  if (!isPrecisionOk(atM)) errors.push({ code: 'invalid_turn', message: 'turn.atM 精度最多 0.1 m' });
+  if (atM <= 0) errors.push({ code: 'invalid_turn', message: 'turn.atM 必须大于 0' });
+  if (L !== null && Number.isFinite(L) && atM >= L - 1e-9) {
+    errors.push({ code: 'invalid_turn', message: `turn.atM 必须小于 L（${atM} ≥ ${L}）` });
+  }
+  if (dir !== 'left' && dir !== 'right') return null;
+  if (atM <= 0) return null;
+  return { dir, atM: round1(atM) };
 }
 
 function normalizeLane(v) {
@@ -801,6 +897,8 @@ function createDeployment(body, owner) {
     L: v.L,
     d: v.d,
     N: v.n,
+    /** 可选单次 90° 转弯；null/undefined = 直行（旧事件） */
+    turn: v.turn,
     master_code: v.master.device_code,
     note: String(body.note || '').slice(0, 100),
     createdAt: now,
@@ -817,6 +915,7 @@ function createDeployment(body, owner) {
         posX: 0,
         posY: 0,
         headingDeg: 0,
+        turnApplied: false,
         manual: null,
         lastManual: null,
         phase: 'not_started',
@@ -841,6 +940,7 @@ function createDeployment(body, owner) {
         posX: 0,
         posY: 0,
         headingDeg: 0,
+        turnApplied: false,
         manual: null,
         lastManual: null,
         phase: 'not_started',
@@ -882,6 +982,7 @@ function startDeployment(dep, body) {
     dd.posX = 0;
     dd.posY = 0;
     dd.headingDeg = 0;
+    dd.turnApplied = false;
     dd.manual = null;
     dd.lastManual = null;
     g.occupied = true;
@@ -1202,7 +1303,15 @@ function deploymentJson(dep) {
     lane: dep.lane,
     state: dep.state,
     result: dep.result,
-    params: { L: dep.L, d: dep.d, N: dep.N, unit: 'm' },
+    params: {
+      L: dep.L,
+      d: dep.d,
+      N: dep.N,
+      unit: 'm',
+      turn: dep.turn
+        ? { dir: dep.turn.dir, atM: dep.turn.atM, deg: LIMITS.turnDeg }
+        : null,
+    },
     devices: dep.devices.map((dd) => deviceJson(dep, dd)),
     chain: { nextExpected: nextExpected(dep), steps: dep.steps },
     anomalies: dep.anomalies,

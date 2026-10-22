@@ -249,7 +249,10 @@ fun DeploymentExecScreen(
                 text = event?.name ?: "布设执行",
                 subtitle = event?.let {
                     "L=${fmt(it.params.L)} m · d=${fmt(it.params.d)} m · N=${it.params.N}" +
-                        (it.lane?.let { lane -> " · 第 $lane 车道" } ?: "")
+                        (it.lane?.let { lane -> " · 第 $lane 车道" } ?: "") +
+                        (it.params.turn?.let { t ->
+                            " · ${t.dir.label} ${fmt(t.deg)}° @${fmt(t.atM)} m"
+                        } ?: "")
                 },
                 onBack = onBack,
             )

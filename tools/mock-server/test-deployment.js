@@ -62,8 +62,8 @@ function slave(code, order) {
   return { device_code: code, device_type: 'slave_cone', binding_code: '123456', order };
 }
 
-async function create(name, L, d, slaves) {
-  const r = await req('POST', '/api/v1/deployments', {
+async function create(name, L, d, slaves, turn) {
+  const body = {
     clientRequestId: `test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name,
     lane: 2,
@@ -71,7 +71,9 @@ async function create(name, L, d, slaves) {
     slaves,
     L,
     d,
-  });
+  };
+  if (turn) body.turn = turn;
+  const r = await req('POST', '/api/v1/deployments', body);
   assert.strictEqual(r.status, 201, `create failed: ${r.status} ${r.text}`);
   return r.json;
 }
@@ -170,9 +172,30 @@ async function main() {
   assert.strictEqual(badType.json.error.code, 'invalid_device_type');
   console.log('   ok: device_type/binding_code rejected when inconsistent');
 
+  console.log('0.1) turn validation');
+  // 必须在任何有效事件之前：createDeployment 先查 activeDeployment，再校验 turn
+  for (const [label, turn] of [
+    ['bad dir', { dir: 'up', atM: 3 }],
+    ['missing atM', { dir: 'left' }],
+    ['atM <= 0', { dir: 'left', atM: 0 }],
+    ['atM >= L', { dir: 'left', atM: 8 }],
+    ['bad precision', { dir: 'left', atM: 3.14 }],
+    ['custom deg', { dir: 'left', atM: 3, deg: 45 }],
+  ]) {
+    const r = await req('POST', '/api/v1/deployments', {
+      clientRequestId: `bad-turn-${Math.random().toString(36).slice(2, 8)}`,
+      name: 'bad-turn', lane: 2, master: MASTER, slaves: [], L: 8, d: 1,
+      turn,
+    });
+    assert.strictEqual(r.status, 400, `${label}: expected 400, got ${r.status} ${r.text}`);
+    assert.strictEqual(r.json.error.code, 'invalid_turn', `${label}: ${r.text}`);
+  }
+  console.log('   ok: invalid turn rejected (dir/atM/range/precision/deg)');
+
   console.log('1) normal chain');
   const slaves = [slave('CONE-S-001', 1), slave('CONE-S-002', 2), slave('CONE-S-003', 3)];
   let ev = await create('normal', 8, 2, slaves);
+  assert.strictEqual(ev.params.turn, null, 'straight deployment must echo turn=null');
   assert.deepStrictEqual(ev.devices.map((x) => x.targetM), [8, 6, 4, 2]);
   assert.deepStrictEqual(
     ev.devices.map((x) => x.device_type),
@@ -397,6 +420,71 @@ async function main() {
   const targetDone = await verifyAll(ev);
   assert.strictEqual(targetDone.result, 'completed');
   console.log('   ok: target reached while paused, resume -> pending_verify');
+
+  console.log('6) automatic left turn (single 90° corner)');
+  ev = await create('left-turn', 8, 2, slaves, { dir: 'left', atM: 4 });
+  assert.deepStrictEqual(ev.params.turn, { dir: 'left', atM: 4, deg: 90 });
+  await start(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'left turn all arrived');
+  assert.deepStrictEqual(ev.devices.map((x) => x.traveledM), [8, 6, 4, 2]);
+  // 左转后 pos.x 为负；targetM == atM 的从2 在拐角处停车，不转（heading=0）
+  assert.deepStrictEqual(
+    ev.devices.map((x) => [x.pos.x, x.pos.y]),
+    [[-4, 4], [-2, 4], [0, 4], [0, 2]],
+  );
+  assert.deepStrictEqual(ev.devices.map((x) => x.headingDeg), [270, 270, 0, 0]);
+  await verifyAll(ev);
+  console.log('   ok: left corner at 4m, target==atM stops without turning');
+
+  console.log('7) automatic right turn at d');
+  ev = await create('right-turn', 6, 2, [slave('CONE-S-001', 1)], { dir: 'right', atM: 2 });
+  await start(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'right turn all arrived');
+  // 右转后 pos.x 为正；转弯点与 d 同距离，触发链仍必须正常
+  assert.deepStrictEqual(ev.devices.map((x) => [x.pos.x, x.pos.y]), [[4, 2], [2, 2]]);
+  assert.deepStrictEqual(ev.devices.map((x) => x.headingDeg), [90, 90]);
+  await verifyAll(ev);
+  console.log('   ok: right corner at d, heading 90, trigger chain intact');
+
+  console.log('8) manual crossing of the corner then resume turns once');
+  ev = await create('manual-turn', 5, 1, [], { dir: 'left', atM: 2 });
+  await start(ev.deploymentId);
+  await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.devices[0].phase === 'moving' && s.devices[0].traveledM > 0.2 ? s : null;
+  }, 'turn master moving');
+  await pause(ev.deploymentId);
+  const turnSession = 'hold-turn';
+  let turnSeq = 1;
+  for (let i = 0; i < 20; i++) {
+    r = await manualMove(ev.deploymentId, MASTER, 'fwd', turnSession, turnSeq++);
+    if (r.status === 409) break;
+    assert.strictEqual(r.status, 202, r.text);
+    await sleep(150);
+    const s = await status(ev.deploymentId);
+    if (s.devices[0].traveledM >= 2.5) break;
+  }
+  await manualStop(ev.deploymentId, MASTER, turnSession, turnSeq++);
+  const beforeResume = (await status(ev.deploymentId)).devices[0];
+  assert.ok(beforeResume.traveledM > 2.0, 'manual crossing should pass atM');
+  assert.strictEqual(beforeResume.headingDeg, 0, 'manual fwd keeps heading before resume');
+  await resume(ev.deploymentId);
+  ev = await waitFor(async () => {
+    const s = await status(ev.deploymentId);
+    return s.state === 'pending_verify' ? s : null;
+  }, 'manual turn resume arrived');
+  const manualTurn = ev.devices[0];
+  assert.strictEqual(manualTurn.headingDeg, 270);
+  assert.ok(manualTurn.pos.x < -2.0, `expected westward second leg, got pos=${JSON.stringify(manualTurn.pos)}`);
+  assert.ok(manualTurn.pos.y >= beforeResume.pos.y - 0.05, 'must not teleport back to the nominal corner');
+  await verifyAll(ev);
+  console.log('   ok: manual crossing applies planned turn once on resume, no teleport');
 
   console.log('\nALL DEPLOYMENT TESTS PASSED');
 }

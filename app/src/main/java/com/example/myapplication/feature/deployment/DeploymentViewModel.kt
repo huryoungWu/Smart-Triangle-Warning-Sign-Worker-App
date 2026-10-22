@@ -22,6 +22,7 @@ import com.example.myapplication.core.model.deployment.ReportResultState
 import com.example.myapplication.core.model.deployment.SelectedSlave
 import com.example.myapplication.core.model.deployment.SkipDisposition
 import com.example.myapplication.core.model.deployment.DeploymentState
+import com.example.myapplication.core.model.deployment.DeploymentTurnDir
 import com.example.myapplication.core.model.deployment.VerifyResultState
 import com.example.myapplication.core.model.vehicle.MoveDir
 import kotlinx.coroutines.Job
@@ -245,6 +246,8 @@ class DeploymentViewModel(
     fun updateNote(v: String) = updateDraft { it.copy(note = v.take(120)) }
     fun updateL(v: String) = updateDraft { it.copy(lText = v.filter { c -> c.isDigit() || c == '.' || c == '-' }) }
     fun updateD(v: String) = updateDraft { it.copy(dText = v.filter { c -> c.isDigit() || c == '.' || c == '-' }) }
+    fun updateTurnDir(dir: DeploymentTurnDir?) = updateDraft { it.copy(turnDir = dir) }
+    fun updateTurnAt(v: String) = updateDraft { it.copy(turnAtText = v.filter { c -> c.isDigit() || c == '.' || c == '-' }) }
     fun toggleSafety() = updateDraft { it.copy(precheckSafety = !it.precheckSafety) }
     fun toggleOrder() = updateDraft { it.copy(precheckOrder = !it.precheckOrder) }
 
@@ -327,6 +330,24 @@ class DeploymentViewModel(
             _uiState.update { it.copy(busy = true, error = null) }
             repository.createDeployment(s.draft, clientId)
                 .onSuccess { created ->
+                    // 新 App + 旧服务端：旧服务端会静默忽略 turn，事件实际仍是直行。
+                    // 必须先核对服务端回显，不一致就取消这次 READY 事件，避免“界面写左转、车却直走”。
+                    if (!s.draft.turnEchoMatches(created.params.turn)) {
+                        val cancelled = repository.cancelDeployment(created.deploymentId)
+                        createClientId = null
+                        val hint = if (cancelled.isFailure) {
+                            "（自动取消失败，请等待事件 ${created.deploymentId} 过期或人工终止）"
+                        } else {
+                            "本次创建已取消"
+                        }
+                        _uiState.update {
+                            it.copy(
+                                busy = false,
+                                error = "当前服务端不支持转弯参数：创建结果未回显 params.turn。$hint，请升级服务端后重试。",
+                            )
+                        }
+                        return@onSuccess
+                    }
                     repository.startDeployment(created.deploymentId, UUID.randomUUID().toString())
                         .onSuccess { running ->
                             _uiState.update {
