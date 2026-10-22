@@ -14,6 +14,7 @@ import com.example.myapplication.core.data.device.HttpDeviceRepository
 import com.example.myapplication.core.data.device.ServerDeviceRepository
 import com.example.myapplication.core.data.location.AMapLocationRepository
 import com.example.myapplication.core.data.location.FakeLocationRepository
+import com.example.myapplication.core.data.net.ServerAutoConnector
 import com.example.myapplication.core.data.prefs.SettingsRepository
 import com.example.myapplication.core.data.record.WorkRecordRepository
 
@@ -70,6 +71,9 @@ class ServiceLocator(context: Context) {
 
     /** 当前生效的服务端地址（同步读；界面请订阅 `settingsRepository.serverBaseUrl` 以跟随变化） */
     val serverBaseUrl: String get() = settingsRepository.currentServerBaseUrl
+
+    /** 启动期静默选服：局域网优先、公网备用（候选见 [ServerAutoConnector.DEFAULT_CANDIDATES]） */
+    private val serverAutoConnector = ServerAutoConnector()
 
     /**
      * 账号（登录/登出）。设备信息按登录用户获取：各 HTTP 仓库经 [AuthRepository.currentToken]
@@ -180,6 +184,21 @@ class ServiceLocator(context: Context) {
         (deviceRepository as? ServerDeviceRepository)?.resetForNewServer()
         riskReadStore.clear()
         return ServerUrlApplyResult.CHANGED
+    }
+
+    /**
+     * 启动期**静默**选服：按候选顺序探测，第一个可用的即写为当前地址。
+     *
+     * 换服副作用由 [applyServerBaseUrl] 统一处理（启动期尚无可作废的登录会话）。
+     *
+     * @return false = 两个服务端都连不上；调用方应进入「设置」让用户手动填写地址
+     */
+    suspend fun autoConnectServer(): Boolean {
+        val selected = serverAutoConnector.select() ?: return false
+        if (selected != settingsRepository.currentServerBaseUrl) {
+            applyServerBaseUrl(selected)
+        }
+        return true
     }
 
     val transport: DeviceTransport get() = TRANSPORT

@@ -16,5 +16,8 @@
         <domain includeSubdomains="false">10.0.2.2</domain>
         <!-- 真机同局域网联调：电脑（Mock 服务端）的局域网 IP -->
         <domain includeSubdomains="false">192.168.43.120</domain>
+        <!-- 启动期自动选服的两个服务端（ServerAutoConnector.DEFAULT_CANDIDATES），需与代码同步 -->
+        <domain includeSubdomains="false">192.168.220.39</domain>
+        <domain includeSubdomains="false">47.108.26.28</domain>
     </domain-config>
 </network-security-config>

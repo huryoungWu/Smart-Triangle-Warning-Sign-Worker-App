@@ -1,5 +1,6 @@
 package com.example.myapplication.navigation
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -10,6 +11,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -64,6 +66,8 @@ import com.example.myapplication.feature.task.TaskPublishScreen
 import com.example.myapplication.feature.vehicle.VehicleViewModel
 import com.example.myapplication.feature.worktype.WorkTypeSelectScreen
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /** 底栏项：route = null 表示「作业」动态项，目标由当前 WorkType 决定。 */
 private data class TabItem(val route: String?, val label: String, val icon: ImageVector)
@@ -86,6 +90,35 @@ private val tabItems = listOf(
  */
 @Composable
 fun AppNavHost() {
+    val context = LocalContext.current
+    val sl = remember(context) { ServiceLocator.get(context) }
+    val localNetworkPermission = rememberLocalNetworkPermissionState()
+
+    // 启动期静默选服：先探测局域网服务端，不通再探公网备用（过程无 UI）。
+    // null = 探测尚未结束，此时不渲染任何内容 —— 否则登录页会先闪出来、请求也可能打到旧地址。
+    var startRoute by rememberSaveable { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        if (startRoute != null) return@LaunchedEffect
+        val serverMode = sl.transport == DeviceTransport.SERVER
+        // Android 17（API 37）：未授权时局域网探测会被系统直接拦截，会误判「主服务器不可达」，
+        // 明明连着热点也会切到公网备用。登录/状态/命令/视频同样依赖该权限。
+        if (serverMode && !localNetworkPermission.granted) {
+            suspendCancellableCoroutine<Unit> { continuation ->
+                localNetworkPermission.onRequestResult = { continuation.resume(Unit) }
+                localNetworkPermission.request()
+            }
+        }
+        // 两个都连不上 → 直接进设置页（用户可在「服务器地址」里手动改）
+        startRoute = if (serverMode && !sl.autoConnectServer()) Routes.SETTINGS else Routes.LOGIN
+    }
+
+    if (startRoute == null) {
+        Surface(Modifier.fillMaxSize()) {}
+        return
+    }
+    val initialRoute = startRoute ?: Routes.LOGIN
+
     val navController = rememberNavController()
     val vm: VehicleViewModel = viewModel(factory = VehicleViewModel.Factory)
     val mapVm: MapViewModel = viewModel(factory = MapViewModel.Factory)
@@ -152,19 +185,6 @@ fun AppNavHost() {
         }
     }
 
-    // Android 17（API 37）本地网络权限：登录/状态/命令/视频都要访问局域网，
-    // 在首次进入 SERVER 模式时请求一次；拒绝后视频卡片会给出可读提示。
-    val appContext = LocalContext.current
-    val localNetworkPermission = rememberLocalNetworkPermissionState()
-    var localNetworkPrompted by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        val transport = ServiceLocator.get(appContext).transport
-        if (!localNetworkPrompted && transport == DeviceTransport.SERVER && !localNetworkPermission.granted) {
-            localNetworkPrompted = true
-            localNetworkPermission.request()
-        }
-    }
-
     Scaffold(
         bottomBar = {
             if (Routes.showsBottomBar(currentRoute)) {
@@ -185,7 +205,7 @@ fun AppNavHost() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Routes.LOGIN,
+            startDestination = initialRoute,
             modifier = Modifier.padding(innerPadding),
         ) {
             // ⓪ 登录页
